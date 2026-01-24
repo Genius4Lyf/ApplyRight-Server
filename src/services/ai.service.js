@@ -52,7 +52,10 @@ const analyzeProfile = async (resumeText, jobDescription) => {
         "seniority": "<one_of: entry, mid, senior, executive>",
         "reasoning": "<short_sentence_explaining_seniority_and_fit>",
         "fitScore": <integer_0_to_100_based_on_overall_match>,
-        "recommendation": "<short_advice_for_candidate>"
+        "recommendation": "<short_advice_for_candidate>",
+        "actionPlan": [
+            { "skill": "missing_skill_1", "action": "Specific, actionable advice (e.g., Build a project using X...)" }
+        ]
     }
     `;
 
@@ -200,6 +203,9 @@ const mockAnalysis = () => {
         reasoning: 'Analysis performed in Mock/Offline Mode.',
         fitScore: 50,
         recommendation: 'Add an API Key to enable AI analysis.',
+        actionPlan: [
+            { skill: 'real-ai-key', action: 'Sign up for OpenAI or Google Gemini and add the key to .env' }
+        ],
         mode: 'Standard',
         provider: 'local'
     };
@@ -311,9 +317,75 @@ const mockInterviewQuestions = (jobDescription) => {
     };
 };
 
+const extractResumeProfile = async (resumeText) => {
+    if (activeProvider === 'mock') {
+        return mockResumeExtraction();
+    }
+
+    const prompt = `
+    You are an expert Resume Parser.
+    Extract structured data from the following resume text.
+
+    RESUME TEXT:
+    ${resumeText.substring(0, 4000)}
+
+    INSTRUCTIONS:
+    1. Extract SKILLS as an array of strings.
+    2. Extract EXPERIENCE as an array of objects: { "role": "...", "company": "...", "years": <number estimated duration> }.
+    3. Extract EDUCATION as an array of objects: { "degree": "...", "field": "...", "school": "..." }.
+    4. Estimate SENIORITY level: 'entry', 'mid', 'senior', or 'executive'.
+
+    Output STRICT JSON format only:
+    {
+        "skills": ["..."],
+        "experience": [{...}],
+        "education": [{...}],
+        "seniority": "..."
+    }
+    `;
+
+    try {
+        let resultText = '';
+        if (activeProvider === 'openai') {
+            const response = await openai.chat.completions.create({
+                model: "gpt-3.5-turbo",
+                messages: [{ role: "user", content: prompt }],
+                temperature: 0.1,
+            });
+            resultText = response.choices[0].message.content;
+        } else if (activeProvider === 'gemini') {
+            const result = await geminiModel.generateContent(prompt);
+            resultText = result.response.text();
+        }
+
+        let jsonStr = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
+        const startIndex = jsonStr.indexOf('{');
+        const endIndex = jsonStr.lastIndexOf('}');
+        if (startIndex !== -1 && endIndex !== -1) {
+            jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+        }
+
+        return JSON.parse(jsonStr);
+
+    } catch (error) {
+        console.error("AI Resume Extraction Failed:", error);
+        return mockResumeExtraction();
+    }
+};
+
+const mockResumeExtraction = () => {
+    return {
+        skills: ['Mock Skill 1', 'Mock Skill 2'],
+        experience: [{ role: 'Mock Role', company: 'Mock Co', years: 1 }],
+        education: [{ degree: 'BS', field: 'CS', school: 'Mock Univ' }],
+        seniority: 'entry'
+    };
+};
+
 module.exports = {
     analyzeProfile,
     generateOptimizedContent,
     generateInterviewQuestions,
+    extractResumeProfile,
     activeProvider
 };

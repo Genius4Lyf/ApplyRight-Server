@@ -1,4 +1,5 @@
 const { parseResume } = require('../services/resumeParser.service');
+const aiService = require('../services/ai.service');
 const Resume = require('../models/Resume');
 const fs = require('fs');
 
@@ -17,12 +18,15 @@ const uploadResume = async (req, res) => {
         // Parse content
         const { rawText } = await parseResume(filePath, mimetype);
 
+        // Analyze using AI
+        const parsedData = await aiService.extractResumeProfile(rawText);
+
         // Save to DB
         // Assuming req.user is populated by auth middleware
         const resume = await Resume.create({
             userId: req.user._id,
             rawText,
-            parsedData: {}, // Placeholder for structured data extraction later
+            parsedData: parsedData, // Store the structured data
         });
 
         // Cleanup: delete uploaded file to save space? 

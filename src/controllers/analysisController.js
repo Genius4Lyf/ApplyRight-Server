@@ -62,7 +62,8 @@ const analyzeFit = async (req, res) => {
         if (aiResult.experienceYears < jobMinYears) fitAnalysis.experienceMatch = false;
 
         // 3b. Generate Smart Action Plan
-        const actionPlan = scoringService.generateActionPlan(fitAnalysis.skillsGap);
+        // If AI provided an action plan, use it. Otherwise fallback to hardcoded actions.
+        const actionPlan = aiResult.actionPlan || scoringService.generateActionPlan(fitAnalysis.skillsGap);
 
         // 3c. Generate Professional Assets (NEW: merged into analysis flow)
         // We use the same service that was used in the separate /generate endpoint
