@@ -38,8 +38,14 @@ const analyzeProfile = async (resumeText, jobDescription) => {
     RESUME:
     ${resumeText.substring(0, 2000)}
 
+    EXTRACT METADATA:
+    - Look for the specific role being hired (e.g., "Fuel Receipt Officer"). Ignore generic headers.
+    - Look for the hiring company (e.g., "Dangote Industries"). Ignore recuitment agencies (e.g., "Work Link", "Jobberman") if possible.
+
     Output a JSON object ONLY. Do not output markdown code blocks. Structure:
     {
+        "detectedJobTitle": "<extracted_job_title_from_text>",
+        "detectedCompany": "<extracted_company_name_from_text>",
         "skills": ["matched_skill_1", "matched_skill_2"],
         "missingSkills": ["important_missing_skill"],
         "experienceYears": <integer_estimate_of_total_relevant_experience>,
@@ -110,19 +116,31 @@ Sincerely,
     }
 
     const prompt = `
-    You are an expert Resume Writer.
-    Rewrite the candidate's resume summary and experience bullets to better match the job description.
-    Also write a compelling cover letter.
+    You are an expert Resume Writer for ApplyRight.
+    Your goal is to rewrite the candidate's resume to be ATS-optimized and highly professional.
     
     JOB DESCRIPTION:
-    ${jobDescription.substring(0, 1000)}
+    ${jobDescription.substring(0, 8000)}
 
     RESUME:
-    ${resumeText.substring(0, 1000)}
+    ${resumeText.substring(0, 8000)}
+
+    INSTRUCTIONS:
+    1. Create a "ApplyRight AI Resume" (Markdown format).
+    2. USE STANDARD HEADERS: "Professional Summary", "Experience", "Skills", "Education".
+    3. SUMMARY: Write a strong 3-4 line professional summary tailored to the JD.
+    4. EXPERIENCE: EXPERTLY REWRITE ALL experience entries. Do NOT summarize or truncate. Convert them into results-oriented bullet points (Action + Task + Result). Use keywords from the JD.
+    5. SKILLS & EDUCATION: Include all relevant skills and education.
+    6. FORMATTING: Use clean Markdown. No images. Use bullet points (-) for lists.
+    7. COVER LETTER: Write a compelling, tailored cover letter.
+
+    IMPORTANT: Output STRICT JSON. Escape all newlines within the JSON string values as "\\n". 
+    For paragraphs, use DOUBLE NEWLINES ("\\n\\n") to ensure they are separated.
+    Example: { "optimizedCV": "# Header\\n\\nParagraph 1.\\n\\nParagraph 2." }
 
     Output in JSON format only:
     {
-        "optimizedCV": "<markdown_string_of_improved_sections>",
+        "optimizedCV": "<markdown_string_of_full_resume>",
         "coverLetter": "<markdown_string_of_cover_letter>"
     }
     `;
@@ -140,8 +158,32 @@ Sincerely,
             resultText = result.response.text();
         }
 
-        const jsonStr = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
-        return JSON.parse(jsonStr);
+        // Locate the JSON block (find first '{' and last '}')
+        let jsonStr = resultText;
+        const startIndex = resultText.indexOf('{');
+        const endIndex = resultText.lastIndexOf('}');
+
+        if (startIndex !== -1 && endIndex !== -1) {
+            jsonStr = resultText.substring(startIndex, endIndex + 1);
+        }
+
+        try {
+            return JSON.parse(jsonStr);
+        } catch (e) {
+            console.error("JSON Parse Failed. Raw AI Response (First 500 chars):", resultText.substring(0, 500));
+            // Fallback for unescaped newlines within strings (common LLM error)
+            // This regex attempts to escape newlines that are NOT structural JSON newlines
+            // It's risky so we only try it as a last resort
+            try {
+                const fixedStr = jsonStr.replace(/(?<!["}])\n/g, '\\n');
+                return JSON.parse(fixedStr);
+            } catch (retryError) {
+                return {
+                    optimizedCV: "# Error Parsing AI Response\n\nThe AI generated content but it was not in a valid format. Please try regenerating.",
+                    coverLetter: "Error parsing AI response."
+                };
+            }
+        }
 
     } catch (error) {
         console.error("AI Generation Failed", error);
@@ -164,14 +206,78 @@ const mockAnalysis = () => {
 };
 
 const generateInterviewQuestions = async (jobDescription, userSkills) => {
-    // In a real app, this would use an LLM. 
-    // Here we use heuristics based on keywords in the JD.
+    if (activeProvider === 'mock') {
+        return mockInterviewQuestions(jobDescription);
+    }
+
+    const prompt = `
+    You are an expert Interview Coach and Technical Hiring Manager.
+    Generate a set of interview questions and questions for the candidate to ask, based SPECIFICALLY on the Job Description provided.
+
+    JOB DESCRIPTION:
+    ${jobDescription.substring(0, 5000)}
+
+    INSTRUCTIONS:
+    1. Generate 3 "Questions to Answer" that the interviewer might ask the candidate.
+       - Mix of specific TECHNICAL questions (based on tools/skills in JD) and BEHAVIORAL questions (based on soft skills in JD).
+       - Label the type as 'technical', 'behavioral', or 'situational'.
+    2. Generate 3 "Questions to Ask" that the candidate should ask the interviewer to demonstrate deep interest and insight.
+       - These should be specific to the company/role if possible, or strategic general questions.
+
+    Output STRICT JSON format:
+    {
+        "questionsToAnswer": [
+            { "type": "technical", "question": "..." },
+            { "type": "behavioral", "question": "..." },
+            { "type": "situational", "question": "..." }
+        ],
+        "questionsToAsk": [
+            "...",
+            "...",
+            "..."
+        ]
+    }
+    `;
+
+    try {
+        let resultText = '';
+        if (activeProvider === 'openai') {
+            const response = await openai.chat.completions.create({
+                model: "gpt-3.5-turbo",
+                messages: [{ role: "user", content: prompt }]
+            });
+            resultText = response.choices[0].message.content;
+        } else if (activeProvider === 'gemini') {
+            const result = await geminiModel.generateContent(prompt);
+            resultText = result.response.text();
+        }
+
+        // Clean up markdown code blocks if AI adds them
+        let jsonStr = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
+
+        // Helper to extract JSON if it's wrapped in other text
+        const startIndex = jsonStr.indexOf('{');
+        const endIndex = jsonStr.lastIndexOf('}');
+        if (startIndex !== -1 && endIndex !== -1) {
+            jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+        }
+
+        return JSON.parse(jsonStr);
+
+    } catch (error) {
+        console.error("AI Interview Generation Failed, falling back to mock:", error);
+        return mockInterviewQuestions(jobDescription);
+    }
+};
+
+const mockInterviewQuestions = (jobDescription) => {
+    // Heuristics based on keywords in the JD
     const questions = [
         { type: 'behavioral', question: 'Tell me about a time you handled a difficult stakeholder.' },
         { type: 'behavioral', question: 'Describe a situation where you had to learn a new tool quickly.' }
     ];
 
-    const techKeywords = ['react', 'node', 'sql', 'python', 'aws', 'docker', 'java', 'communication'];
+    const techKeywords = ['react', 'node', 'sql', 'python', 'aws', 'docker', 'java', 'communication', 'sales', 'marketing'];
     const lowerJD = jobDescription.toLowerCase();
 
     techKeywords.forEach(tech => {
@@ -183,7 +289,26 @@ const generateInterviewQuestions = async (jobDescription, userSkills) => {
         }
     });
 
-    return questions.slice(0, 5); // Return top 5
+    const questionsToAsk = [
+        "What does success look like in this role for the first 90 days?",
+        "Can you describe the team culture and how you collaborate?",
+        "What are the biggest challenges the team is currently facing?"
+    ];
+
+    if (lowerJD.includes('agile') || lowerJD.includes('scrum')) {
+        questionsToAsk.push("How does your team practice Agile/Scrum day-to-day?");
+    }
+    if (lowerJD.includes('leadership') || lowerJD.includes('manage')) {
+        questionsToAsk.push("How does your team practice Agile/Scrum day-to-day?");
+    }
+    if (lowerJD.includes('remote') || lowerJD.includes('hybrid')) {
+        questionsToAsk.push("How does the team maintain communication in a remote/hybrid setting?");
+    }
+
+    return {
+        questionsToAnswer: questions.slice(0, 3),
+        questionsToAsk: questionsToAsk.slice(0, 3)
+    };
 };
 
 module.exports = {

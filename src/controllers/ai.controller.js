@@ -43,7 +43,7 @@ const generateApplication = async (req, res) => {
 
         // Generate Interview Questions (NEW)
         // We use extracted skills + job description
-        const interviewQuestions = await generateInterviewQuestions(job.description, []); // passing empty skills for now, service handles JD primarily
+        const { questionsToAnswer: interviewQuestions, questionsToAsk } = await generateInterviewQuestions(job.description, []);
 
         if (application) {
             // Update existing
@@ -51,6 +51,7 @@ const generateApplication = async (req, res) => {
             application.coverLetter = coverLetter;
             application.templateId = templateId || 'modern';
             application.interviewQuestions = interviewQuestions;
+            application.questionsToAsk = questionsToAsk;
             await application.save();
         } else {
             // Create new
@@ -61,7 +62,8 @@ const generateApplication = async (req, res) => {
                 optimizedCV,
                 coverLetter,
                 templateId: templateId || 'modern',
-                interviewQuestions: interviewQuestions
+                interviewQuestions: interviewQuestions,
+                questionsToAsk: questionsToAsk
             });
         }
 

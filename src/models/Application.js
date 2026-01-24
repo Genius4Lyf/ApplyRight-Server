@@ -50,7 +50,8 @@ const applicationSchema = new mongoose.Schema({
     interviewQuestions: [{
         type: { type: String }, // 'technical', 'behavioral'
         question: String
-    }]
+    }],
+    questionsToAsk: [String]
 }, {
     timestamps: true,
 });

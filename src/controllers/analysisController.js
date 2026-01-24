@@ -8,7 +8,7 @@ const aiService = require('../services/ai.service');
 
 const analyzeFit = async (req, res) => {
     try {
-        const { jobId, resumeId } = req.body;
+        const { jobId, resumeId, templateId } = req.body;
         const userId = req.user._id; // Assuming auth middleware
 
         // 1. Fetch Data
@@ -29,6 +29,17 @@ const analyzeFit = async (req, res) => {
         // 3. AI Analysis (replaces old manual extraction + scoringService logic if AI is active)
         // We get a smarter profile analysis from the AI
         const aiResult = await aiService.analyzeProfile(resume.rawText, job.description);
+
+        // Update Job Metadata if AI detects better info and current info is generic or missing
+        if (aiResult.detectedJobTitle) {
+            // Heuristic: Update if current title is generic OR if we trust AI more.
+            // Let's trust AI to refine it.
+            job.title = aiResult.detectedJobTitle;
+            if (aiResult.detectedCompany && aiResult.detectedCompany !== 'Unknown Company') {
+                job.company = aiResult.detectedCompany;
+            }
+            await job.save();
+        }
 
         // Map AI result to our standard format
         let fitScore = aiResult.fitScore;
@@ -59,7 +70,7 @@ const analyzeFit = async (req, res) => {
             graduationYear: req.user.graduationYear
         });
 
-        const interviewQuestions = await aiService.generateInterviewQuestions(job.description, []);
+        const { questionsToAnswer: interviewQuestions, questionsToAsk } = await aiService.generateInterviewQuestions(job.description, []);
 
         // 4. Save/Update Application Record
         let application = await Application.findOne({ userId, jobId, resumeId });
@@ -75,7 +86,8 @@ const analyzeFit = async (req, res) => {
                 optimizedCV: optimizedCV,
                 coverLetter: coverLetter,
                 interviewQuestions: interviewQuestions,
-                templateId: 'modern' // Default template
+                questionsToAsk: questionsToAsk, // NEW
+                templateId: templateId || 'modern' // Default template
             });
         } else {
             application.fitScore = fitScore;
@@ -86,6 +98,8 @@ const analyzeFit = async (req, res) => {
             application.optimizedCV = optimizedCV;
             application.coverLetter = coverLetter;
             application.interviewQuestions = interviewQuestions;
+            application.questionsToAsk = questionsToAsk; // NEW
+            if (templateId) application.templateId = templateId;
         }
 
         await application.save();
@@ -98,8 +112,10 @@ const analyzeFit = async (req, res) => {
             optimizedCV: optimizedCV,
             coverLetter: coverLetter,
             interviewQuestions: interviewQuestions,
+            questionsToAsk: questionsToAsk,
             applicationId: application._id,
-            templateId: application.templateId
+            templateId: application.templateId,
+            job: job // NEW: Return updated job details
         });
 
     } catch (error) {
