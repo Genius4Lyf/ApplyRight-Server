@@ -93,58 +93,118 @@ const generateOptimizedContent = async (resumeText, jobDescription, userContext 
     // If mock mode, return the old mock response
     if (activeProvider === 'mock') {
         const currentYear = new Date().getFullYear();
-        const gradYear = userContext.graduationYear ? parseInt(userContext.graduationYear) : currentYear;
-        const isStudent = (currentYear - gradYear) <= 2;
-        const tone = isStudent ? "eager and potential-focused" : "confident and results-oriented";
-
         await new Promise(resolve => setTimeout(resolve, 1500)); // Latency sim
 
+        const mockOptimizedCV = `
+# ALEXANDER JAMES
+
+## Professional Summary
+Results-oriented Software Engineer with 4+ years of experience in full-stack development, specializing in MERN stack applications. Proven track record of improving system performance by 40% and reducing deployment times by 60% through CI/CD optimization. Adept at translating complex requirements into scalable, clean code solutions.
+
+## Work History
+### Senior Frontend Developer
+TechSolutions Inc. | Jan 2023 - Present
+- Spearheaded the migration of a legacy Monolith to Microservices using Node.js and Docker, resulting in a 99.9% uptime.
+- Mentored a team of 5 junior developers, establishing code quality standards that reduced bug reports by 30%.
+- Optimized React application state management using Redux Toolkit, decreasing load times by 2.5 seconds.
+- Integrated third-party payment gateways (Stripe) to facilitate secure global transactions.
+
+### Web Developer
+Creative Agency Ltd. | Jun 2021 - Dec 2022
+- Developed responsive, accessible user interfaces for 15+ client websites using HTML5, CSS3, and React.
+- Collaborated with UX/UI designers to implement pixel-perfect designs, ensuring cross-browser compatibility.
+- Automating manual data entry processes with Python scripts, saving the operations team 12 hours weekly.
+
+## Skills
+- **Languages:** JavaScript (ES6+), TypeScript, Python, HTML5, CSS3, SQL
+- **Frameworks:** React.js, Node.js, Express, Next.js, Bootstrap, Tailwind CSS
+- **Tools:** Git, Docker, AWS (EC2, S3), Jira, Webpack, Jenkins
+- **Database:** MongoDB, PostgreSQL, Redis
+
+## Projects
+### E-Commerce Platform
+- Built a fully functional e-commerce platform supporting 10k+ daily users.
+- implemented JWT authentication and role-based access control.
+- Designed RESTful APIs for product management and order processing.
+
+## Education
+### Bachelor of Science in Computer Science
+University of Technology | 2017 - 2021
+- GPA: 3.8/4.0
+- Relevant Coursework: Data Structures, Algorithms, Distributed Systems
+        `.trim();
+
         return {
-            optimizedCV: `
-# Optimized CV (Mock Mode)
-[${isStudent ? 'STUDENT' : 'PROFESSIONAL'} APPROACH APPLIED: ${tone}]
-- This is a placeholder generated because no API Key was found.
-- To see real AI results, add OPENAI_API_KEY or GEMINI_API_KEY to your .env file.
-            `,
+            optimizedCV: mockOptimizedCV,
             coverLetter: `
 Dear Hiring Manager,
 
-This is a placeholder Cover Letter generated in Mock Mode.
-Please configure an AI provider to generate tailored content.
+I am writing to express my strong interest in the open position. With my background in software engineering and track record of delivering high-quality web applications, I am confident in my ability to contribute effectively to your team.
+
+My experience at TechSolutions Inc. has focused heavily on modernizing legacy systems and improving performance, skills that directly align with your job description. I am eager to bring my technical expertise and problem-solving abilities to your organization.
+
+Thank you for your time and consideration.
 
 Sincerely,
-[Candidate Name]
-            `
+Alexander James
+            `.trim()
         };
     }
 
     const prompt = `
-    You are an expert Resume Writer for ApplyRight.
-    Your goal is to rewrite the candidate's resume to be ATS-optimized and highly professional.
-    
+    You are an ATS-optimization engine for ApplyRight.
+    Your job is to convert unstructured user career data into a clean, ATS-compliant CV using a strict pipeline.
+
+    INPUT DATA:
     JOB DESCRIPTION:
     ${jobDescription.substring(0, 8000)}
 
-    RESUME:
+    USER RESUME:
     ${resumeText.substring(0, 8000)}
 
-    INSTRUCTIONS:
-    1. Create a "ApplyRight AI Resume" (Markdown format).
-    2. USE STANDARD HEADERS: "Professional Summary", "Experience", "Skills", "Education".
-    3. SUMMARY: Write a strong 3-4 line professional summary tailored to the JD.
-    4. EXPERIENCE: EXPERTLY REWRITE ALL experience entries. Do NOT summarize or truncate. Convert them into results-oriented bullet points (Action + Task + Result). Use keywords from the JD.
-    5. SKILLS & EDUCATION: Include all relevant skills and education.
-    6. FORMATTING: Use clean Markdown. No images. Use bullet points (-) for lists.
-    7. COVER LETTER: Write a compelling, tailored cover letter.
+    TASK:
+    Apply the following process exactly:
+
+    Step 1 — Extract
+    Identify: name, contact info, roles, employers, dates, skills, education, projects.
+
+    Step 2 — Normalize
+    - Generate a Professional Summary by analyzing the candidate's Work History and Skills. Highlight key achievements and relevance to the Job Description.
+    - Convert job descriptions into achievement-oriented bullet points (Action + Task + Result).
+    - Standardize job titles and dates.
+
+    Step 3 — ATS Optimization
+    - Use industry-standard keywords inferred from the user’s background and Job Description.
+    - Avoid buzzwords and personal pronouns (I, me, my).
+    - Keep language factual and concise.
+
+    Step 4 — Section Mapping
+    Map all content strictly into these sections (use exactly these headers):
+    - ## Professional Summary
+    - ## Work History
+    - ## Skills
+    - ## Projects
+    - ## Education
+
+    Step 5 — Output Format
+    1. START WITH: "# [Full Name in CAPS]" as the very first line.
+    2. Follow with "## Professional Summary" as a paragraph.
+    3. For "## Work History", use sub-headers "### [Job Title]" followed by "[Company Name] | [Dates]" on the next line, then bullet points.
+    4. For "## Skills", use bullet points. GROUP SKILLS DYNAMICALLY based on the candidate's specific domain.
+       - Example for Dev: "- **Frontend:** React, CSS... \\n - **Backend:** Node, SQL..."
+       - Example for Nurse: "- **Clinical Care:** Triage, Phlebotomy... \\n - **Compliance:** HIPAA, OSHA..."
+       - Example for Sales: "- **CRM Tools:** Salesforce, HubSpot... \\n - **Strategies:** Lead Gen, Closing..."
+       - DO NOT use generic "Technical/Soft Skills" headers unless absolutely necessary. Infer the best professional categories.
+    5. For "## Projects", use sub-headers "### [Project Name]" followed by bullet points.
+    6. For "## Education", use sub-headers "### [Degree]" followed by "[Institution] | [Dates]" and bullet points (e.g., GPA or Honors).
 
     IMPORTANT: Output STRICT JSON. Escape all newlines within the JSON string values as "\\n". 
-    For paragraphs, use DOUBLE NEWLINES ("\\n\\n") to ensure they are separated.
-    Example: { "optimizedCV": "# Header\\n\\nParagraph 1.\\n\\nParagraph 2." }
-
+    For paragraphs, use DOUBLE NEWLINES ("\\n\\n").
+    
     Output in JSON format only:
     {
         "optimizedCV": "<markdown_string_of_full_resume>",
-        "coverLetter": "<markdown_string_of_cover_letter>"
+        "coverLetter": "<markdown_string_of_tailored_cover_letter>"
     }
     `;
 
@@ -174,9 +234,6 @@ Sincerely,
             return JSON.parse(jsonStr);
         } catch (e) {
             console.error("JSON Parse Failed. Raw AI Response (First 500 chars):", resultText.substring(0, 500));
-            // Fallback for unescaped newlines within strings (common LLM error)
-            // This regex attempts to escape newlines that are NOT structural JSON newlines
-            // It's risky so we only try it as a last resort
             try {
                 const fixedStr = jsonStr.replace(/(?<!["}])\n/g, '\\n');
                 return JSON.parse(fixedStr);
