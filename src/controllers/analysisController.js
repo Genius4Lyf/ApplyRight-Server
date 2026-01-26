@@ -88,7 +88,7 @@ const analyzeFit = async (req, res) => {
                 coverLetter: coverLetter,
                 interviewQuestions: interviewQuestions,
                 questionsToAsk: questionsToAsk, // NEW
-                templateId: templateId || 'modern' // Default template
+                templateId: templateId || 'ats-clean' // Default template
             });
         } else {
             application.fitScore = fitScore;

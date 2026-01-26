@@ -49,7 +49,7 @@ const generateApplication = async (req, res) => {
             // Update existing
             application.optimizedCV = optimizedCV;
             application.coverLetter = coverLetter;
-            application.templateId = templateId || 'modern';
+            application.templateId = templateId || 'ats-clean';
             application.interviewQuestions = interviewQuestions;
             application.questionsToAsk = questionsToAsk;
             await application.save();
@@ -61,7 +61,7 @@ const generateApplication = async (req, res) => {
                 jobId,
                 optimizedCV,
                 coverLetter,
-                templateId: templateId || 'modern',
+                templateId: templateId || 'ats-clean',
                 interviewQuestions: interviewQuestions,
                 questionsToAsk: questionsToAsk
             });

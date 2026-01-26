@@ -41,7 +41,7 @@ const applicationSchema = new mongoose.Schema({
     },
     templateId: {
         type: String,
-        default: 'modern'
+        default: 'ats-clean'
     },
     actionPlan: [{
         skill: String,
