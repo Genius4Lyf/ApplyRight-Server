@@ -483,10 +483,16 @@ const generateBulletPoints = async (role, context, type = 'experience', targetJo
     ${targetJob ? `Target Job Context: ${targetJob.substring(0, 500)}` : ''}
 
     INSTRUCTIONS:
-    1. Generate 3 high-impact bullet points found on the top 1% of successful resumes.
-    2. Use strong action verbs (Spearheaded, Optimized, Designed).
-    3. Quantify results where possible, BUT ONLY based on the nature of the role (do not invent specific metrics if completely unknown).
-    4. Focus on achievements, not just duties.
+    1. COMPANY ANALYSIS: First, identify the "Company" from the input. Use your internal knowledge to detect its industry, sector, and core business (e.g., if 'Google', think Tech/Scale; if 'Goldman Sachs', think Finance/Risk).
+    2. Generate 3 high-impact bullet points found on the top 1% of successful resumes, SPECIFIC to that industry.
+    3. Use strong action verbs (Spearheaded, Optimized, Designed).
+    INSTRUCTIONS:
+    1. COMPANY ANALYSIS: First, identify the "Company" from the input. Use your internal knowledge to detect its industry, sector, and core business (e.g., if 'Google', think Tech/Scale; if 'Goldman Sachs', think Finance/Risk).
+    2. Generate 3 high-impact bullet points found on the top 1% of successful resumes, SPECIFIC to that industry.
+    3. Use strong action verbs (Spearheaded, Optimized, Designed).
+    4. STRICTLY ADHERE TO FACTS: If raw text was provided in the input, do NOT invent metrics, percentages, or numbers that are not present in the source text. You may improve the grammar and flow, but do not hallucinate achievements.
+    5. Focus on achievements, not just duties.
+    5. Focus on achievements, not just duties.
     5. If 'Type' is 'summary':
        - Generate a single 3-4 line professional summary paragraph.
        - STRICTLY use the provided "Work History Summary" for past experience. 
