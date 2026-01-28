@@ -74,6 +74,27 @@ const generateApplication = async (req, res) => {
     }
 };
 
+// @desc    Generate bullet points or summary
+// @route   POST /api/ai/generate-bullets
+// @access  Private
+const generateBullets = async (req, res) => {
+    const { role, context, type, targetJob } = req.body;
+
+    // Basic validation
+    if (!role && !context) {
+        return res.status(400).json({ message: 'Please provide role/title and some context.' });
+    }
+
+    try {
+        const suggestions = await require('../services/ai.service').generateBulletPoints(role, context, type, targetJob);
+        res.json({ suggestions });
+    } catch (error) {
+        console.error("Bullet Gen Error:", error);
+        res.status(500).json({ message: 'Failed to generate suggestions' });
+    }
+};
+
 module.exports = {
     generateApplication,
+    generateBullets,
 };

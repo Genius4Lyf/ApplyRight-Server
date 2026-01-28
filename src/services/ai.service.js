@@ -121,17 +121,17 @@ Creative Agency Ltd. | Jun 2021 - Dec 2022
 - **Tools:** Git, Docker, AWS (EC2, S3), Jira, Webpack, Jenkins
 - **Database:** MongoDB, PostgreSQL, Redis
 
-## Projects
-### E-Commerce Platform
-- Built a fully functional e-commerce platform supporting 10k+ daily users.
-- implemented JWT authentication and role-based access control.
-- Designed RESTful APIs for product management and order processing.
-
 ## Education
 ### Bachelor of Science in Computer Science
 University of Technology | 2017 - 2021
 - GPA: 3.8/4.0
 - Relevant Coursework: Data Structures, Algorithms, Distributed Systems
+
+## Projects
+### E-Commerce Platform
+- Built a fully functional e-commerce platform supporting 10k+ daily users.
+- implemented JWT authentication and role-based access control.
+- Designed RESTful APIs for product management and order processing.
         `.trim();
 
         return {
@@ -151,6 +151,27 @@ Alexander James
         };
     }
 
+    try {
+        console.log('Beginning Parallel Generation: CV & Cover Letter...');
+        const [cvResult, clResult] = await Promise.all([
+            generateCV(resumeText, jobDescription),
+            generateCoverLetter(resumeText, jobDescription)
+        ]);
+
+        console.log('Parallel Generation Complete.');
+
+        return {
+            optimizedCV: cvResult,
+            coverLetter: clResult
+        };
+
+    } catch (error) {
+        console.error("AI Generation Failed", error);
+        return { optimizedCV: "Error generating content.", coverLetter: "Error generating content." };
+    }
+};
+
+const generateCV = async (resumeText, jobDescription) => {
     const prompt = `
     You are an ATS-optimization engine for ApplyRight.
     Your job is to convert unstructured user career data into a clean, ATS-compliant CV using a strict pipeline.
@@ -183,8 +204,8 @@ Alexander James
     - ## Professional Summary
     - ## Work History
     - ## Skills
-    - ## Projects
     - ## Education
+    - ## Projects
 
     Step 5 — Output Format
     1. START WITH: "# [Full Name in CAPS]" as the very first line.
@@ -195,17 +216,10 @@ Alexander James
        - Example for Nurse: "- **Clinical Care:** Triage, Phlebotomy... \\n - **Compliance:** HIPAA, OSHA..."
        - Example for Sales: "- **CRM Tools:** Salesforce, HubSpot... \\n - **Strategies:** Lead Gen, Closing..."
        - DO NOT use generic "Technical/Soft Skills" headers unless absolutely necessary. Infer the best professional categories.
-    5. For "## Projects", use sub-headers "### [Project Name]" followed by bullet points.
-    6. For "## Education", use sub-headers "### [Degree]" followed by "[Institution] | [Dates]" and bullet points (e.g., GPA or Honors).
-
-    IMPORTANT: Output STRICT JSON. Escape all newlines within the JSON string values as "\\n". 
-    For paragraphs, use DOUBLE NEWLINES ("\\n\\n").
+    5. For "## Education", use sub-headers "### [Degree]" followed by "[Institution] | [Dates]" and bullet points (e.g., GPA or Honors).
+    6. For "## Projects", use sub-headers "### [Project Name]" followed by bullet points.
     
-    Output in JSON format only:
-    {
-        "optimizedCV": "<markdown_string_of_full_resume>",
-        "coverLetter": "<markdown_string_of_tailored_cover_letter>"
-    }
+    IMPORTANT: Return ONLY the markdown string of the CV. Do NOT return JSON. Do NOT wrap in code blocks. Just the raw markdown text.
     `;
 
     try {
@@ -221,33 +235,56 @@ Alexander James
             resultText = result.response.text();
         }
 
-        // Locate the JSON block (find first '{' and last '}')
-        let jsonStr = resultText;
-        const startIndex = resultText.indexOf('{');
-        const endIndex = resultText.lastIndexOf('}');
+        // Cleanup potential markdown wrappers
+        return resultText.replace(/^```markdown\n/, '').replace(/^```\n/, '').replace(/\n```$/, '').trim();
+    } catch (e) {
+        console.error("CV Generation Error:", e);
+        return "# Error Generating CV\nPlease try again.";
+    }
+};
 
-        if (startIndex !== -1 && endIndex !== -1) {
-            jsonStr = resultText.substring(startIndex, endIndex + 1);
+const generateCoverLetter = async (resumeText, jobDescription) => {
+    const prompt = `
+    You are an expert Career Coach.
+    Write a tailored, persuasive Cover Letter for this candidate applying to this job.
+
+    JOB DESCRIPTION:
+    ${jobDescription.substring(0, 5000)}
+
+    USER RESUME:
+    ${resumeText.substring(0, 5000)}
+
+    INSTRUCTIONS:
+    1. Tone: Professional, confident, and enthusiastic.
+    2. Structure:
+       - Salutation (Dear Hiring Manager,)
+       - Hook: Opening paragraph stating interest and a high-level match.
+       - Body: 1-2 paragraphs connecting specific past achievements (from metadata) to the job requirements.
+       - Closing: Reiterate interest and call to action.
+       - Sign-off (Sincerely, [Name])
+    3. Do NOT use placeholders like "[Your Name]" -> infer the name from the resume or use "Candidate" if missing.
+    4. Keep it concise (strictly under 2000 characters).
+
+    IMPORTANT: Return ONLY the raw text/markdown of the letter. Do NOT return JSON. Do NOT wrap in code blocks.
+    `;
+
+    try {
+        let resultText = '';
+        if (activeProvider === 'openai') {
+            const response = await openai.chat.completions.create({
+                model: "gpt-3.5-turbo",
+                messages: [{ role: "user", content: prompt }]
+            });
+            resultText = response.choices[0].message.content;
+        } else if (activeProvider === 'gemini') {
+            const result = await geminiModel.generateContent(prompt);
+            resultText = result.response.text();
         }
 
-        try {
-            return JSON.parse(jsonStr);
-        } catch (e) {
-            console.error("JSON Parse Failed. Raw AI Response (First 500 chars):", resultText.substring(0, 500));
-            try {
-                const fixedStr = jsonStr.replace(/(?<!["}])\n/g, '\\n');
-                return JSON.parse(fixedStr);
-            } catch (retryError) {
-                return {
-                    optimizedCV: "# Error Parsing AI Response\n\nThe AI generated content but it was not in a valid format. Please try regenerating.",
-                    coverLetter: "Error parsing AI response."
-                };
-            }
-        }
-
-    } catch (error) {
-        console.error("AI Generation Failed", error);
-        return { optimizedCV: "Error generating content.", coverLetter: "Error generating content." };
+        return resultText.replace(/^```markdown\n/, '').replace(/^```\n/, '').replace(/\n```$/, '').trim();
+    } catch (e) {
+        console.error("Cover Letter Generation Error:", e);
+        return "Error generating cover letter. Please try again.";
     }
 };
 
@@ -430,6 +467,68 @@ const extractResumeProfile = async (resumeText) => {
     }
 };
 
+const generateBulletPoints = async (role, context, type = 'experience', targetJob = '') => {
+    if (activeProvider === 'mock') {
+        return ["Developed a feature using React.", "Optimized backend performance."];
+    }
+
+    const prompt = `
+    You are an expert Resume Writer and Career Coach.
+    Help the user write professional, achievement-oriented bullet points for their resume.
+    
+    CONTEXT:
+    Role/Title: ${role}
+    Details/Input: ${context}
+    Type: ${type} (experience, project, or summary)
+    ${targetJob ? `Target Job Context: ${targetJob.substring(0, 500)}` : ''}
+
+    INSTRUCTIONS:
+    1. Generate 3 high-impact bullet points found on the top 1% of successful resumes.
+    2. Use strong action verbs (Spearheaded, Optimized, Designed).
+    3. Quantify results where possible, BUT ONLY based on the nature of the role (do not invent specific metrics if completely unknown).
+    4. Focus on achievements, not just duties.
+    5. If 'Type' is 'summary':
+       - Generate a single 3-4 line professional summary paragraph.
+       - STRICTLY use the provided "Work History Summary" for past experience. 
+       - DO NOT claim the candidate worked at the "Target Job" company unless it appears in their Work History.
+       - tailored to the "Target Job Description" keywords, but stay factual to the candidate's actual experience.
+
+    Output STRICT JSON:
+    {
+        "suggestions": ["bullet 1", "bullet 2", "bullet 3"]
+    }
+    (Or for summary: { "suggestions": ["The summary paragraph..."] })
+    `;
+
+    try {
+        let resultText = '';
+        if (activeProvider === 'openai') {
+            const response = await openai.chat.completions.create({
+                model: "gpt-3.5-turbo",
+                messages: [{ role: "user", content: prompt }]
+            });
+            resultText = response.choices[0].message.content;
+        } else if (activeProvider === 'gemini') {
+            const result = await geminiModel.generateContent(prompt);
+            resultText = result.response.text();
+        }
+
+        let jsonStr = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
+        const startIndex = jsonStr.indexOf('{');
+        const endIndex = jsonStr.lastIndexOf('}');
+        if (startIndex !== -1 && endIndex !== -1) {
+            jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+        }
+
+        const data = JSON.parse(jsonStr);
+        return data.suggestions || [];
+
+    } catch (error) {
+        console.error("AI Bullet Generation Failed:", error);
+        return ["Error generating bullets. Please try again."];
+    }
+};
+
 const mockResumeExtraction = () => {
     return {
         skills: ['Mock Skill 1', 'Mock Skill 2'],
@@ -444,5 +543,6 @@ module.exports = {
     generateOptimizedContent,
     generateInterviewQuestions,
     extractResumeProfile,
+    generateBulletPoints,
     activeProvider
 };

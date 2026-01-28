@@ -31,6 +31,7 @@ app.use('/api/resumes', resumeRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/analysis', require('./routes/analysis.routes'));
+app.use('/api/cv', require('./routes/cv.routes'));
 
 
 module.exports = app;
