@@ -472,39 +472,60 @@ const generateBulletPoints = async (role, context, type = 'experience', targetJo
         return ["Developed a feature using React.", "Optimized backend performance."];
     }
 
-    const prompt = `
-    You are an expert Resume Writer and Career Coach.
-    Help the user write professional, achievement-oriented bullet points for their resume.
-    
-    CONTEXT:
-    Role/Title: ${role}
-    Details/Input: ${context}
-    Type: ${type} (experience, project, or summary)
-    ${targetJob ? `Target Job Context: ${targetJob.substring(0, 500)}` : ''}
+    // Customize prompt based on type
+    let prompt = '';
 
-    INSTRUCTIONS:
-    1. COMPANY ANALYSIS: First, identify the "Company" from the input. Use your internal knowledge to detect its industry, sector, and core business (e.g., if 'Google', think Tech/Scale; if 'Goldman Sachs', think Finance/Risk).
-    2. Generate 3 high-impact bullet points found on the top 1% of successful resumes, SPECIFIC to that industry.
-    3. Use strong action verbs (Spearheaded, Optimized, Designed).
-    INSTRUCTIONS:
-    1. COMPANY ANALYSIS: First, identify the "Company" from the input. Use your internal knowledge to detect its industry, sector, and core business (e.g., if 'Google', think Tech/Scale; if 'Goldman Sachs', think Finance/Risk).
-    2. Generate 3 high-impact bullet points found on the top 1% of successful resumes, SPECIFIC to that industry.
-    3. Use strong action verbs (Spearheaded, Optimized, Designed).
-    4. STRICTLY ADHERE TO FACTS: If raw text was provided in the input, do NOT invent metrics, percentages, or numbers that are not present in the source text. You may improve the grammar and flow, but do not hallucinate achievements.
-    5. Focus on achievements, not just duties.
-    5. Focus on achievements, not just duties.
-    5. If 'Type' is 'summary':
-       - Generate a single 3-4 line professional summary paragraph.
-       - STRICTLY use the provided "Work History Summary" for past experience. 
-       - DO NOT claim the candidate worked at the "Target Job" company unless it appears in their Work History.
-       - tailored to the "Target Job Description" keywords, but stay factual to the candidate's actual experience.
+    if (type === 'summary') {
+        prompt = `
+        You are an expert Resume Writer.
+        Write a powerful, professional summary for a CV (Resume) based on the candidate's background.
 
-    Output STRICT JSON:
-    {
-        "suggestions": ["bullet 1", "bullet 2", "bullet 3"]
+        INPUT DATA:
+        Role/Title: ${role}
+        Details: ${context}
+        Target Job Context: ${targetJob ? targetJob.substring(0, 500) : 'General Professional Role'}
+
+        INSTRUCTIONS:
+        1. Write a SINGLE, cohesive paragraph (3-4 sentences max).
+        2. Do NOT use bullet points.
+        3. Structure:
+           - Start with a strong professional identity. IMPORTANT: Use the candidate's *actual* recent job title from their Work History (e.g. "Experienced Wireline Operator"). Do NOT "upgrade" titles (e.g. do not change "Operator" to "Engineer") unless the evidence is explicit.
+           - Mention key achievements and industries found in the "Work History Summary".
+           - weave in the "Key Skills" naturally.
+           - Align gently with the "Target Job Description" keywords if provided.
+        4. Tone: Professional, confident, and factual.
+        5. AVOID generic fluff like "hard worker" or "team player". Focus on tangible value.
+        
+        Output STRICT JSON:
+        {
+            "suggestions": ["<The entire summary paragraph string>"]
+        }
+        `;
+    } else {
+        // Default Prompt for Bullets (Experience/Projects)
+        prompt = `
+        You are an expert Resume Writer.
+        Help the user write professional, achievement-oriented bullet points for their resume.
+        
+        CONTEXT:
+        Role/Title: ${role}
+        Details/Input: ${context}
+        Type: ${type} (experience or project)
+        ${targetJob ? `Target Job Context: ${targetJob.substring(0, 500)}` : ''}
+
+        INSTRUCTIONS:
+        1. COMPANY ANALYSIS: First, identify the "Company" from the input. Use your internal knowledge to detect its industry and sector.
+        2. Generate 3 high-impact bullet points found on the top 1% of successful resumes, SPECIFIC to that industry.
+        3. Use strong action verbs (Spearheaded, Optimized, Designed).
+        4. STRICTLY ADHERE TO FACTS: If raw text was provided in the input, do NOT invent metrics or numbers that are not present. You may improve the grammar and flow, but do not hallucinate achievements.
+        5. Focus on achievements, not just duties.
+
+        Output STRICT JSON:
+        {
+            "suggestions": ["bullet 1", "bullet 2", "bullet 3"]
+        }
+        `;
     }
-    (Or for summary: { "suggestions": ["The summary paragraph..."] })
-    `;
 
     try {
         let resultText = '';
