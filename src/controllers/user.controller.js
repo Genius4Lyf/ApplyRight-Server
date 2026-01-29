@@ -14,7 +14,8 @@ exports.updateProfile = async (req, res) => {
             education,
             careerGoals,
             skills,
-            onboardingCompleted
+            onboardingCompleted,
+            settings
         } = req.body;
 
         // Build update object
@@ -31,6 +32,7 @@ exports.updateProfile = async (req, res) => {
         if (careerGoals) updateFields.careerGoals = careerGoals;
         if (skills) updateFields.skills = skills;
         if (typeof onboardingCompleted !== 'undefined') updateFields.onboardingCompleted = onboardingCompleted;
+        if (settings) updateFields.settings = settings;
 
         const user = await User.findByIdAndUpdate(
             req.user.id,
