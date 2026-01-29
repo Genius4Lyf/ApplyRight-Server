@@ -190,7 +190,10 @@ const generateCV = async (resumeText, jobDescription) => {
     Identify: name, contact info, roles, employers, dates, skills, education, projects.
 
     Step 2 — Normalize
+    Step 2 — Normalize
     - Generate a Professional Summary by analyzing the candidate's Work History and Skills. Highlight key achievements and relevance to the Job Description.
+      * IMPORTANT: Use the candidate's *actual* recent job titles from Work History (e.g. "Wireline Operator"). Do NOT "upgrade" or change titles (e.g. to "Engineer") unless the evidence is explicit.
+      * Write a single, cohesive paragraph (no bullets).
     - Convert job descriptions into achievement-oriented bullet points (Action + Task + Result).
     - Standardize job titles and dates.
 
