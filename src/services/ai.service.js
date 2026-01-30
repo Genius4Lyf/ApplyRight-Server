@@ -162,8 +162,8 @@ Alexander James
     try {
         console.log('Beginning Parallel Generation: CV & Cover Letter...');
         const [cvResult, clResult] = await Promise.all([
-            generateCV(resumeText, jobDescription),
-            generateCoverLetter(resumeText, jobDescription)
+            generateCV(resumeText, jobDescription || "General Professional Role"),
+            jobDescription ? generateCoverLetter(resumeText, jobDescription) : Promise.resolve(null)
         ]);
 
         console.log('Parallel Generation Complete.');
@@ -185,8 +185,7 @@ const generateCV = async (resumeText, jobDescription) => {
     Your job is to convert unstructured user career data into a clean, ATS-compliant CV using a strict pipeline.
 
     INPUT DATA:
-    JOB DESCRIPTION:
-    ${jobDescription.substring(0, 8000)}
+    ${jobDescription ? `JOB DESCRIPTION:\n    ${jobDescription.substring(0, 8000)}` : 'TARGET ROLE: General Professional Role (Optimize for general readability and impact)'}
 
     USER RESUME:
     ${resumeText.substring(0, 8000)}
@@ -206,7 +205,7 @@ const generateCV = async (resumeText, jobDescription) => {
     - Standardize job titles and dates.
 
     Step 3 — ATS Optimization
-    - Use industry-standard keywords inferred from the user’s background and Job Description.
+    - Use industry-standard keywords inferred from the user’s background${jobDescription ? ' and Job Description' : ''}.
     - Avoid buzzwords and personal pronouns (I, me, my).
     - Keep language factual and concise.
 
@@ -448,16 +447,21 @@ const extractResumeProfile = async (resumeText) => {
 
     INSTRUCTIONS:
     1. Extract SKILLS as an array of strings.
-    2. Extract EXPERIENCE as an array of objects: { "role": "...", "company": "...", "years": <number estimated duration> }.
-    3. Extract EDUCATION as an array of objects: { "degree": "...", "field": "...", "school": "..." }.
-    4. Estimate SENIORITY level: 'entry', 'mid', 'senior', or 'executive'.
+    2. Extract EXPERIENCE as an array of objects: { "role": "...", "company": "...", "startDate": "...", "endDate": "...", "description": "array of strings (REWRITE into strong, achievement-oriented bullet points using action verbs)" }.
+    3. Extract EDUCATION as an array of objects: { "degree": "...", "field": "...", "school": "...", "date": "..." }.
+    4. Extract PROJECTS as an array of objects: { "title": "...", "link": "...", "description": "array of strings (bullet points)" }.
+       - IMPORTANT: "link" should be NULL if no valid URL (http/www) is found. Do NOT use the project title as the link.
+    5. Estimate SENIORITY level: 'entry', 'mid', 'senior', or 'executive'.
+    6. Generate a PROFESSIONAL SUMMARY (string). Write a compelling, ATS-optimized summary (3-4 sentences) based on the resume's history and skills. Do not just copy the existing one if it's weak.
 
     Output STRICT JSON format only:
     {
         "skills": ["..."],
-        "experience": [{...}],
-        "education": [{...}],
-        "seniority": "..."
+        "experience": [{ "role": "...", "company": "...", "startDate": "...", "endDate": "...", "description": [...] }],
+        "education": [{ "degree": "...", "field": "...", "school": "...", "date": "..." }],
+        "projects": [{ "title": "...", "link": "...", "description": [...] }],
+        "seniority": "...",
+        "summary": "..."
     }
     `;
 
@@ -582,9 +586,11 @@ const generateBulletPoints = async (role, context, type = 'experience', targetJo
 const mockResumeExtraction = () => {
     return {
         skills: ['Mock Skill 1', 'Mock Skill 2'],
-        experience: [{ role: 'Mock Role', company: 'Mock Co', years: 1 }],
-        education: [{ degree: 'BS', field: 'CS', school: 'Mock Univ' }],
-        seniority: 'entry'
+        experience: [{ role: 'Mock Role', company: 'Mock Co', startDate: 'Jan 2023', endDate: 'Present', description: ['Mock bullet 1', 'Mock bullet 2'] }],
+        education: [{ degree: 'BS', field: 'CS', school: 'Mock Univ', date: '2022' }],
+        projects: [{ title: 'Mock Project', link: 'http://example.com', description: ['Built a cool thing'] }],
+        seniority: 'entry',
+        summary: 'This is a mock professional summary for testing purposes.'
     };
 };
 

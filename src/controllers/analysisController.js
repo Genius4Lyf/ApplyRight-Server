@@ -1,4 +1,5 @@
 const Job = require('../models/Job');
+const DraftCV = require('../models/DraftCV');
 const Resume = require('../models/Resume');
 const Application = require('../models/Application');
 const extractionService = require('../services/extraction.service');
@@ -12,11 +13,60 @@ const analyzeFit = async (req, res) => {
         const userId = req.user._id; // Assuming auth middleware
 
         // 1. Fetch Data
-        const job = await Job.findById(jobId);
+        const job = jobId ? await Job.findById(jobId) : null;
         const resume = await Resume.findById(resumeId);
 
-        if (!job || !resume) {
-            return res.status(404).json({ message: 'Job or Resume not found' });
+        if (!resume) {
+            return res.status(404).json({ message: 'Resume not found' });
+        }
+
+        // NEW: Handle "Create from Upload" (No Job ID)
+        if (!jobId) {
+            // 1. Extract Data
+            const extractedData = await aiService.extractResumeProfile(resume.rawText);
+
+            // 2. Create Draft
+            const draft = await DraftCV.create({
+                userId,
+                title: 'Uploaded Resume',
+                personalInfo: {
+                    fullName: req.user.firstName ? `${req.user.firstName} ${req.user.lastName}` : 'Candidate',
+                    email: req.user.email
+                },
+                professionalSummary: extractedData.summary || '',
+                experience: extractedData.experience?.map(e => ({
+                    title: e.role,
+                    company: e.company,
+                    startDate: e.startDate,
+                    endDate: e.endDate,
+                    // If description is array, join distinct bullets. If string, use as is.
+                    description: Array.isArray(e.description) ? e.description.map(d => `• ${d}`).join('\n') : (e.description || '')
+                })) || [],
+                education: extractedData.education?.map(e => ({
+                    degree: e.degree,
+                    school: e.school,
+                    field: e.field,
+                    graduationDate: e.date
+                })) || [],
+                projects: extractedData.projects?.map(p => ({
+                    title: p.title,
+                    link: p.link,
+                    description: Array.isArray(p.description) ? p.description.map(d => `• ${d}`).join('\n') : (p.description || '')
+                })) || [],
+                skills: extractedData.skills || [],
+                isComplete: true
+            });
+
+            return res.status(200).json({
+                message: 'Resume parsed successfully',
+                draftId: draft._id,
+                fitScore: null,
+                fitAnalysis: null
+            });
+        }
+
+        if (!job) {
+            return res.status(404).json({ message: 'Job not found' });
         }
 
         // 2. Perform Extraction (if not already done)
@@ -117,8 +167,17 @@ const analyzeFit = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Analysis Error:', error);
-        res.status(500).json({ message: 'Failed to analyze fit', error: error.message });
+        console.error('Analysis Error Details:', {
+            message: error.message,
+            stack: error.stack,
+            body: req.body,
+            user: req.user ? req.user._id : 'No User'
+        });
+        res.status(500).json({
+            message: 'Failed to analyze fit',
+            error: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     }
 };
 
