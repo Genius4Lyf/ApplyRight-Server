@@ -15,6 +15,10 @@ const userSchema = new mongoose.Schema({
         enum: ['free', 'paid'],
         default: 'free',
     },
+    credits: {
+        type: Number,
+        default: 20, // Free starting credits
+    },
     firstName: {
         type: String,
         default: '',

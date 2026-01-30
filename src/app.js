@@ -33,6 +33,7 @@ app.use('/api/applications', applicationRoutes);
 app.use('/api/analysis', require('./routes/analysis.routes'));
 app.use('/api/cv', require('./routes/cv.routes'));
 app.use('/api/pdf', require('./routes/pdf.routes'));
+app.use('/api/billing', require('./routes/billing.routes'));
 
 
 module.exports = app;
