@@ -46,20 +46,17 @@ const analyzeFit = async (req, res) => {
         let fitAnalysis = {
             overallFeedback: aiResult.reasoning || "Analysis complete.",
             skillsGap: aiResult.missingSkills || [],
-            experienceMatch: true, // simplified for now, or calculate based on aiResult.experienceYears
-            seniorityMatch: true,  // simplified
+
+            // Use AI detailed analysis if available, otherwise fallback to simple heuristics
+            experienceMatch: aiResult.experienceAnalysis?.match ?? (aiResult.experienceYears >= (job.analysis?.experience?.minYears || 0)),
+            experienceFeedback: aiResult.experienceAnalysis?.feedback || (aiResult.experienceYears >= (job.analysis?.experience?.minYears || 0) ? "Meets requirements" : "Less than preferred"),
+
+            seniorityMatch: aiResult.seniorityAnalysis?.match ?? true,
+            seniorityFeedback: aiResult.seniorityAnalysis?.feedback || "Aligned with role",
+
             recommendation: aiResult.recommendation,
             mode: aiResult.mode // "AI" or "Standard"
         };
-
-        // If in Standard/Mock mode, we might want to fallback to the old math if the mock return was too generic?
-        // But the new mockAnalysis() in ai.service.js returns a decent structure, so we can use it.
-        // Or we can hybridize: allow scoringService to run if AI fails or is mock.
-        // For simplicity, let's trust aiResult (which falls back to mockAnalysis if needed).
-
-        // Refine Match Booleans (Hybrid approach: use AI data + Rules)
-        const jobMinYears = job.analysis.experience ? job.analysis.experience.minYears : 0;
-        if (aiResult.experienceYears < jobMinYears) fitAnalysis.experienceMatch = false;
 
         // 3b. Generate Smart Action Plan
         // If AI provided an action plan, use it. Otherwise fallback to hardcoded actions.

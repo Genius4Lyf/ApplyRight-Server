@@ -50,6 +50,14 @@ const analyzeProfile = async (resumeText, jobDescription) => {
         "missingSkills": ["important_missing_skill"],
         "experienceYears": <integer_estimate_of_total_relevant_experience>,
         "seniority": "<one_of: entry, mid, senior, executive>",
+        "experienceAnalysis": {
+            "match": <boolean>,
+            "feedback": "<short_string_e.g._Less_than_preferred_or_Meets_requirements>"
+        },
+        "seniorityAnalysis": {
+            "match": <boolean>,
+            "feedback": "<short_string_e.g._Aligned_with_role_or_Overqualified>"
+        },
         "reasoning": "<short_sentence_explaining_seniority_and_fit>",
         "fitScore": <integer_0_to_100_based_on_overall_match>,
         "recommendation": "<short_advice_for_candidate>",
@@ -260,13 +268,17 @@ const generateCoverLetter = async (resumeText, jobDescription) => {
     INSTRUCTIONS:
     1. Tone: Professional, confident, and enthusiastic.
     2. Structure:
-       - Salutation (Dear Hiring Manager,)
-       - Hook: Opening paragraph stating interest and a high-level match.
-       - Body: 1-2 paragraphs connecting specific past achievements (from metadata) to the job requirements.
-       - Closing: Reiterate interest and call to action.
-       - Sign-off (Sincerely, [Name])
-    3. Do NOT use placeholders like "[Your Name]" -> infer the name from the resume or use "Candidate" if missing.
-    4. Keep it concise (strictly under 2000 characters).
+       - Salutation (Dear Hiring Manager, - or specific name if found in JD)
+       - Hook: Opening paragraph stating interest and a high-level match value proposition.
+       - Body: 1-2 paragraphs connecting specific past achievements (from resume) to the job requirements.
+    3. CRITICAL ANTI-HALLUCINATION RULES:
+       - **STRICTLY ADHERE TO FACTS:** Do NOT invent experiences, roles, or responsibilities that are not explicitly present in the USER RESUME.
+       - **DO NOT** claim the candidate performed tasks (e.g., "managed social media") if their resume only lists unrelated roles (e.g., "Field Operator").
+       - **TRANSFERABLE SKILLS:** If the candidate's past experience does not directly match the technical requirements, focus purely on TRANSFERABLE SOFT SKILLS (e.g., "leadership," "adaptability," "project management," "operational discipline") and how those translate to the new role.
+       - It is better to sound "eager to learn" than to lie about experience.
+    4. Closing: Reiterate interest and call to action.
+    5. Sign-off (Sincerely, [Name]) - Infer name from resume.
+    6. Keep it concise (strictly under 2000 characters).
 
     IMPORTANT: Return ONLY the raw text/markdown of the letter. Do NOT return JSON. Do NOT wrap in code blocks.
     `;
@@ -297,6 +309,14 @@ const mockAnalysis = () => {
         missingSkills: ['real-ai-key'],
         experienceYears: 1,
         seniority: 'entry',
+        experienceAnalysis: {
+            match: false,
+            feedback: "Less than preferred"
+        },
+        seniorityAnalysis: {
+            match: true,
+            feedback: "Aligned with role"
+        },
         reasoning: 'Analysis performed in Mock/Offline Mode.',
         fitScore: 50,
         recommendation: 'Add an API Key to enable AI analysis.',

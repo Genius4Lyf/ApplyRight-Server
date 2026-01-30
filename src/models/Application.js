@@ -25,9 +25,12 @@ const applicationSchema = new mongoose.Schema({
         overallFeedback: String,
         skillsGap: [String],
         experienceMatch: Boolean,
+        experienceFeedback: String, // New detailed feedback
         educationMatch: Boolean,
         seniorityMatch: Boolean,
-        recommendation: String
+        seniorityFeedback: String, // New detailed feedback
+        recommendation: String,
+        mode: String // 'AI' or 'Standard'
     },
     optimizedCV: {
         type: String, // Markdown or HTML content
