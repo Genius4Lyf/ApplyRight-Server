@@ -12,7 +12,7 @@ const transactionSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['purchase', 'usage', 'bonus', 'ad_reward', 'referral_reward'],
+        enum: ['purchase', 'usage', 'ad_reward', 'streak_bonus'],
         required: true
     },
     description: {
@@ -23,9 +23,6 @@ const transactionSchema = new mongoose.Schema({
         type: String,
         enum: ['pending', 'completed', 'failed'],
         default: 'completed'
-    },
-    reference: { // For payment gateway reference or internal ID
-        type: String
     }
 }, {
     timestamps: true

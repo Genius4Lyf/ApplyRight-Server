@@ -1,6 +1,12 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const Transaction = require('../models/Transaction');
+
+const generateReferralCode = () => {
+    // Basic code generation: Random 8 char alphanumeric
+    return Math.random().toString(36).substring(2, 10).toUpperCase();
+};
 
 const generateToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -12,7 +18,7 @@ const generateToken = (id) => {
 // @route   POST /api/auth/register
 // @access  Public
 const registerUser = async (req, res) => {
-    const { email, password } = req.body;
+    const { email, password, referralCode } = req.body;
 
     if (!email || !password) {
         return res.status(400).json({ message: 'Please add all fields' });
@@ -29,18 +35,57 @@ const registerUser = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // Create unique referral code for new user
+    let newReferralCode = generateReferralCode();
+    // Ensure uniqueness (simple check loop)
+    let codeExists = await User.findOne({ referralCode: newReferralCode });
+    while (codeExists) {
+        newReferralCode = generateReferralCode();
+        codeExists = await User.findOne({ referralCode: newReferralCode });
+    }
+
+    // Handle Referral Logic
+    let referrer = null;
+    const initialCredits = 30; // Default - no bonus for new user
+    const REFERRAL_BONUS = 50;
+
+    if (referralCode) {
+        referrer = await User.findOne({ referralCode: referralCode.toUpperCase() });
+    }
+
     // Create user
     const user = await User.create({
         email,
         password: hashedPassword,
+        referralCode: newReferralCode,
+        credits: initialCredits,
+        referredBy: referrer ? referrer._id : null
     });
 
     if (user) {
+        // Only award credits to the REFERRER, not the new user
+        if (referrer) {
+            // Award Referrer
+            referrer.credits += REFERRAL_BONUS;
+            referrer.referralCount += 1;
+            await referrer.save();
+
+            await Transaction.create({
+                userId: referrer.id,
+                amount: REFERRAL_BONUS,
+                type: 'streak_bonus',
+                description: `Referral Bonus (Invited ${user.email})`,
+                status: 'completed'
+            });
+        }
+
         res.status(201).json({
             _id: user.id,
             email: user.email,
             firstName: user.firstName,
             lastName: user.lastName,
+            referralCode: user.referralCode,
+            credits: user.credits,
             settings: user.settings,
             token: generateToken(user.id),
         });
@@ -59,20 +104,36 @@ const loginUser = async (req, res) => {
     const user = await User.findOne({ email });
 
     if (user && (await bcrypt.compare(password, user.password))) {
+        // Generate referral code if user doesn't have one (for existing users)
+        if (!user.referralCode) {
+            let newReferralCode = generateReferralCode();
+            let codeExists = await User.findOne({ referralCode: newReferralCode });
+            while (codeExists) {
+                newReferralCode = generateReferralCode();
+                codeExists = await User.findOne({ referralCode: newReferralCode });
+            }
+            user.referralCode = newReferralCode;
+            await user.save();
+        }
+
         res.json({
             _id: user.id,
             email: user.email,
             firstName: user.firstName,
             lastName: user.lastName,
-            currentStatus: user.currentStatus,
-            plan: user.plan,
+            credits: user.credits,
+            phoneNumber: user.phoneNumber,
+            location: user.location,
+            skills: user.skills,
+            experience: user.experience,
             education: user.education,
             settings: user.settings,
             onboardingCompleted: user.onboardingCompleted,
+            referralCode: user.referralCode,
             token: generateToken(user.id),
         });
     } else {
-        res.status(400).json({ message: 'Invalid credentials' });
+        res.status(401).json({ message: 'Invalid credentials' });
     }
 };
 

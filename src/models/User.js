@@ -19,6 +19,24 @@ const userSchema = new mongoose.Schema({
         type: Number,
         default: 30, // Free starting credits
     },
+    adStreak: {
+        current: { type: Number, default: 0 },
+        longest: { type: Number, default: 0 },
+        lastWatchDate: { type: Date, default: null },
+    },
+    referralCode: {
+        type: String,
+        unique: true,
+        sparse: true, // Allows null/undefined values to not violate uniqueness (though we generate for all)
+    },
+    referredBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+    },
+    referralCount: {
+        type: Number,
+        default: 0,
+    },
     firstName: {
         type: String,
         default: '',
