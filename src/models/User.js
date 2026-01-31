@@ -17,7 +17,7 @@ const userSchema = new mongoose.Schema({
     },
     credits: {
         type: Number,
-        default: 20, // Free starting credits
+        default: 30, // Free starting credits
     },
     firstName: {
         type: String,

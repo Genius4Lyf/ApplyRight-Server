@@ -10,7 +10,19 @@ const aiService = require('../services/ai.service');
 const analyzeFit = async (req, res) => {
     try {
         const { jobId, resumeId, templateId } = req.body;
-        const userId = req.user._id; // Assuming auth middleware
+        const userId = req.user._id;
+        const ANALYSIS_COST = 15;
+
+        // 0. Check Credit Balance
+        const user = req.user; // Assuming user is fully attached by middleware
+        if (user.credits < ANALYSIS_COST) {
+            return res.status(403).json({
+                message: 'Insufficient credits',
+                code: 'INSUFFICIENT_CREDITS',
+                required: ANALYSIS_COST,
+                current: user.credits
+            });
+        }
 
         // 1. Fetch Data
         const job = jobId ? await Job.findById(jobId) : null;
@@ -153,6 +165,10 @@ const analyzeFit = async (req, res) => {
         await application.save();
 
         // 5. Return Result
+        // 5. Deduct Credits
+        user.credits -= ANALYSIS_COST;
+        await user.save();
+
         res.status(200).json({
             fitScore: fitScore,
             fitAnalysis: fitAnalysis,
@@ -163,7 +179,8 @@ const analyzeFit = async (req, res) => {
             questionsToAsk: questionsToAsk,
             applicationId: application._id,
             templateId: application.templateId,
-            job: job // NEW: Return updated job details
+            job: job, // NEW: Return updated job details
+            remainingCredits: user.credits // Return new balance
         });
 
     } catch (error) {
