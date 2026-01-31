@@ -53,7 +53,10 @@ class PdfService {
             const pdfBuffer = await page.pdf({
                 format: 'A4',
                 printBackground: true, // Essential for resume colors/bg
-                margin: {
+                displayHeaderFooter: true, // Required for margins to work
+                headerTemplate: '<div></div>', // Empty header
+                footerTemplate: '<div></div>', // Empty footer
+                margin: options.margin || {
                     top: '0px',
                     right: '0px',
                     bottom: '0px',

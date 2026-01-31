@@ -2,14 +2,14 @@ const PdfService = require('../services/pdf.service');
 
 exports.generateCvPdf = async (req, res) => {
     try {
-        const { html } = req.body;
+        const { html, options } = req.body;
 
         if (!html) {
             return res.status(400).json({ message: 'HTML content is required' });
         }
 
-        // Generate PDF
-        const buffer = await PdfService.generatePdf(html);
+        // Generate PDF with options
+        const buffer = await PdfService.generatePdf(html, options || {});
 
         // Send PDF response
         res.set({
