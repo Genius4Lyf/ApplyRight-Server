@@ -52,8 +52,12 @@ const userSchema = new mongoose.Schema({
     },
     phone: {
         type: String,
-        default: '',
+        required: [true, 'Please add a phone number'],
+        unique: true,
+        trim: true,
     },
+    resetPasswordToken: String,
+    resetPasswordExpire: Date,
     portfolioUrl: {
         type: String,
         default: '',
