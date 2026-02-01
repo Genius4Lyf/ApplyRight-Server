@@ -529,29 +529,81 @@ const generateBulletPoints = async (role, context, type = 'experience', targetJo
         }
         `;
     } else {
-        // Default Prompt for Bullets (Experience/Projects)
+        // IMPROVED PROMPT FOR WORK HISTORY BULLETS
+        // User Requirement: "It shouldn't look at the Target Job Description... it should look at the company and what the role is for the company"
         prompt = `
-        You are an expert Resume Writer.
-        Help the user write professional, achievement-oriented bullet points for their resume.
-        
-        CONTEXT:
-        Role/Title: ${role}
-        Details/Input: ${context}
-        Type: ${type} (experience or project)
-        ${targetJob ? `Target Job Context: ${targetJob.substring(0, 500)}` : ''}
+You are an expert Resume Writer and Recruiter.
 
-        INSTRUCTIONS:
-        1. COMPANY ANALYSIS: First, identify the "Company" from the input. Use your internal knowledge to detect its industry and sector.
-        2. Generate 3 high-impact bullet points found on the top 1% of successful resumes, SPECIFIC to that industry.
-        3. Use strong action verbs (Spearheaded, Optimized, Designed).
-        4. STRICTLY ADHERE TO FACTS: If raw text was provided in the input, do NOT invent metrics or numbers that are not present. You may improve the grammar and flow, but do not hallucinate achievements.
-        5. Focus on achievements, not just duties.
+Your task is to generate 3 realistic, ATS-optimized bullet points for a specific work history role.
+Accuracy and role realism are more important than sounding impressive.
 
-        Output STRICT JSON:
-        {
-            "suggestions": ["bullet 1", "bullet 2", "bullet 3"]
-        }
-        `;
+INPUT:
+Job Title: "${role}"
+Context / Company Information: "${context}"
+
+MANDATORY REASONING STEPS (DO NOT SKIP):
+
+STEP 1: Infer Industry & Function
+- Infer the industry from the company name or context.
+- Infer the functional role from the job title.
+- Example: "Field Operator" ≠ "Field Engineer" ≠ "Manager"
+
+STEP 2: Determine Role Authority Level
+Classify the role into ONE category:
+
+• EXECUTION-LEVEL
+  (Operator, Technician, Assistant, Intern, Junior roles)
+  - Executes tasks
+  - Follows defined procedures
+  - Supports delivery
+
+• SPECIALIST-LEVEL
+  (Engineer, Analyst, Developer, Designer, Accountant)
+  - Applies expertise
+  - Solves defined technical problems
+  - Improves local workflows (not company-wide)
+
+• OWNERSHIP-LEVEL
+  (Senior, Lead, Principal, Manager, Head)
+  - Owns systems or outcomes
+  - Defines processes
+  - Drives measurable business impact
+
+STEP 3: Enforce Role Scope (CRITICAL)
+- Bullet points MUST stay within the authority of the classified level.
+- DO NOT assign:
+  - Strategic ownership
+  - System or process design
+  - Company-wide optimization
+  - Cost-saving claims
+UNLESS the role is OWNERSHIP-LEVEL.
+
+STEP 4: Generate Bullet Points
+- Use realistic responsibilities typical for this role + industry.
+- Prefer contribution and execution over ownership when uncertain.
+- If metrics are used, they must be plausible for the role level.
+- Every bullet must be defensible in a real interview.
+
+GENERATION RULES:
+1. Ignore any future or target job description completely.
+2. Avoid generic phrases ("Worked on", "Helped with").
+3. Use strong but role-appropriate action verbs.
+   - EXECUTION: Executed, Performed, Monitored, Operated, Supported
+   - SPECIALIST: Analyzed, Implemented, Configured, Validated, Improved
+   - OWNERSHIP: Led, Designed, Optimized, Defined, Owned
+4. If user context lacks specifics, generate typical but believable duties.
+5. Do NOT exaggerate authority or impact.
+
+OUTPUT STRICT JSON ONLY:
+{
+  "suggestions": [
+    "Bullet 1",
+    "Bullet 2",
+    "Bullet 3"
+  ]
+}
+`;
+
     }
 
     try {
