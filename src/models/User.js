@@ -24,6 +24,7 @@ const userSchema = new mongoose.Schema({
         longest: { type: Number, default: 0 },
         lastWatchDate: { type: Date, default: null },
     },
+    unlockedTemplates: [String],
     referralCode: {
         type: String,
         unique: true,

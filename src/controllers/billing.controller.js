@@ -322,3 +322,55 @@ exports.verifyPayment = async (req, res) => {
         res.status(500).json({ message: 'Payment verification failed server error' });
     }
 };
+
+// @desc    Unlock a template
+// @route   POST /api/billing/unlock-template
+// @access  Private
+exports.unlockTemplate = async (req, res) => {
+    const { templateId, cost } = req.body;
+
+    try {
+        const user = await User.findById(req.user.id);
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // Check if already unlocked
+        if (user.unlockedTemplates && user.unlockedTemplates.includes(templateId)) {
+            return res.status(200).json({ success: true, message: 'Template already unlocked', credits: user.credits, unlockedTemplates: user.unlockedTemplates });
+        }
+
+        const costAmount = parseInt(cost, 10);
+        // Check balance
+        if (user.credits < costAmount) {
+            return res.status(400).json({ message: 'Insufficient credits', error: 'INSUFFICIENT_CREDITS' });
+        }
+
+        // Deduct credits
+        user.credits -= costAmount;
+
+        // Add to unlocked
+        if (!user.unlockedTemplates) {
+            user.unlockedTemplates = [];
+        }
+        user.unlockedTemplates.push(templateId);
+
+        await user.save();
+
+        // Record Transaction
+        await Transaction.create({
+            userId: user.id,
+            amount: -costAmount,
+            type: 'usage',
+            description: `Unlocked template: ${templateId}`,
+            status: 'completed'
+        });
+
+        res.json({ success: true, credits: user.credits, unlockedTemplates: user.unlockedTemplates });
+
+    } catch (error) {
+        console.error('Unlock Template Error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};

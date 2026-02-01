@@ -87,6 +87,7 @@ const registerUser = async (req, res) => {
             referralCode: user.referralCode,
             credits: user.credits,
             settings: user.settings,
+            unlockedTemplates: user.unlockedTemplates,
             token: generateToken(user.id),
         });
     } else {
@@ -130,6 +131,7 @@ const loginUser = async (req, res) => {
             settings: user.settings,
             onboardingCompleted: user.onboardingCompleted,
             referralCode: user.referralCode,
+            unlockedTemplates: user.unlockedTemplates,
             token: generateToken(user.id),
         });
     } else {
