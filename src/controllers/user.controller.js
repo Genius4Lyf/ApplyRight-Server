@@ -32,7 +32,16 @@ exports.updateProfile = async (req, res) => {
         if (careerGoals) updateFields.careerGoals = careerGoals;
         if (skills) updateFields.skills = skills;
         if (typeof onboardingCompleted !== 'undefined') updateFields.onboardingCompleted = onboardingCompleted;
-        if (settings) updateFields.settings = settings;
+
+        // Handle nested settings using dot notation to avoid overwriting other settings
+        if (settings) {
+            if (settings.showOnboardingTutorials !== undefined) {
+                updateFields['settings.showOnboardingTutorials'] = settings.showOnboardingTutorials;
+            }
+            if (settings.autoGenerateAnalysis !== undefined) {
+                updateFields['settings.autoGenerateAnalysis'] = settings.autoGenerateAnalysis;
+            }
+        }
 
         const user = await User.findByIdAndUpdate(
             req.user.id,
