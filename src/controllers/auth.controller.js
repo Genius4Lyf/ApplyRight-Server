@@ -47,7 +47,7 @@ const registerUser = async (req, res) => {
     // Handle Referral Logic
     let referrer = null;
     const initialCredits = 30; // Default - no bonus for new user
-    const REFERRAL_BONUS = 50;
+    const REFERRAL_BONUS = 10; // Reduced for ad-based revenue model
 
     if (referralCode) {
         referrer = await User.findOne({ referralCode: referralCode.toUpperCase() });

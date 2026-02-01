@@ -100,20 +100,12 @@ exports.watchAd = async (req, res) => {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        // Check daily limit
+        // Get watch count for tracking (no limit enforced)
         const watchCount = await Transaction.countDocuments({
             userId: user.id,
             type: 'ad_reward',
             createdAt: { $gte: today }
         });
-
-        if (watchCount >= 3) {
-            return res.status(429).json({
-                message: 'Daily ad limit reached',
-                watchCount,
-                maxDaily: 3
-            });
-        }
 
         // --- Streak Logic ---
         const yesterday = new Date(today);
@@ -202,7 +194,7 @@ exports.watchAd = async (req, res) => {
             credits: user.credits,
             added: TOTAL_REWARD,
             watchCount: watchCount + 1,
-            maxDaily: 3,
+            maxDaily: 999, // Unlimited
             streak: user.adStreak.current,
             streakBonus,
             streakMessage
@@ -239,7 +231,7 @@ exports.getWatchStats = async (req, res) => {
 
         res.json({
             watchCount,
-            maxDaily: 3,
+            maxDaily: 999, // Unlimited
             lastWatch: lastWatch ? lastWatch.createdAt : null,
             streak: user.adStreak ? user.adStreak.current : 0
         });
@@ -247,5 +239,86 @@ exports.getWatchStats = async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server Error' });
+    }
+};
+// @desc    Verify Paystack Payment
+// @route   POST /api/billing/verify-payment
+// @access  Private
+exports.verifyPayment = async (req, res) => {
+    const { reference } = req.body;
+
+    try {
+        if (!reference) {
+            return res.status(400).json({ message: 'No transaction reference provided' });
+        }
+
+        // 1. Verify with Paystack API
+        const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const data = await response.json();
+
+        if (!data.status || data.data.status !== 'success') {
+            return res.status(400).json({ message: 'Transaction verification failed' });
+        }
+
+        const { amount, metadata } = data.data; // Amount is in Kobo (NGN * 100)
+
+        // 2. Check if transaction already exists
+        const existingTx = await Transaction.findOne({ reference });
+        if (existingTx) {
+            return res.status(400).json({ message: 'Transaction already verified' });
+        }
+
+        const user = await User.findById(req.user.id);
+
+        // 3. Calculate Credits (Simulated logic based on amount paid)
+        // Adjust these rates as needed. Current packages:
+        // 50 Credits = NGN 2000 roughly? Let's assume metadata carries the credit amount for safety,
+        // or we map exact amounts to credits.
+        // Ideally, pass 'credits' in metadata from frontend.
+
+        let creditsToAdd = 0;
+        if (metadata && metadata.credits) {
+            creditsToAdd = parseInt(metadata.credits, 10);
+        } else {
+            // Fallback mapper (e.g. 1 NGN = 0.05 credits? User buys packages)
+            // 20 Credits = $5 (~5000 NGN)
+            // 50 Credits = $10 (~10000 NGN)
+            // 150 Credits = $25 (~25000 NGN)
+            // Using a safe fallback if frontend metadata fails
+            creditsToAdd = Math.floor((amount / 100) / 200); // 1 credit per 200 NGN rough estimate
+        }
+
+        // 4. Update User Balance
+        user.credits += creditsToAdd;
+        await user.save();
+
+        // 5. Record Transaction
+        await Transaction.create({
+            userId: user.id,
+            amount: creditsToAdd, // Store credits amount, not currency amount for internal consistency
+            type: 'purchase',
+            description: `Purchased ${creditsToAdd} Credits`,
+            status: 'completed',
+            reference: reference, // Paystack Ref
+            paymentGateway: 'paystack'
+        });
+
+        res.json({
+            success: true,
+            credits: user.credits,
+            added: creditsToAdd,
+            message: 'Payment verified successfully'
+        });
+
+    } catch (error) {
+        console.error('Payment Verification Error:', error);
+        res.status(500).json({ message: 'Payment verification failed server error' });
     }
 };

@@ -12,8 +12,17 @@ const transactionSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['purchase', 'usage', 'ad_reward', 'streak_bonus'],
+        enum: ['purchase', 'usage', 'ad_reward', 'streak_bonus', 'daily_login', 'referral_bonus'], // Updated enum based on comment
         required: true
+    },
+    reference: {
+        type: String, // Paystack Reference
+        unique: true,
+        sparse: true
+    },
+    paymentGateway: {
+        type: String, // 'paystack'
+        default: null
     },
     description: {
         type: String,
