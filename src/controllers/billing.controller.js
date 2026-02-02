@@ -164,7 +164,7 @@ exports.watchAd = async (req, res) => {
         }
 
         // Add Credits
-        const REWARD_AMOUNT = 5;
+        const REWARD_AMOUNT = 10;
         const TOTAL_REWARD = REWARD_AMOUNT + streakBonus;
 
         user.credits += TOTAL_REWARD;

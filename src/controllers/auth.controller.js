@@ -19,130 +19,137 @@ const generateToken = (id) => {
 // @desc    Register a new user
 // @route   POST /api/auth/register
 // @access  Public
-const registerUser = async (req, res) => {
-    const { email, password, phone, referralCode } = req.body;
+const registerUser = async (req, res, next) => {
+    try {
+        const { email, password, phone, referralCode } = req.body;
 
-    if (!email || !password || !phone) {
-        return res.status(400).json({ message: 'Please add all fields' });
-    }
-
-    // Check if user exists (email or phone)
-    const userExists = await User.findOne({
-        $or: [{ email }, { phone }]
-    });
-
-    if (userExists) {
-        return res.status(400).json({ message: 'User already exists' });
-    }
-
-    // Hash password
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    // Create unique referral code for new user
-    let newReferralCode = generateReferralCode();
-    // Ensure uniqueness (simple check loop)
-    let codeExists = await User.findOne({ referralCode: newReferralCode });
-    while (codeExists) {
-        newReferralCode = generateReferralCode();
-        codeExists = await User.findOne({ referralCode: newReferralCode });
-    }
-
-    // Handle Referral Logic
-    let referrer = null;
-    const initialCredits = 30; // Default - no bonus for new user
-    const REFERRAL_BONUS = 10; // Reduced for ad-based revenue model
-
-    if (referralCode) {
-        referrer = await User.findOne({ referralCode: referralCode.toUpperCase() });
-    }
-
-    // Create user
-    const user = await User.create({
-        email,
-        phone,
-        password: hashedPassword,
-        referralCode: newReferralCode,
-        credits: initialCredits,
-        referredBy: referrer ? referrer._id : null
-    });
-
-    if (user) {
-        // Only award credits to the REFERRER, not the new user
-        if (referrer) {
-            // Award Referrer
-            referrer.credits += REFERRAL_BONUS;
-            referrer.referralCount += 1;
-            await referrer.save();
-
-            await Transaction.create({
-                userId: referrer.id,
-                amount: REFERRAL_BONUS,
-                type: 'streak_bonus',
-                description: `Referral Bonus (Invited ${user.email})`,
-                status: 'completed'
-            });
+        if (!email || !password || !phone) {
+            return res.status(400).json({ message: 'Please add all fields' });
         }
 
-        res.status(201).json({
-            _id: user.id,
-            email: user.email,
-            phone: user.phone,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            referralCode: user.referralCode,
-            credits: user.credits,
-            settings: user.settings,
-            unlockedTemplates: user.unlockedTemplates,
-            token: generateToken(user.id),
+        // Check if user exists (email or phone)
+        const userExists = await User.findOne({
+            $or: [{ email }, { phone }]
         });
-    } else {
-        res.status(400).json({ message: 'Invalid user data' });
+
+        if (userExists) {
+            return res.status(400).json({ message: 'User already exists' });
+        }
+
+        // Hash password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        // Create unique referral code for new user
+        let newReferralCode = generateReferralCode();
+        let codeExists = await User.findOne({ referralCode: newReferralCode });
+        while (codeExists) {
+            newReferralCode = generateReferralCode();
+            codeExists = await User.findOne({ referralCode: newReferralCode });
+        }
+
+        // Handle Referral Logic
+        let referrer = null;
+        const initialCredits = 30; // Default - no bonus for new user
+        const REFERRAL_BONUS = 10; // Reduced for ad-based revenue model
+
+        if (referralCode) {
+            referrer = await User.findOne({ referralCode: referralCode.toUpperCase() });
+        }
+
+        // Create user
+        const user = await User.create({
+            email,
+            phone,
+            password: hashedPassword,
+            referralCode: newReferralCode,
+            credits: initialCredits,
+            referredBy: referrer ? referrer._id : null
+        });
+
+        if (user) {
+            // Only award credits to the REFERRER, not the new user
+            if (referrer) {
+                // Award Referrer
+                referrer.credits += REFERRAL_BONUS;
+                referrer.referralCount += 1;
+                await referrer.save();
+
+                await Transaction.create({
+                    userId: referrer.id,
+                    amount: REFERRAL_BONUS,
+                    type: 'streak_bonus',
+                    description: `Referral Bonus (Invited ${user.email})`,
+                    status: 'completed'
+                });
+            }
+
+            res.status(201).json({
+                _id: user.id,
+                email: user.email,
+                phone: user.phone,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                referralCode: user.referralCode,
+                credits: user.credits,
+                settings: user.settings,
+                unlockedTemplates: user.unlockedTemplates,
+                token: generateToken(user.id),
+            });
+        } else {
+            res.status(400).json({ message: 'Invalid user data' });
+        }
+    } catch (error) {
+        next(error);
     }
 };
 
 // @desc    Authenticate a user
 // @route   POST /api/auth/login
 // @access  Public
-const loginUser = async (req, res) => {
-    const { email, password } = req.body;
+const loginUser = async (req, res, next) => {
+    try {
+        const { email, password } = req.body;
 
-    // Check for user email
-    const user = await User.findOne({ email });
+        // Check for user email
+        const user = await User.findOne({ email });
 
-    if (user && (await bcrypt.compare(password, user.password))) {
-        // Generate referral code if user doesn't have one (for existing users)
-        if (!user.referralCode) {
-            let newReferralCode = generateReferralCode();
-            let codeExists = await User.findOne({ referralCode: newReferralCode });
-            while (codeExists) {
-                newReferralCode = generateReferralCode();
-                codeExists = await User.findOne({ referralCode: newReferralCode });
+        if (user && (await bcrypt.compare(password, user.password))) {
+            // Generate referral code if user doesn't have one (for existing users)
+            if (!user.referralCode) {
+                let newReferralCode = generateReferralCode();
+                let codeExists = await User.findOne({ referralCode: newReferralCode });
+                while (codeExists) {
+                    newReferralCode = generateReferralCode();
+                    codeExists = await User.findOne({ referralCode: newReferralCode });
+                }
+                user.referralCode = newReferralCode;
+                await user.save();
             }
-            user.referralCode = newReferralCode;
-            await user.save();
-        }
 
-        res.json({
-            _id: user.id,
-            email: user.email,
-            phone: user.phone,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            credits: user.credits,
-            phoneNumber: user.phoneNumber,
-            location: user.location,
-            skills: user.skills,
-            experience: user.experience,
-            education: user.education,
-            settings: user.settings,
-            onboardingCompleted: user.onboardingCompleted,
-            referralCode: user.referralCode,
-            unlockedTemplates: user.unlockedTemplates,
-            token: generateToken(user.id),
-        });
-    } else {
-        res.status(401).json({ message: 'Invalid credentials' });
+            res.json({
+                _id: user.id,
+                email: user.email,
+                phone: user.phone,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                credits: user.credits,
+                phoneNumber: user.phoneNumber,
+                location: user.location,
+                skills: user.skills,
+                experience: user.experience,
+                education: user.education,
+                settings: user.settings,
+                onboardingCompleted: user.onboardingCompleted,
+                referralCode: user.referralCode,
+                unlockedTemplates: user.unlockedTemplates,
+                token: generateToken(user.id),
+            });
+        } else {
+            res.status(401).json({ message: 'Invalid credentials' });
+        }
+    } catch (error) {
+        next(error);
     }
 };
 
@@ -156,51 +163,52 @@ const getMe = async (req, res) => {
 // @desc    Update user profile
 // @route   PUT /api/auth/profile
 // @access  Private
-const updateProfile = async (req, res) => {
-    const user = await User.findById(req.user.id);
+const updateProfile = async (req, res, next) => {
+    try {
+        const user = await User.findById(req.user.id);
 
-    if (user) {
-        user.firstName = req.body.firstName || user.firstName;
-        user.lastName = req.body.lastName || user.lastName;
-        user.currentStatus = req.body.currentStatus || user.currentStatus;
+        if (user) {
+            user.firstName = req.body.firstName || user.firstName;
+            user.lastName = req.body.lastName || user.lastName;
+            user.currentStatus = req.body.currentStatus || user.currentStatus;
 
-        // Update Education object if provided
-        if (req.body.education) {
-            user.education = {
-                ...user.education, // Keep existing fields if partial update (though Mongoose might overwrite subdocs differently, this spreads properties)
-                ...req.body.education
-            };
+            // Update Education object if provided
+            if (req.body.education) {
+                user.education = {
+                    ...user.education,
+                    ...req.body.education
+                };
+            }
+
+            // Update Settings
+            if (req.body.settings) {
+                user.settings = {
+                    ...user.settings,
+                    ...req.body.settings
+                };
+            }
+
+            // REMOVED: Mock Plan Upgrade Logic (Security Vulnerability)
+
+            const updatedUser = await user.save();
+
+            res.json({
+                _id: updatedUser.id,
+                email: updatedUser.email,
+                phone: updatedUser.phone,
+                firstName: updatedUser.firstName,
+                lastName: updatedUser.lastName,
+                plan: updatedUser.plan,
+                education: updatedUser.education,
+                currentStatus: updatedUser.currentStatus,
+                settings: updatedUser.settings,
+                token: generateToken(updatedUser.id),
+            });
+        } else {
+            res.status(404).json({ message: 'User not found' });
         }
-
-        // Update Settings
-        if (req.body.settings) {
-            user.settings = {
-                ...user.settings,
-                ...req.body.settings
-            };
-        }
-
-        // Handle Plan Upgrade (Mock logic)
-        if (req.body.plan) {
-            user.plan = req.body.plan;
-        }
-
-        const updatedUser = await user.save();
-
-        res.json({
-            _id: updatedUser.id,
-            email: updatedUser.email,
-            phone: updatedUser.phone,
-            firstName: updatedUser.firstName,
-            lastName: updatedUser.lastName,
-            plan: updatedUser.plan,
-            education: updatedUser.education,
-            currentStatus: updatedUser.currentStatus,
-            settings: updatedUser.settings,
-            token: generateToken(updatedUser.id),
-        });
-    } else {
-        res.status(404).json({ message: 'User not found' });
+    } catch (error) {
+        next(error);
     }
 };
 

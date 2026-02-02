@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { analyzeFit } = require('../controllers/analysisController');
+const { analyzeFit } = require('../controllers/analysis.controller');
 const { protect } = require('../middleware/auth.middleware');
 
 router.post('/analyze', protect, analyzeFit);
