@@ -15,7 +15,7 @@ connectDB();
 const PORT = process.env.PORT || 5000;
 
 const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Welcome to AppyRight Web Server, Serve is active and running on port ${PORT}`);
 });
 
 // HANDLING UNHANDLE PROMISE
