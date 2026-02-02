@@ -1,5 +1,7 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const compression = require('compression');
 const dotenv = require('dotenv');
 
 dotenv.config();
@@ -7,7 +9,14 @@ dotenv.config();
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(helmet());
+app.use(compression());
+
+const corsOptions = {
+    origin: process.env.FRONTEND_URL || '*', // STARTUP_CHECK: Configure this to your frontend domain in production
+    optionsSuccessStatus: 200
+};
+app.use(cors(corsOptions));
 app.use(express.json()); // Body parser
 
 // Routes (Placeholders)
