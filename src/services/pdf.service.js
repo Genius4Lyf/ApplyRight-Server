@@ -8,26 +8,33 @@ class PdfService {
     async init() {
         if (!this.browser) {
             try {
-                this.browser = await puppeteer.launch({
-                    headless: 'new',
+                // Configure launch options for Render/Production environments
+                const launchOptions = {
+                    headless: true, // Use new headless mode (or 'shell' in newer versions)
                     args: [
                         '--no-sandbox',
                         '--disable-setuid-sandbox',
-                        '--disable-dev-shm-usage', // Handle shared memory issues in Docker/limited envs
-                        '--font-render-hinting=none', // Ensure consistent font rendering
-                        '--disable-gpu', // Simplify rendering
-                    ]
-                });
+                        '--disable-dev-shm-usage',
+                        '--disable-gpu',
+                        '--font-render-hinting=none',
+                        '--single-process', // Sometimes helps in resource-constrained envs
+                        '--no-zygote'
+                    ],
+                    // executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null // Fallback if env var is set
+                };
 
-                // Handle browser disconnect/crash to reset the instance
+                console.log('Launching Puppeteer with options:', JSON.stringify(launchOptions));
+
+                this.browser = await puppeteer.launch(launchOptions);
+
                 this.browser.on('disconnected', () => {
-                    console.log('Puppeteer browser disconnected. Resetting instance.');
+                    console.warn('Puppeteer browser disconnected. Resetting instance.');
                     this.browser = null;
                 });
 
             } catch (error) {
                 console.error("Failed to launch Puppeteer:", error);
-                throw new Error("PDF Generation Service Unavailable");
+                throw new Error(`PDF Generation Service Unavailable: ${error.message}`);
             }
         }
     }
