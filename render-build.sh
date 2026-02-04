@@ -3,5 +3,6 @@
 set -o errexit
 
 npm install
-# Ensure Puppeteer browsers are installed (though npm install should handle it)
+# Ensure Puppeteer browsers are installed
+# This will use the cache directory defined in puppeteer.config.cjs
 npx puppeteer browsers install chrome
