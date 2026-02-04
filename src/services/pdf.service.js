@@ -41,20 +41,25 @@ class PdfService {
 
     async generatePdf(htmlContent, options = {}) {
         let page = null;
+        console.log('--- [PdfService] generatePdf started ---');
         try {
             await this.init();
+            console.log('--- [PdfService] Browser initialized ---');
 
             if (!this.browser) {
                 throw new Error("Browser instance not initialized");
             }
 
             page = await this.browser.newPage();
+            console.log('--- [PdfService] New page created ---');
 
             // Set content with options
+            console.log('--- [PdfService] Setting page content... ---');
             await page.setContent(htmlContent, {
                 waitUntil: ['load', 'networkidle0'], // Wait for external resources like fonts/images
                 timeout: 30000
             });
+            console.log('--- [PdfService] Page content set. Generating PDF... ---');
 
             // Specific PDF options for CVs
             const pdfBuffer = await page.pdf({
@@ -72,20 +77,23 @@ class PdfService {
                 ...options
             });
 
+            console.log('--- [PdfService] PDF Buffer generated ---');
             return pdfBuffer;
         } catch (error) {
-            console.error('Puppeteer PDF Generation Error:', error);
+            console.error('--- [PdfService] Puppeteer Error:', error);
             // If critical error, maybe close browser to force restart next time
             if (this.browser) {
+                console.log('--- [PdfService] Closing browser due to error ---');
                 await this.close();
             }
-            throw new Error("Failed to generate PDF document");
+            throw new Error(`Failed to generate PDF document: ${error.message}`);
         } finally {
             if (page) {
                 try {
                     await page.close();
+                    console.log('--- [PdfService] Page closed ---');
                 } catch (e) {
-                    console.error("Error closing page:", e);
+                    console.error("--- [PdfService] Error closing page:", e);
                 }
             }
         }
