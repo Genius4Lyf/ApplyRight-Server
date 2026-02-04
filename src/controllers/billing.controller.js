@@ -97,6 +97,7 @@ exports.getTransactions = async (req, res) => {
 exports.watchAd = async (req, res) => {
     try {
         const user = await User.findById(req.user.id);
+        const { type } = req.body; // 'video' (default) or 'banner'
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
@@ -107,64 +108,60 @@ exports.watchAd = async (req, res) => {
             createdAt: { $gte: today }
         });
 
-        // --- Streak Logic ---
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
+        // Determine Reward & Streak Eligibility
+        let REWARD_AMOUNT = 10;
+        let eligibleForStreak = true;
 
+        if (type === 'banner') {
+            REWARD_AMOUNT = 2;
+            eligibleForStreak = false; // Banner clicks don't count towards streak
+        }
+
+        // --- Streak Logic (Only for Videos) ---
         let streakBonus = 0;
         let streakMessage = '';
 
-        if (!user.adStreak) {
-            user.adStreak = { current: 0, longest: 0, lastWatchDate: null };
-        }
+        if (eligibleForStreak) {
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
 
-        const lastWatchDate = user.adStreak.lastWatchDate ? new Date(user.adStreak.lastWatchDate) : null;
+            if (!user.adStreak) {
+                user.adStreak = { current: 0, longest: 0, lastWatchDate: null };
+            }
 
-        // Normalize dates to midnight for comparison
-        const lastWatchMidnight = lastWatchDate ? new Date(lastWatchDate.setHours(0, 0, 0, 0)) : null;
+            const lastWatchDate = user.adStreak.lastWatchDate ? new Date(user.adStreak.lastWatchDate) : null;
+            const lastWatchMidnight = lastWatchDate ? new Date(lastWatchDate.setHours(0, 0, 0, 0)) : null;
 
-        if (lastWatchMidnight && lastWatchMidnight.getTime() === today.getTime()) {
-            // Already watched today, streak continues, no change to count
-        } else if (lastWatchMidnight && lastWatchMidnight.getTime() === yesterday.getTime()) {
-            // Watched yesterday, increment streak
-            user.adStreak.current += 1;
-        } else {
-            // Missed a day or first time, reset/start streak
-            user.adStreak.current = 1;
-        }
+            if (lastWatchMidnight && lastWatchMidnight.getTime() === today.getTime()) {
+                // Already watched today, streak continues
+            } else if (lastWatchMidnight && lastWatchMidnight.getTime() === yesterday.getTime()) {
+                // Watched yesterday, increment streak
+                user.adStreak.current += 1;
+            } else {
+                // Missed a day or first time, reset/start streak
+                user.adStreak.current = 1;
+            }
 
-        // Update Longest
-        if (user.adStreak.current > user.adStreak.longest) {
-            user.adStreak.longest = user.adStreak.current;
-        }
-        user.adStreak.lastWatchDate = new Date(); // Set to now
+            // Update Longest
+            if (user.adStreak.current > user.adStreak.longest) {
+                user.adStreak.longest = user.adStreak.current;
+            }
+            user.adStreak.lastWatchDate = new Date();
 
-        // Check for Bonuses
-        // Only award bonus on the FIRST watch of the milestone day (when watchCount is 0 for that day? No, actually we just updated current streak)
-        // We only want to award the streak bonus ONCE per day, preferably on the first watch that triggers the increment.
-        // Since we only increment 'current' once per day (logic above), we can check if we just hit a milestone.
-        // Wait, the logic above increments current ONLY if lastWatch was yesterday. If lastWatch was today, current doesnt change.
-        // So checking (current === 3) is safe, it will only be true on the 3rd day.
+            // Check for Bonuses
+            const isStreakIncremented = (!lastWatchMidnight || lastWatchMidnight.getTime() !== today.getTime());
 
-        // NOTE: We need to make sure we don't double award if they watch 3 videos on day 3.
-        // The logic `if (lastWatchMidnight === today)` handles this - we don't increment.
-        // So `user.adStreak.current` will be stable.
-        // BUT, we need to know if this SPECIFIC watch TRIGGERED the streak increment to award the bonus.
-
-        const isStreakIncremented = (!lastWatchMidnight || lastWatchMidnight.getTime() !== today.getTime());
-
-        if (isStreakIncremented) {
-            if (user.adStreak.current === 3) {
-                streakBonus = 5;
-                streakMessage = '🔥 3-Day Streak Bonus!';
-            } else if (user.adStreak.current === 7) {
-                streakBonus = 15;
-                streakMessage = '🔥 7-Day Streak Bonus!';
+            if (isStreakIncremented) {
+                if (user.adStreak.current === 3) {
+                    streakBonus = 5;
+                    streakMessage = '🔥 3-Day Streak Bonus!';
+                } else if (user.adStreak.current === 7) {
+                    streakBonus = 15;
+                    streakMessage = '🔥 7-Day Streak Bonus!';
+                }
             }
         }
 
-        // Add Credits
-        const REWARD_AMOUNT = 10;
         const TOTAL_REWARD = REWARD_AMOUNT + streakBonus;
 
         user.credits += TOTAL_REWARD;
@@ -175,7 +172,7 @@ exports.watchAd = async (req, res) => {
             userId: user.id,
             amount: REWARD_AMOUNT,
             type: 'ad_reward',
-            description: 'Watched advertisement',
+            description: type === 'banner' ? 'Clicked Sponsored Banner' : 'Watched Video Ad',
             status: 'completed'
         });
 
@@ -195,9 +192,10 @@ exports.watchAd = async (req, res) => {
             added: TOTAL_REWARD,
             watchCount: watchCount + 1,
             maxDaily: 999, // Unlimited
-            streak: user.adStreak.current,
+            streak: user.adStreak ? user.adStreak.current : 0,
             streakBonus,
-            streakMessage
+            streakMessage,
+            type: type || 'video'
         });
 
     } catch (error) {
