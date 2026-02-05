@@ -109,12 +109,14 @@ exports.watchAd = async (req, res) => {
         });
 
         // Determine Reward & Streak Eligibility
-        let REWARD_AMOUNT = 10;
-        let eligibleForStreak = true;
+        // Default is now 'offer' (2 credits) since Monetag is link-based
+        let REWARD_AMOUNT = 2;
+        let eligibleForStreak = false;
 
-        if (type === 'banner') {
-            REWARD_AMOUNT = 2;
-            eligibleForStreak = false; // Banner clicks don't count towards streak
+        // Pending Update: If we integrate a REAL video player later, we can enable this
+        if (type === 'video_real') {
+            REWARD_AMOUNT = 10;
+            eligibleForStreak = true;
         }
 
         // --- Streak Logic (Only for Videos) ---

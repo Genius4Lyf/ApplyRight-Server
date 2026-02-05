@@ -50,7 +50,7 @@ const registerUser = async (req, res, next) => {
 
         // Handle Referral Logic
         let referrer = null;
-        const initialCredits = 30; // Default - no bonus for new user
+        const initialCredits = 15; // Default - no bonus for new user
         const REFERRAL_BONUS = 10; // Reduced for ad-based revenue model
 
         if (referralCode) {
