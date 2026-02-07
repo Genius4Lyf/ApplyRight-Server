@@ -34,6 +34,12 @@ const registerUser = async (req, res, next) => {
             return res.status(400).json({ message: 'Please enter a valid email address with a recognized domain (e.g., @gmail.com, @outlook.com, @company.com)' });
         }
 
+        // Validate phone number format (E.164: +[country code][number])
+        const phoneRegex = /^\+[1-9]\d{1,14}$/;
+        if (!phoneRegex.test(phone)) {
+            return res.status(400).json({ message: 'Please enter a valid international phone number with country code (e.g., +12025551234)' });
+        }
+
         // Check if user exists (email or phone)
         const userExists = await User.findOne({
             $or: [{ email }, { phone }]

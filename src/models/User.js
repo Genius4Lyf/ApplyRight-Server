@@ -65,6 +65,14 @@ const userSchema = new mongoose.Schema({
         required: [true, 'Please add a phone number'],
         unique: true,
         trim: true,
+        validate: {
+            validator: function (v) {
+                // E.164 format: +[country code][number]
+                // Must start with + followed by 1-15 digits
+                return /^\+[1-9]\d{1,14}$/.test(v);
+            },
+            message: props => `${props.value} is not a valid international phone number! Please include the country code (e.g., +1234567890)`
+        }
     },
     resetPasswordToken: String,
     resetPasswordExpire: Date,
