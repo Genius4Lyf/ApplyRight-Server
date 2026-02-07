@@ -34,6 +34,20 @@ const registerUser = async (req, res, next) => {
             return res.status(400).json({ message: 'Please enter a valid email address with a recognized domain (e.g., @gmail.com, @outlook.com, @company.com)' });
         }
 
+        // Validate password strength
+        if (password.length < 8) {
+            return res.status(400).json({ message: 'Password must be at least 8 characters long' });
+        }
+        if (!/[a-z]/.test(password)) {
+            return res.status(400).json({ message: 'Password must contain at least one lowercase letter' });
+        }
+        if (!/[A-Z]/.test(password)) {
+            return res.status(400).json({ message: 'Password must contain at least one uppercase letter' });
+        }
+        if (!/[0-9]/.test(password)) {
+            return res.status(400).json({ message: 'Password must contain at least one number' });
+        }
+
         // Validate phone number format (E.164: +[country code][number])
         const phoneRegex = /^\+[1-9]\d{1,14}$/;
         if (!phoneRegex.test(phone)) {
