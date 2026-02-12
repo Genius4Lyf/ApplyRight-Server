@@ -43,6 +43,7 @@ app.use('/api/analysis', require('./routes/analysis.routes'));
 app.use('/api/cv', require('./routes/cv.routes'));
 app.use('/api/pdf', require('./routes/pdf.routes'));
 app.use('/api/billing', require('./routes/billing.routes'));
+app.use('/api/feedback', require('./routes/feedback.routes'));
 
 // Global Error Handler
 app.use((err, req, res, next) => {

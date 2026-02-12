@@ -25,6 +25,11 @@ const userSchema = new mongoose.Schema({
         enum: ['free', 'paid'],
         default: 'free',
     },
+    role: {
+        type: String,
+        enum: ['user', 'admin'],
+        default: 'user'
+    },
     credits: {
         type: Number,
         default: 15, // Free starting credits
