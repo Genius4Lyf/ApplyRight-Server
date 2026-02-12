@@ -11,7 +11,11 @@ const analyzeFit = async (req, res) => {
     try {
         const { jobId, resumeId, templateId } = req.body;
         const userId = req.user._id;
-        const ANALYSIS_COST = 15;
+
+        // Determine Cost based on operation type
+        // If jobId is present -> Full Analysis (15 credits)
+        // If jobId is missing -> Create/Upload Only (5 credits)
+        const ANALYSIS_COST = jobId ? 15 : 5;
 
         // 0. Check Credit Balance
         const user = req.user; // Assuming user is fully attached by middleware
@@ -69,11 +73,16 @@ const analyzeFit = async (req, res) => {
                 isComplete: true
             });
 
+            // 3. Deduct Credits for Upload
+            user.credits -= ANALYSIS_COST;
+            await user.save();
+
             return res.status(200).json({
                 message: 'Resume parsed successfully',
                 draftId: draft._id,
                 fitScore: null,
-                fitAnalysis: null
+                fitAnalysis: null,
+                remainingCredits: user.credits // Return new balance
             });
         }
 
