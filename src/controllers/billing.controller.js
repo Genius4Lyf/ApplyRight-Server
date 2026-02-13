@@ -109,8 +109,8 @@ exports.watchAd = async (req, res) => {
         });
 
         // Determine Reward & Streak Eligibility
-        // Default is now 'offer' (2 credits) since Monetag is link-based
-        let REWARD_AMOUNT = 2;
+        // Default is now 'offer' (5 credits) since Monetag is link-based
+        let REWARD_AMOUNT = 5;
         let eligibleForStreak = false;
 
         // Pending Update: If we integrate a REAL video player later, we can enable this
