@@ -15,6 +15,10 @@ const feedbackSchema = new mongoose.Schema({
     contactValue: {
         type: String,
         required: true
+    },
+    isFeatured: {
+        type: Boolean,
+        default: false
     }
 }, {
     timestamps: true

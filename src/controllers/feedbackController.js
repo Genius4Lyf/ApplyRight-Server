@@ -218,3 +218,67 @@ exports.promoteToAdmin = async (req, res, next) => {
         });
     }
 };
+// @desc    Toggle feedback featured status
+// @route   PUT /api/v1/feedback/:id/feature
+// @access  Private/Admin
+exports.toggleFeatured = async (req, res, next) => {
+    try {
+        const feedback = await Feedback.findById(req.params.id);
+
+        if (!feedback) {
+            return res.status(404).json({
+                success: false,
+                error: 'Feedback not found'
+            });
+        }
+
+        if (!feedback.isFeatured) {
+            // Turning ON featured status - check limit
+            const featuredCount = await Feedback.countDocuments({ isFeatured: true });
+            if (featuredCount >= 3) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Maximum 3 featured feedbacks allowed. Please unfeature one first.'
+                });
+            }
+        }
+
+        feedback.isFeatured = !feedback.isFeatured;
+        await feedback.save();
+
+        res.status(200).json({
+            success: true,
+            data: feedback
+        });
+    } catch (error) {
+        console.error('Toggle featured error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Server Error'
+        });
+    }
+};
+
+// @desc    Get featured feedbacks
+// @route   GET /api/v1/feedback/featured
+// @access  Public
+exports.getFeaturedFeedbacks = async (req, res, next) => {
+    try {
+        const feedbacks = await Feedback.find({ isFeatured: true })
+            .populate('user', 'firstName lastName')
+            .sort({ createdAt: -1 })
+            .limit(6); // Limit to 6 for the showcase
+
+        res.status(200).json({
+            success: true,
+            count: feedbacks.length,
+            data: feedbacks
+        });
+    } catch (error) {
+        console.error('Get featured feedbacks error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Server Error'
+        });
+    }
+};
