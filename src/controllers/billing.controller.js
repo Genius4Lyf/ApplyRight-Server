@@ -103,7 +103,7 @@ exports.watchAd = async (req, res) => {
 
         // Get watch count for tracking (no limit enforced)
         const watchCount = await Transaction.countDocuments({
-            userId: user.id,
+            userId: user._id,
             type: 'ad_reward',
             createdAt: { $gte: today }
         });
@@ -171,7 +171,7 @@ exports.watchAd = async (req, res) => {
 
         // Record Transaction
         await Transaction.create({
-            userId: user.id,
+            userId: user._id,
             amount: REWARD_AMOUNT,
             type: 'ad_reward',
             description: type === 'banner' ? 'Clicked Sponsored Banner' : 'Watched Video Ad',
@@ -180,7 +180,7 @@ exports.watchAd = async (req, res) => {
 
         if (streakBonus > 0) {
             await Transaction.create({
-                userId: user.id,
+                userId: user._id,
                 amount: streakBonus,
                 type: 'streak_bonus',
                 description: streakMessage,
