@@ -46,6 +46,10 @@ const applicationSchema = new mongoose.Schema({
         type: String,
         default: 'ats-clean'
     },
+    skills: [{
+        name: String,
+        category: String
+    }],
     actionPlan: [{
         skill: String,
         action: String

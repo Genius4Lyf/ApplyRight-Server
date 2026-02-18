@@ -1,34 +1,38 @@
-const OpenAI = require('openai');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const OpenAI = require("openai");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 let openai;
 let geminiModel;
-let activeProvider = 'mock'; // 'openai', 'gemini', or 'mock'
+let activeProvider = "mock"; // 'openai', 'gemini', or 'mock'
 
 // Initialize Clients
 // Initialize Clients
 if (process.env.OPENAI_API_KEY) {
-    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    activeProvider = 'openai';
-    console.log('✅ AI Service: OpenAI Enabled');
+  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  activeProvider = "openai";
+  console.log("✅ AI Service: OpenAI Enabled");
 } else if (process.env.GEMINI_API_KEY) {
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    geminiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Use a fast model
-    activeProvider = 'gemini';
-    console.log('✅ AI Service: Gemini Enabled');
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  geminiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Use a fast model
+  activeProvider = "gemini";
+  console.log("✅ AI Service: Gemini Enabled");
 } else {
-    // Requested Enhancement: Explicitly log error to terminal when keys are missing
-    console.log('\n❌ [ERROR] AI Service Initialization Failed');
-    console.log('   Reason: No API Keys found (OPENAI_API_KEY or GEMINI_API_KEY)');
-    console.log('   Action: Falling back to Mock Mode. Real analysis will not work.\n');
+  // Requested Enhancement: Explicitly log error to terminal when keys are missing
+  console.log("\n❌ [ERROR] AI Service Initialization Failed");
+  console.log(
+    "   Reason: No API Keys found (OPENAI_API_KEY or GEMINI_API_KEY)",
+  );
+  console.log(
+    "   Action: Falling back to Mock Mode. Real analysis will not work.\n",
+  );
 }
 
 const analyzeProfile = async (resumeText, jobDescription) => {
-    if (activeProvider === 'mock') {
-        return mockAnalysis();
-    }
+  if (activeProvider === "mock") {
+    return mockAnalysis();
+  }
 
-    const prompt = `
+  const prompt = `
     You are an expert HR Recruiter and Technical Hiring Manager.
     Analyze the following Candidate Resume against the Job Description.
 
@@ -67,43 +71,48 @@ const analyzeProfile = async (resumeText, jobDescription) => {
     }
     `;
 
-    try {
-        let resultText = '';
+  try {
+    let resultText = "";
 
-        if (activeProvider === 'openai') {
-            const response = await openai.chat.completions.create({
-                model: "gpt-3.5-turbo", // Cost effective
-                messages: [{ role: "user", content: prompt }],
-                temperature: 0.2, // Low creativity for analysis
-            });
-            resultText = response.choices[0].message.content;
-
-        } else if (activeProvider === 'gemini') {
-            const result = await geminiModel.generateContent(prompt);
-            resultText = result.response.text();
-        }
-
-        // Clean up markdown code blocks if AI adds them
-        const jsonStr = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
-        return {
-            ...JSON.parse(jsonStr),
-            mode: 'AI',
-            provider: activeProvider
-        };
-
-    } catch (error) {
-        console.error('AI Analysis Failed, falling back to mock:', error);
-        return mockAnalysis();
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo", // Cost effective
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.2, // Low creativity for analysis
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
     }
+
+    // Clean up markdown code blocks if AI adds them
+    const jsonStr = resultText
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+    return {
+      ...JSON.parse(jsonStr),
+      mode: "AI",
+      provider: activeProvider,
+    };
+  } catch (error) {
+    console.error("AI Analysis Failed, falling back to mock:", error);
+    return mockAnalysis();
+  }
 };
 
-const generateOptimizedContent = async (resumeText, jobDescription, userContext = {}) => {
-    // If mock mode, return the old mock response
-    if (activeProvider === 'mock') {
-        const currentYear = new Date().getFullYear();
-        await new Promise(resolve => setTimeout(resolve, 1500)); // Latency sim
+const generateOptimizedContent = async (
+  resumeText,
+  jobDescription,
+  userContext = {},
+) => {
+  // If mock mode, return the old mock response
+  if (activeProvider === "mock") {
+    const currentYear = new Date().getFullYear();
+    await new Promise((resolve) => setTimeout(resolve, 1500)); // Latency sim
 
-        const mockOptimizedCV = `
+    const mockOptimizedCV = `
 # ALEXANDER JAMES
 
 ## Professional Summary
@@ -142,9 +151,9 @@ University of Technology | 2017 - 2021
 - Designed RESTful APIs for product management and order processing.
         `.trim();
 
-        return {
-            optimizedCV: mockOptimizedCV,
-            coverLetter: `
+    return {
+      optimizedCV: mockOptimizedCV,
+      coverLetter: `
 Dear Hiring Manager,
 
 I am writing to express my strong interest in the open position. With my background in software engineering and track record of delivering high-quality web applications, I am confident in my ability to contribute effectively to your team.
@@ -155,37 +164,41 @@ Thank you for your time and consideration.
 
 Sincerely,
 Alexander James
-            `.trim()
-        };
-    }
+            `.trim(),
+    };
+  }
 
-    try {
-        console.log('Beginning Parallel Generation: CV & Cover Letter...');
-        const [cvResult, clResult] = await Promise.all([
-            generateCV(resumeText, jobDescription || "General Professional Role"),
-            jobDescription ? generateCoverLetter(resumeText, jobDescription) : Promise.resolve(null)
-        ]);
+  try {
+    console.log("Beginning Parallel Generation: CV & Cover Letter...");
+    const [cvResult, clResult] = await Promise.all([
+      generateCV(resumeText, jobDescription || "General Professional Role"),
+      jobDescription
+        ? generateCoverLetter(resumeText, jobDescription)
+        : Promise.resolve(null),
+    ]);
 
-        console.log('Parallel Generation Complete.');
+    console.log("Parallel Generation Complete.");
 
-        return {
-            optimizedCV: cvResult,
-            coverLetter: clResult
-        };
-
-    } catch (error) {
-        console.error("AI Generation Failed", error);
-        return { optimizedCV: "Error generating content.", coverLetter: "Error generating content." };
-    }
+    return {
+      optimizedCV: cvResult,
+      coverLetter: clResult,
+    };
+  } catch (error) {
+    console.error("AI Generation Failed", error);
+    return {
+      optimizedCV: "Error generating content.",
+      coverLetter: "Error generating content.",
+    };
+  }
 };
 
 const generateCV = async (resumeText, jobDescription) => {
-    const prompt = `
+  const prompt = `
     You are an ATS-optimization engine for ApplyRight.
     Your job is to convert unstructured user career data into a clean, ATS-compliant CV using a strict pipeline.
 
     INPUT DATA:
-    ${jobDescription ? `JOB DESCRIPTION:\n    ${jobDescription.substring(0, 8000)}` : 'TARGET ROLE: General Professional Role (Optimize for general readability and impact)'}
+    ${jobDescription ? `JOB DESCRIPTION:\n    ${jobDescription.substring(0, 8000)}` : "TARGET ROLE: General Professional Role (Optimize for general readability and impact)"}
 
     USER RESUME:
     ${resumeText.substring(0, 8000)}
@@ -205,7 +218,7 @@ const generateCV = async (resumeText, jobDescription) => {
     - Standardize job titles and dates.
 
     Step 3 — ATS Optimization
-    - Use industry-standard keywords inferred from the user’s background${jobDescription ? ' and Job Description' : ''}.
+    - Use industry-standard keywords inferred from the user’s background${jobDescription ? " and Job Description" : ""}.
     - Avoid buzzwords and personal pronouns (I, me, my).
     - Keep language factual and concise.
 
@@ -232,29 +245,33 @@ const generateCV = async (resumeText, jobDescription) => {
     IMPORTANT: Return ONLY the markdown string of the CV. Do NOT return JSON. Do NOT wrap in code blocks. Just the raw markdown text.
     `;
 
-    try {
-        let resultText = '';
-        if (activeProvider === 'openai') {
-            const response = await openai.chat.completions.create({
-                model: "gpt-3.5-turbo",
-                messages: [{ role: "user", content: prompt }]
-            });
-            resultText = response.choices[0].message.content;
-        } else if (activeProvider === 'gemini') {
-            const result = await geminiModel.generateContent(prompt);
-            resultText = result.response.text();
-        }
-
-        // Cleanup potential markdown wrappers
-        return resultText.replace(/^```markdown\n/, '').replace(/^```\n/, '').replace(/\n```$/, '').trim();
-    } catch (e) {
-        console.error("CV Generation Error:", e);
-        return "# Error Generating CV\nPlease try again.";
+  try {
+    let resultText = "";
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
     }
+
+    // Cleanup potential markdown wrappers
+    return resultText
+      .replace(/^```markdown\n/, "")
+      .replace(/^```\n/, "")
+      .replace(/\n```$/, "")
+      .trim();
+  } catch (e) {
+    console.error("CV Generation Error:", e);
+    return "# Error Generating CV\nPlease try again.";
+  }
 };
 
 const generateCoverLetter = async (resumeText, jobDescription) => {
-    const prompt = `
+  const prompt = `
     You are an expert Career Coach.
     Write a tailored, persuasive Cover Letter for this candidate applying to this job.
 
@@ -282,57 +299,64 @@ const generateCoverLetter = async (resumeText, jobDescription) => {
     IMPORTANT: Return ONLY the raw text/markdown of the letter. Do NOT return JSON. Do NOT wrap in code blocks.
     `;
 
-    try {
-        let resultText = '';
-        if (activeProvider === 'openai') {
-            const response = await openai.chat.completions.create({
-                model: "gpt-3.5-turbo",
-                messages: [{ role: "user", content: prompt }]
-            });
-            resultText = response.choices[0].message.content;
-        } else if (activeProvider === 'gemini') {
-            const result = await geminiModel.generateContent(prompt);
-            resultText = result.response.text();
-        }
-
-        return resultText.replace(/^```markdown\n/, '').replace(/^```\n/, '').replace(/\n```$/, '').trim();
-    } catch (e) {
-        console.error("Cover Letter Generation Error:", e);
-        return "Error generating cover letter. Please try again.";
+  try {
+    let resultText = "";
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
     }
+
+    return resultText
+      .replace(/^```markdown\n/, "")
+      .replace(/^```\n/, "")
+      .replace(/\n```$/, "")
+      .trim();
+  } catch (e) {
+    console.error("Cover Letter Generation Error:", e);
+    return "Error generating cover letter. Please try again.";
+  }
 };
 
 const mockAnalysis = () => {
-    return {
-        skills: ['javascript', 'react', 'mock-skill'],
-        missingSkills: ['real-ai-key'],
-        experienceYears: 1,
-        seniority: 'entry',
-        experienceAnalysis: {
-            match: false,
-            feedback: "Less than preferred"
-        },
-        seniorityAnalysis: {
-            match: true,
-            feedback: "Aligned with role"
-        },
-        reasoning: 'Analysis performed in Mock/Offline Mode.',
-        fitScore: 50,
-        recommendation: 'Add an API Key to enable AI analysis.',
-        actionPlan: [
-            { skill: 'real-ai-key', action: 'Sign up for OpenAI or Google Gemini and add the key to .env' }
-        ],
-        mode: 'Standard',
-        provider: 'local'
-    };
+  return {
+    skills: ["javascript", "react", "mock-skill"],
+    missingSkills: ["real-ai-key"],
+    experienceYears: 1,
+    seniority: "entry",
+    experienceAnalysis: {
+      match: false,
+      feedback: "Less than preferred",
+    },
+    seniorityAnalysis: {
+      match: true,
+      feedback: "Aligned with role",
+    },
+    reasoning: "Analysis performed in Mock/Offline Mode.",
+    fitScore: 50,
+    recommendation: "Add an API Key to enable AI analysis.",
+    actionPlan: [
+      {
+        skill: "real-ai-key",
+        action: "Sign up for OpenAI or Google Gemini and add the key to .env",
+      },
+    ],
+    mode: "Standard",
+    provider: "local",
+  };
 };
 
 const generateInterviewQuestions = async (jobDescription, userSkills) => {
-    if (activeProvider === 'mock') {
-        return mockInterviewQuestions(jobDescription);
-    }
+  if (activeProvider === "mock") {
+    return mockInterviewQuestions(jobDescription);
+  }
 
-    const prompt = `
+  const prompt = `
     You are an expert Interview Coach and Technical Hiring Manager.
     Generate a set of interview questions and questions for the candidate to ask, based SPECIFICALLY on the Job Description provided.
 
@@ -361,84 +385,109 @@ const generateInterviewQuestions = async (jobDescription, userSkills) => {
     }
     `;
 
-    try {
-        let resultText = '';
-        if (activeProvider === 'openai') {
-            const response = await openai.chat.completions.create({
-                model: "gpt-3.5-turbo",
-                messages: [{ role: "user", content: prompt }]
-            });
-            resultText = response.choices[0].message.content;
-        } else if (activeProvider === 'gemini') {
-            const result = await geminiModel.generateContent(prompt);
-            resultText = result.response.text();
-        }
-
-        // Clean up markdown code blocks if AI adds them
-        let jsonStr = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
-
-        // Helper to extract JSON if it's wrapped in other text
-        const startIndex = jsonStr.indexOf('{');
-        const endIndex = jsonStr.lastIndexOf('}');
-        if (startIndex !== -1 && endIndex !== -1) {
-            jsonStr = jsonStr.substring(startIndex, endIndex + 1);
-        }
-
-        return JSON.parse(jsonStr);
-
-    } catch (error) {
-        console.error("AI Interview Generation Failed, falling back to mock:", error);
-        return mockInterviewQuestions(jobDescription);
+  try {
+    let resultText = "";
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
     }
+
+    // Clean up markdown code blocks if AI adds them
+    let jsonStr = resultText
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+
+    // Helper to extract JSON if it's wrapped in other text
+    const startIndex = jsonStr.indexOf("{");
+    const endIndex = jsonStr.lastIndexOf("}");
+    if (startIndex !== -1 && endIndex !== -1) {
+      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+    }
+
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error(
+      "AI Interview Generation Failed, falling back to mock:",
+      error,
+    );
+    return mockInterviewQuestions(jobDescription);
+  }
 };
 
 const mockInterviewQuestions = (jobDescription) => {
-    // Heuristics based on keywords in the JD
-    const questions = [
-        { type: 'behavioral', question: 'Tell me about a time you handled a difficult stakeholder.' },
-        { type: 'behavioral', question: 'Describe a situation where you had to learn a new tool quickly.' }
-    ];
+  // Heuristics based on keywords in the JD
+  const questions = [
+    {
+      type: "behavioral",
+      question: "Tell me about a time you handled a difficult stakeholder.",
+    },
+    {
+      type: "behavioral",
+      question:
+        "Describe a situation where you had to learn a new tool quickly.",
+    },
+  ];
 
-    const techKeywords = ['react', 'node', 'sql', 'python', 'aws', 'docker', 'java', 'communication', 'sales', 'marketing'];
-    const lowerJD = jobDescription.toLowerCase();
+  const techKeywords = [
+    "react",
+    "node",
+    "sql",
+    "python",
+    "aws",
+    "docker",
+    "java",
+    "communication",
+    "sales",
+    "marketing",
+  ];
+  const lowerJD = jobDescription.toLowerCase();
 
-    techKeywords.forEach(tech => {
-        if (lowerJD.includes(tech)) {
-            questions.push({
-                type: 'technical',
-                question: `Explain how you have used ${tech} in a recent project. What challenges did you face?`
-            });
-        }
-    });
-
-    const questionsToAsk = [
-        "What does success look like in this role for the first 90 days?",
-        "Can you describe the team culture and how you collaborate?",
-        "What are the biggest challenges the team is currently facing?"
-    ];
-
-    if (lowerJD.includes('agile') || lowerJD.includes('scrum')) {
-        questionsToAsk.push("How does your team practice Agile/Scrum day-to-day?");
+  techKeywords.forEach((tech) => {
+    if (lowerJD.includes(tech)) {
+      questions.push({
+        type: "technical",
+        question: `Explain how you have used ${tech} in a recent project. What challenges did you face?`,
+      });
     }
-    if (lowerJD.includes('leadership') || lowerJD.includes('manage')) {
-        questionsToAsk.push("How does your team practice Agile/Scrum day-to-day?");
-    }
-    if (lowerJD.includes('remote') || lowerJD.includes('hybrid')) {
-        questionsToAsk.push("How does the team maintain communication in a remote/hybrid setting?");
-    }
+  });
 
-    return {
-        questionsToAnswer: questions.slice(0, 3),
-        questionsToAsk: questionsToAsk.slice(0, 3)
-    };
+  const questionsToAsk = [
+    "What does success look like in this role for the first 90 days?",
+    "Can you describe the team culture and how you collaborate?",
+    "What are the biggest challenges the team is currently facing?",
+  ];
+
+  if (lowerJD.includes("agile") || lowerJD.includes("scrum")) {
+    questionsToAsk.push("How does your team practice Agile/Scrum day-to-day?");
+  }
+  if (lowerJD.includes("leadership") || lowerJD.includes("manage")) {
+    questionsToAsk.push("How does your team practice Agile/Scrum day-to-day?");
+  }
+  if (lowerJD.includes("remote") || lowerJD.includes("hybrid")) {
+    questionsToAsk.push(
+      "How does the team maintain communication in a remote/hybrid setting?",
+    );
+  }
+
+  return {
+    questionsToAnswer: questions.slice(0, 3),
+    questionsToAsk: questionsToAsk.slice(0, 3),
+  };
 };
 
 const extractResumeProfile = async (resumeText) => {
-    if (activeProvider === 'mock') {
-        return mockResumeExtraction();
-    }
+  if (activeProvider === "mock") {
+    return mockResumeExtraction();
+  }
 
-    const prompt = `
+  const prompt = `
     You are an expert Resume Parser.
     Extract structured data from the following resume text.
 
@@ -465,52 +514,62 @@ const extractResumeProfile = async (resumeText) => {
     }
     `;
 
-    try {
-        let resultText = '';
-        if (activeProvider === 'openai') {
-            const response = await openai.chat.completions.create({
-                model: "gpt-3.5-turbo",
-                messages: [{ role: "user", content: prompt }],
-                temperature: 0.1,
-            });
-            resultText = response.choices[0].message.content;
-        } else if (activeProvider === 'gemini') {
-            const result = await geminiModel.generateContent(prompt);
-            resultText = result.response.text();
-        }
-
-        let jsonStr = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
-        const startIndex = jsonStr.indexOf('{');
-        const endIndex = jsonStr.lastIndexOf('}');
-        if (startIndex !== -1 && endIndex !== -1) {
-            jsonStr = jsonStr.substring(startIndex, endIndex + 1);
-        }
-
-        return JSON.parse(jsonStr);
-
-    } catch (error) {
-        console.error("AI Resume Extraction Failed:", error);
-        return mockResumeExtraction();
+  try {
+    let resultText = "";
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.1,
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
     }
+
+    let jsonStr = resultText
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+    const startIndex = jsonStr.indexOf("{");
+    const endIndex = jsonStr.lastIndexOf("}");
+    if (startIndex !== -1 && endIndex !== -1) {
+      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+    }
+
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("AI Resume Extraction Failed:", error);
+    return mockResumeExtraction();
+  }
 };
 
-const generateBulletPoints = async (role, context, type = 'experience', targetJob = '') => {
-    if (activeProvider === 'mock') {
-        return ["Developed a feature using React.", "Optimized backend performance."];
-    }
+const generateBulletPoints = async (
+  role,
+  context,
+  type = "experience",
+  targetJob = "",
+) => {
+  if (activeProvider === "mock") {
+    return [
+      "Developed a feature using React.",
+      "Optimized backend performance.",
+    ];
+  }
 
-    // Customize prompt based on type
-    let prompt = '';
+  // Customize prompt based on type
+  let prompt = "";
 
-    if (type === 'summary') {
-        prompt = `
+  if (type === "summary") {
+    prompt = `
         You are an expert Resume Writer.
         Write a powerful, professional summary for a CV (Resume) based on the candidate's background.
 
         INPUT DATA:
         Role/Title: ${role}
         Details: ${context}
-        Target Job Context: ${targetJob ? targetJob.substring(0, 500) : 'General Professional Role'}
+        Target Job Context: ${targetJob ? targetJob.substring(0, 500) : "General Professional Role"}
 
         INSTRUCTIONS:
         1. Write a SINGLE, cohesive paragraph (3-4 sentences max).
@@ -528,10 +587,10 @@ const generateBulletPoints = async (role, context, type = 'experience', targetJo
             "suggestions": ["<The entire summary paragraph string>"]
         }
         `;
-    } else {
-        // IMPROVED PROMPT FOR WORK HISTORY BULLETS
-        // User Requirement: "It shouldn't look at the Target Job Description... it should look at the company and what the role is for the company"
-        prompt = `
+  } else {
+    // IMPROVED PROMPT FOR WORK HISTORY BULLETS
+    // User Requirement: "It shouldn't look at the Target Job Description... it should look at the company and what the role is for the company"
+    prompt = `
 You are an expert Resume Writer and Recruiter.
 
 Your task is to generate 3 realistic, ATS-optimized bullet points for a specific work history role.
@@ -603,54 +662,233 @@ OUTPUT STRICT JSON ONLY:
   ]
 }
 `;
+  }
 
+  try {
+    let resultText = "";
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
     }
 
-    try {
-        let resultText = '';
-        if (activeProvider === 'openai') {
-            const response = await openai.chat.completions.create({
-                model: "gpt-3.5-turbo",
-                messages: [{ role: "user", content: prompt }]
-            });
-            resultText = response.choices[0].message.content;
-        } else if (activeProvider === 'gemini') {
-            const result = await geminiModel.generateContent(prompt);
-            resultText = result.response.text();
-        }
-
-        let jsonStr = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
-        const startIndex = jsonStr.indexOf('{');
-        const endIndex = jsonStr.lastIndexOf('}');
-        if (startIndex !== -1 && endIndex !== -1) {
-            jsonStr = jsonStr.substring(startIndex, endIndex + 1);
-        }
-
-        const data = JSON.parse(jsonStr);
-        return data.suggestions || [];
-
-    } catch (error) {
-        console.error("AI Bullet Generation Failed:", error);
-        return ["Error generating bullets. Please try again."];
+    let jsonStr = resultText
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+    const startIndex = jsonStr.indexOf("{");
+    const endIndex = jsonStr.lastIndexOf("}");
+    if (startIndex !== -1 && endIndex !== -1) {
+      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
     }
+
+    const data = JSON.parse(jsonStr);
+    return data.suggestions || [];
+  } catch (error) {
+    console.error("AI Bullet Generation Failed:", error);
+    return ["Error generating bullets. Please try again."];
+  }
+};
+
+const generateSkillsFromContext = async (
+  education,
+  experience,
+  projects,
+  targetJob = "",
+) => {
+  if (activeProvider === "mock") {
+    return mockSkillsGeneration();
+  }
+
+  const educationText = education
+    .map((e) => `${e.degree} in ${e.field} from ${e.school}`)
+    .join("; ");
+  const experienceText = experience
+    .map((e) => `${e.title} at ${e.company}: ${e.description}`)
+    .join("\n");
+  const projectsText = projects
+    .map((p) => `${p.title}: ${p.description}`)
+    .join("\n");
+
+  const prompt = `
+    You are an expert Career Coach and Technical Recruiter.
+    Analyze the following candidate profile and extract a comprehensive list of relevant skills.
+    Group these skills into logical professional categories.
+
+    CANDIDATE PROFILE:
+    Education: ${educationText}
+    Work Experience: ${experienceText}
+    Projects: ${projectsText}
+    ${targetJob ? `Target Job Context: ${targetJob}` : ""}
+
+    INSTRUCTIONS:
+    1. Extract hard skills (technologies, tools, languages) and soft skills (leadership, communication).
+    2. Group them into 4-6 specific categories (e.g., "Programming Languages", "Project Management", "Industry Knowledge", "Soft Skills").
+    3. Avoid "General" or "Other" if possible. Be specific.
+    4. Limit to 20-30 most impactful skills total.
+
+    OUTPUT STRICT JSON:
+    {
+        "suggestions": [
+            { "category": "Category Name", "skills": ["Skill 1", "Skill 2"] },
+            { "category": "Another Category", "skills": ["Skill A", "Skill B"] }
+        ]
+    }
+    `;
+
+  try {
+    let resultText = "";
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
+    }
+
+    let jsonStr = resultText
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+    const startIndex = jsonStr.indexOf("{");
+    const endIndex = jsonStr.lastIndexOf("}");
+    if (startIndex !== -1 && endIndex !== -1) {
+      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+    }
+
+    const data = JSON.parse(jsonStr);
+    return data.suggestions || [];
+  } catch (error) {
+    console.error("AI Skills Generation Failed:", error);
+    return mockSkillsGeneration();
+  }
+};
+
+const mockSkillsGeneration = () => {
+  return [
+    {
+      category: "Web Development",
+      skills: ["React", "Node.js", "Tailwind CSS", "MongoDB"],
+    },
+    { category: "Tools & DevOps", skills: ["Git", "Docker", "VS Code"] },
+    {
+      category: "Soft Skills",
+      skills: ["Team Leadership", "Communication", "Problem Solving"],
+    },
+  ];
 };
 
 const mockResumeExtraction = () => {
-    return {
-        skills: ['Mock Skill 1', 'Mock Skill 2'],
-        experience: [{ role: 'Mock Role', company: 'Mock Co', startDate: 'Jan 2023', endDate: 'Present', description: ['Mock bullet 1', 'Mock bullet 2'] }],
-        education: [{ degree: 'BS', field: 'CS', school: 'Mock Univ', date: '2022' }],
-        projects: [{ title: 'Mock Project', link: 'http://example.com', description: ['Built a cool thing'] }],
-        seniority: 'entry',
-        summary: 'This is a mock professional summary for testing purposes.'
-    };
+  return {
+    skills: ["Mock Skill 1", "Mock Skill 2"],
+    experience: [
+      {
+        role: "Mock Role",
+        company: "Mock Co",
+        startDate: "Jan 2023",
+        endDate: "Present",
+        description: ["Mock bullet 1", "Mock bullet 2"],
+      },
+    ],
+    education: [
+      { degree: "BS", field: "CS", school: "Mock Univ", date: "2022" },
+    ],
+    projects: [
+      {
+        title: "Mock Project",
+        link: "http://example.com",
+        description: ["Built a cool thing"],
+      },
+    ],
+    seniority: "entry",
+    summary: "This is a mock professional summary for testing purposes.",
+  };
+};
+
+/**
+ * Generate categorized skills based on profile context (Structured for DB)
+ */
+const generateStructuredSkills = async (contextData) => {
+  const { education, experience, projects, targetJob } = contextData;
+
+  const prompt = `
+    Based on the following candidate profile and target job (if provided), suggest a list of relevant professional skills.
+    Categorize them into logical groups (e.g., Technical Skills, Soft Skills, Tools, Languages, etc.).
+
+    CANDIDATE PROFILE:
+    - Education: ${JSON.stringify(education)}
+    - Experience: ${JSON.stringify(experience)}
+    - Projects: ${JSON.stringify(projects)}
+
+    TARGET JOB: ${targetJob ? JSON.stringify(targetJob) : "General Professional Role"}
+
+    TASK:
+    1. Extract 10-15 relevant skills.
+    2. Categorize them.
+    3. Return ONLY a JSON array of objects with 'name' and 'category'.
+
+    Example JSON structure:
+    [
+        { "name": "React.js", "category": "Technical Skills" },
+        { "name": "Project Management", "category": "Soft Skills" }
+    ]
+    `;
+
+  try {
+    let resultText = "";
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.5,
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
+    } else {
+      // Mock Fallback
+      return [
+        { name: "Communication", category: "Soft Skills" },
+        { name: "Team Leadership", category: "Soft Skills" },
+        { name: "Problem Solving", category: "Soft Skills" },
+        { name: "JavaScript", category: "Technical Skills" },
+        { name: "React", category: "Technical Skills" },
+      ];
+    }
+
+    let jsonStr = resultText
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+    const startIndex = jsonStr.indexOf("[");
+    const endIndex = jsonStr.lastIndexOf("]");
+    if (startIndex !== -1 && endIndex !== -1) {
+      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+    }
+
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("Skills Generation Failed:", error);
+    return [];
+  }
 };
 
 module.exports = {
-    analyzeProfile,
-    generateOptimizedContent,
-    generateInterviewQuestions,
-    extractResumeProfile,
-    generateBulletPoints,
-    activeProvider
+  analyzeProfile,
+  generateOptimizedContent,
+  generateInterviewQuestions,
+  extractResumeProfile,
+  generateBulletPoints,
+  generateSkillsFromContext,
+  generateStructuredSkills,
+  activeProvider,
 };

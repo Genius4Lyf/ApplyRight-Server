@@ -94,7 +94,58 @@ const generateBullets = async (req, res) => {
     }
 };
 
+// @desc    Generate categorized skills from profile context
+// @route   POST /api/ai/generate-skills
+// @access  Private
+const generateSkills = async (req, res) => {
+    const { education, experience, projects, targetJob } = req.body;
+    const SKILLS_COST = 2;
+
+    try {
+        const user = await require('../models/User').findById(req.user.id);
+
+        if (user.credits < SKILLS_COST) {
+            return res.status(403).json({
+                message: 'Insufficient credits',
+                code: 'INSUFFICIENT_CREDITS',
+                required: SKILLS_COST,
+                current: user.credits
+            });
+        }
+
+        const suggestions = await require('../services/ai.service').generateSkillsFromContext(
+            education || [],
+            experience || [],
+            projects || [],
+            targetJob || ''
+        );
+
+        // Deduct credits
+        user.credits -= SKILLS_COST;
+        await user.save();
+
+        // Record Transaction
+        await require('../models/Transaction').create({
+            userId: user.id,
+            amount: -SKILLS_COST,
+            type: 'usage',
+            description: 'AI Skills Generation users profile context',
+            status: 'completed'
+        });
+
+        res.json({
+            suggestions,
+            remainingCredits: user.credits
+        });
+
+    } catch (error) {
+        console.error("Skills Gen Error:", error);
+        res.status(500).json({ message: 'Failed to generate skills' });
+    }
+};
+
 module.exports = {
     generateApplication,
     generateBullets,
+    generateSkills,
 };
