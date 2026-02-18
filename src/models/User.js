@@ -36,7 +36,7 @@ const userSchema = new mongoose.Schema(
     },
     credits: {
       type: Number,
-      default: 15, // Free starting credits
+      default: 20, // Free starting credits
     },
     adStreak: {
       current: { type: Number, default: 0 },
