@@ -3,6 +3,8 @@ const Transaction = require("../models/Transaction");
 const Resume = require("../models/Resume");
 const Job = require("../models/Job");
 const Application = require("../models/Application");
+const SettingsService = require("../services/settings.service");
+const NotificationController = require("./notification.controller");
 
 // @desc    Get dashboard stats
 // @route   GET /api/v1/admin/stats
@@ -329,6 +331,63 @@ exports.getUserDetails = async (req, res, next) => {
                 transactions
             }
         });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+};
+
+// @desc    Get system settings
+// @route   GET /api/v1/admin/settings
+// @access  Private/Admin
+exports.getSettings = async (req, res) => {
+    try {
+        const settings = await SettingsService.getSettings();
+        res.status(200).json({ success: true, data: settings });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+};
+
+// @desc    Update system settings
+// @route   PUT /api/v1/admin/settings
+// @access  Private/Admin
+exports.updateSettings = async (req, res) => {
+    try {
+        const updates = req.body;
+
+        // Validation check (optional, e.g. ensure nums are nums)
+
+        // Check if credits changed (for notification)
+        const oldSettings = await SettingsService.getSettings();
+        const newSettings = await SettingsService.updateSettings(updates);
+
+        // Detect price changes and notify users
+        if (updates.credits) {
+            const oldCredits = oldSettings.credits;
+            const newCredits = newSettings.credits;
+
+            if (oldCredits.analysisCost !== newCredits.analysisCost ||
+                oldCredits.uploadCost !== newCredits.uploadCost) {
+
+                // NOTIFY ALL USERS (Simplified for now - can be background job)
+                const title = "Pricing Update";
+                const message = `Credit costs have been updated:\nAnalysis: ${newCredits.analysisCost} Credits\nUpload: ${newCredits.uploadCost} Credits`;
+
+                await NotificationController.broadcast({
+                    body: { // Simulate req.body structure for helper (though we should refactor shared logic)
+                        title,
+                        message,
+                        type: 'system',
+                        link: '/credits'
+                    }
+                }, { json: () => { } }); // Mock res object since we're calling controller method directly (Not ideal but works for speed)
+                // Better: Extract logic to Service. But direct call works for MVP if we tweak NotificationController to be friendlier.
+            }
+        }
+
+        res.status(200).json({ success: true, data: newSettings });
     } catch (err) {
         console.error(err);
         res.status(500).json({ success: false, message: "Server Error" });

@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
+const SettingsService = require('../services/settings.service');
 const { sendWhatsAppOTP } = require('../utils/whatsapp.service');
 
 const generateReferralCode = () => {
@@ -76,9 +77,11 @@ const registerUser = async (req, res, next) => {
         }
 
         // Handle Referral Logic
+        // Handle Referral Logic
         let referrer = null;
-        const initialCredits = 20; // Default - no bonus for new user
-        const REFERRAL_BONUS = 10; // Reduced for ad-based revenue model
+        const settings = await SettingsService.getSettings();
+        const initialCredits = settings.credits.signupBonus;
+        const REFERRAL_BONUS = settings.credits.referralBonus;
 
         if (referralCode) {
             referrer = await User.findOne({ referralCode: referralCode.toUpperCase() });
@@ -193,6 +196,18 @@ const registerAdmin = async (req, res, next) => {
 const loginUser = async (req, res, next) => {
     try {
         const { email, password } = req.body;
+
+        // Check Maintenance Mode
+        const settings = await SettingsService.getSettings();
+        if (settings.features.maintenanceMode) {
+            // Allow only admin login
+            const user = await User.findOne({ email });
+            if (!user || user.role !== 'admin') {
+                return res.status(503).json({
+                    message: 'System is currently under maintenance. Please try again later.'
+                });
+            }
+        }
 
         // Check for user email
         const user = await User.findOne({ email });
@@ -370,6 +385,25 @@ const resetPassword = async (req, res) => {
     }
 };
 
+// @desc    Get public system config (e.g. maintenance mode, global banner)
+// @route   GET /api/auth/config
+// @access  Public
+const getConfig = async (req, res) => {
+    try {
+        const settings = await SettingsService.getSettings();
+        res.status(200).json({
+            features: {
+                maintenanceMode: settings.features.maintenanceMode,
+                // Don't expose internal flags unless needed
+            },
+            announcement: settings.announcement
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
 module.exports = {
     registerUser,
     loginUser,
@@ -377,5 +411,6 @@ module.exports = {
     updateProfile,
     forgotPassword,
     resetPassword,
-    registerAdmin
+    registerAdmin,
+    getConfig
 };
