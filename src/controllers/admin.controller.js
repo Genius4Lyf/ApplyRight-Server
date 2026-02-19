@@ -116,12 +116,39 @@ exports.getDashboardStats = async (req, res, next) => {
         // But maybe we want to distinguish "Detailed Analysis" vs just "Saved".
         // Schema: jobId is required. So all Applications are analyses.
 
-        // 4. Template Popularity
-        const templateStats = await Application.aggregate([
+        // 4. Template Popularity (Based on Downloads)
+        // Lazy load DownloadLog if not imported at top
+        const DownloadLog = require('../models/DownloadLog');
+        const ALL_TEMPLATES = require('../data/templates'); // Import master list
+
+        const downloadStats = await DownloadLog.aggregate([
             { $group: { _id: "$templateId", count: { $sum: 1 } } },
-            { $sort: { count: -1 } },
-            { $limit: 5 }
+            { $sort: { count: -1 } }
         ]);
+
+        // Merge with master list to ensure ALL templates are shown, even with 0 downloads
+        const templateStats = ALL_TEMPLATES.map(template => {
+            const found = downloadStats.find(stat => stat._id === template.id);
+            return {
+                name: template.name,
+                count: found ? found.count : 0
+            };
+        });
+
+        // Sort by count desc, then by name
+        templateStats.sort((a, b) => {
+            if (b.count !== a.count) return b.count - a.count;
+            return a.name.localeCompare(b.name);
+        });
+
+        // Fallback: If no download logs yet (migration period), maybe mix with application stats? 
+        // Or just show 0 until downloads happen. The user asked to track downloads specifically.
+
+        // Note: totalApplications acts as "Total Analysis" count
+        // totalDownloads should ideally count DownloadLogs too? 
+        // Currently totalDownloads is from Transactions.
+        // Let's keep totalDownloads as is for now or use the count of DownloadLogs?
+        // User asked for "Top Templates" to be tracked by download.
 
         const featureUsage = {
             creationMethod,
@@ -129,7 +156,7 @@ exports.getDashboardStats = async (req, res, next) => {
                 optimizations: totalOptimizations,
                 downloads: totalDownloads
             },
-            templatePopularity: templateStats.map(t => ({ name: t._id || 'Standard', count: t.count }))
+            templatePopularity: templateStats // Return FULL list
         };
 
 

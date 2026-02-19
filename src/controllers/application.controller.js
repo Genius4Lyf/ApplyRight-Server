@@ -38,7 +38,32 @@ const deleteApplication = async (req, res) => {
     }
 };
 
+const updateTemplate = async (req, res) => {
+    try {
+        const { templateId } = req.body;
+        const application = await Application.findById(req.params.id);
+
+        if (!application) {
+            return res.status(404).json({ message: 'Application not found' });
+        }
+
+        // Check user
+        if (application.userId.toString() !== req.user.id) {
+            return res.status(401).json({ message: 'User not authorized' });
+        }
+
+        application.templateId = templateId;
+        await application.save();
+
+        res.json(application);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
 module.exports = {
     getApplications,
+    updateTemplate,
     deleteApplication,
 };

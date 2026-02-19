@@ -30,16 +30,35 @@ exports.generateCvPdf = async (req, res) => {
         console.log('--- [PDF Controller] Response sent ---');
 
         // Track Export
-        const { applicationId, draftId } = req.body;
-        if (applicationId) {
-            // Lazy load models to avoid circular dependencies if any, though likely not needed here
+        // Track Export
+        const { applicationId, draftId, isDraft, templateId } = req.body;
+        const DownloadLog = require('../models/DownloadLog');
+
+        // Log the download event
+        if (templateId && req.user) {
+            try {
+                await DownloadLog.create({
+                    templateId,
+                    userId: req.user.id,
+                    applicationId: !isDraft ? applicationId : undefined,
+                    draftId: isDraft ? applicationId : draftId // application._id is draftId in draft mode
+                });
+                console.log(`--- [PDF Controller] Logged download for template: ${templateId} ---`);
+            } catch (err) {
+                console.error('--- [PDF Controller] Failed to log download:', err);
+            }
+        }
+
+        if (applicationId && !isDraft) {
             const Application = require('../models/Application');
             await Application.findByIdAndUpdate(applicationId, { $inc: { exportCount: 1 } });
-            console.log(`--- [PDF Controller] Incremented exportCount for Application ${applicationId} ---`);
-        } else if (draftId) {
+        } else if (isDraft || draftId) {
             const DraftCV = require('../models/DraftCV');
-            await DraftCV.findByIdAndUpdate(draftId, { $inc: { exportCount: 1 } });
-            console.log(`--- [PDF Controller] Incremented exportCount for DraftCV ${draftId} ---`);
+            // If isDraft is true, applicationId passed from frontend is actually the draft ID
+            const activeDraftId = isDraft ? applicationId : draftId;
+            if (activeDraftId) {
+                await DraftCV.findByIdAndUpdate(activeDraftId, { $inc: { exportCount: 1 } });
+            }
         }
 
     } catch (error) {
