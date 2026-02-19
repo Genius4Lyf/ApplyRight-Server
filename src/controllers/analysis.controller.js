@@ -53,6 +53,7 @@ const analyzeFit = async (req, res) => {
             const draft = await DraftCV.create({
                 userId,
                 title: 'Uploaded Resume',
+                source: 'upload',
                 personalInfo: {
                     fullName: req.user.firstName ? `${req.user.firstName} ${req.user.lastName}` : 'Candidate',
                     email: req.user.email

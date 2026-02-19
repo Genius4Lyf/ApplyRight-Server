@@ -87,6 +87,52 @@ exports.getDashboardStats = async (req, res, next) => {
             role: { $ne: 'admin' }
         });
 
+        // --- Feature Usage Stats ---
+
+        // 1. Creation Method (Upload vs Scratch)
+        // We look at DraftCVs. explicit 'source' field is best, but we fall back to title heuristic for older docs if needed.
+        // Actually, let's just use the 'source' field. Unknowns can be grouped or ignored.
+        const creationStats = await require('../models/DraftCV').aggregate([
+            { $group: { _id: "$source", count: { $sum: 1 } } }
+        ]);
+        const creationMethod = {
+            upload: creationStats.find(s => s._id === 'upload')?.count || 0,
+            scratch: creationStats.find(s => s._id === 'scratch')?.count || 0,
+            unknown: creationStats.find(s => s._id === 'unknown' || !s._id)?.count || 0
+        };
+
+        // 2. CV Generation (AI Optimizations & Downloads)
+        // AI Optimizations = Total Applications (since every App is an optimization/analysis result)
+        const totalOptimizations = await Application.countDocuments();
+
+        // Downloads = Sum of exportCount from Applications + DraftCVs
+        const appExports = await Application.aggregate([{ $group: { _id: null, total: { $sum: "$exportCount" } } }]);
+        const draftExports = await require('../models/DraftCV').aggregate([{ $group: { _id: null, total: { $sum: "$exportCount" } } }]);
+
+        const totalDownloads = (appExports[0]?.total || 0) + (draftExports[0]?.total || 0);
+
+        // 3. Analysis Usage (With Job Description)
+        // An Application implies a Job ID exists (schema requires it). So totalApplications is effectively analysis usage.
+        // But maybe we want to distinguish "Detailed Analysis" vs just "Saved".
+        // Schema: jobId is required. So all Applications are analyses.
+
+        // 4. Template Popularity
+        const templateStats = await Application.aggregate([
+            { $group: { _id: "$templateId", count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+            { $limit: 5 }
+        ]);
+
+        const featureUsage = {
+            creationMethod,
+            cvGeneration: {
+                optimizations: totalOptimizations,
+                downloads: totalDownloads
+            },
+            templatePopularity: templateStats.map(t => ({ name: t._id || 'Standard', count: t.count }))
+        };
+
+
         res.status(200).json({
             success: true,
             data: {
@@ -97,7 +143,8 @@ exports.getDashboardStats = async (req, res, next) => {
                 newUsersLastMonth,
                 recentUsers,
                 recentTransactions,
-                chartData // Dynamic chart data
+                chartData,
+                featureUsage // NEW
             },
         });
     } catch (err) {

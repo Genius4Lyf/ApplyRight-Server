@@ -26,6 +26,7 @@ const saveDraft = async (req, res) => {
         // Else create new
         const draft = await DraftCV.create({
             userId: req.user.id,
+            source: 'scratch',
             ...data
         });
 

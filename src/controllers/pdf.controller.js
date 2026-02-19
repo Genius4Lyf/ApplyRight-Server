@@ -26,7 +26,21 @@ exports.generateCvPdf = async (req, res) => {
         });
 
         res.send(buffer);
+        // res.send(buffer); // Already sent above
         console.log('--- [PDF Controller] Response sent ---');
+
+        // Track Export
+        const { applicationId, draftId } = req.body;
+        if (applicationId) {
+            // Lazy load models to avoid circular dependencies if any, though likely not needed here
+            const Application = require('../models/Application');
+            await Application.findByIdAndUpdate(applicationId, { $inc: { exportCount: 1 } });
+            console.log(`--- [PDF Controller] Incremented exportCount for Application ${applicationId} ---`);
+        } else if (draftId) {
+            const DraftCV = require('../models/DraftCV');
+            await DraftCV.findByIdAndUpdate(draftId, { $inc: { exportCount: 1 } });
+            console.log(`--- [PDF Controller] Incremented exportCount for DraftCV ${draftId} ---`);
+        }
 
     } catch (error) {
         console.error('--- [PDF Controller] Error:', error);

@@ -10,6 +10,15 @@ const draftCVSchema = new mongoose.Schema({
         type: String,
         default: 'Untitled CV',
     },
+    source: {
+        type: String,
+        enum: ['upload', 'scratch', 'unknown'],
+        default: 'unknown'
+    },
+    exportCount: {
+        type: Number,
+        default: 0
+    },
     targetJob: {
         title: String,
         description: String, // Context for AI tailoring
