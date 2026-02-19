@@ -77,7 +77,7 @@ const registerUser = async (req, res, next) => {
 
         // Handle Referral Logic
         let referrer = null;
-        const initialCredits = 15; // Default - no bonus for new user
+        const initialCredits = 20; // Default - no bonus for new user
         const REFERRAL_BONUS = 10; // Reduced for ad-based revenue model
 
         if (referralCode) {
@@ -126,6 +126,62 @@ const registerUser = async (req, res, next) => {
         } else {
             res.status(400).json({ message: 'Invalid user data' });
         }
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Register a new ADMIN user
+// @route   POST /api/auth/register-admin
+// @access  Public (Protected by Secret Key)
+const registerAdmin = async (req, res, next) => {
+    try {
+        const { email, password, phone, adminSecret } = req.body;
+
+        if (!email || !password || !phone || !adminSecret) {
+            return res.status(400).json({ message: 'Please add all fields including admin secret' });
+        }
+
+        // Validate Admin Secret
+        if (adminSecret !== process.env.ADMIN_SECRET_KEY) {
+            return res.status(401).json({ message: 'Invalid Admin Secret Key' });
+        }
+
+        // Check if user exists
+        const userExists = await User.findOne({
+            $or: [{ email }, { phone }]
+        });
+
+        if (userExists) {
+            return res.status(400).json({ message: 'User already exists' });
+        }
+
+        // Hash password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        // Create Admin User
+        const user = await User.create({
+            email,
+            phone,
+            password: hashedPassword,
+            role: 'admin',
+            credits: 9999, // Admins get more credits
+            firstName: 'Admin',
+            lastName: 'User'
+        });
+
+        if (user) {
+            res.status(201).json({
+                _id: user.id,
+                email: user.email,
+                role: user.role,
+                token: generateToken(user.id),
+            });
+        } else {
+            res.status(400).json({ message: 'Invalid user data' });
+        }
+
     } catch (error) {
         next(error);
     }
@@ -320,5 +376,6 @@ module.exports = {
     getMe,
     updateProfile,
     forgotPassword,
-    resetPassword
+    resetPassword,
+    registerAdmin
 };
