@@ -6,7 +6,8 @@ const systemSettingsSchema = new mongoose.Schema({
         referralBonus: { type: Number, default: 10 },
         analysisCost: { type: Number, default: 20 },
         uploadCost: { type: Number, default: 10 },
-        aiSkillsCost: { type: Number, default: 2 }
+        aiSkillsCost: { type: Number, default: 2 },
+        adReward: { type: Number, default: 5 }
     },
     features: {
         maintenanceMode: { type: Boolean, default: false },

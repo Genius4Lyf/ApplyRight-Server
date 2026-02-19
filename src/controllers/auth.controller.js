@@ -396,6 +396,7 @@ const getConfig = async (req, res) => {
                 maintenanceMode: settings.features.maintenanceMode,
                 // Don't expose internal flags unless needed
             },
+            credits: settings.credits,
             announcement: settings.announcement
         });
     } catch (err) {
