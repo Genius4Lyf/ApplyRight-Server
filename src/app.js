@@ -19,6 +19,9 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json()); // Body parser
 
+// Maintenance Mode Check
+app.use(require("./middleware/maintenance.middleware"));
+
 // Routes (Placeholders)
 app.get("/", (req, res) => {
   res.send("ApplyRight API is running...");
@@ -45,6 +48,7 @@ app.use("/api/pdf", require("./routes/pdf.routes"));
 app.use("/api/billing", require("./routes/billing.routes"));
 app.use("/api/feedback", require("./routes/feedback.routes"));
 app.use("/api/admin", require("./routes/admin.routes"));
+app.use("/api/system", require("./routes/system.routes"));
 
 // Global Error Handler
 app.use((err, req, res, next) => {
