@@ -28,7 +28,7 @@ exports.addCredits = async (req, res) => {
         }
 
         user.credits += parseInt(amount, 10);
-        await user.save();
+        await user.save({ validateBeforeSave: false });
 
         // Record Transaction
         await Transaction.create({
@@ -60,7 +60,7 @@ exports.deductCredits = async (req, res) => {
         }
 
         user.credits -= parseInt(cost, 10);
-        await user.save();
+        await user.save({ validateBeforeSave: false });
 
         // Record Transaction
         await Transaction.create({
@@ -167,7 +167,7 @@ exports.watchAd = async (req, res) => {
         const TOTAL_REWARD = REWARD_AMOUNT + streakBonus;
 
         user.credits += TOTAL_REWARD;
-        await user.save();
+        await user.save({ validateBeforeSave: false });
 
         // Record Transaction
         await Transaction.create({
@@ -201,8 +201,10 @@ exports.watchAd = async (req, res) => {
         });
 
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server Error' });
+        console.error('watchAd error:', error.message);
+        console.error('watchAd stack:', error.stack);
+        console.error('watchAd user:', req.user?.id);
+        res.status(500).json({ message: 'Server Error', detail: error.message });
     }
 };
 
@@ -297,7 +299,7 @@ exports.verifyPayment = async (req, res) => {
 
         // 4. Update User Balance
         user.credits += creditsToAdd;
-        await user.save();
+        await user.save({ validateBeforeSave: false });
 
         // 5. Record Transaction
         await Transaction.create({
@@ -356,7 +358,7 @@ exports.unlockTemplate = async (req, res) => {
         }
         user.unlockedTemplates.push(templateId);
 
-        await user.save();
+        await user.save({ validateBeforeSave: false });
 
         // Record Transaction
         await Transaction.create({
