@@ -93,14 +93,27 @@ exports.getDashboardStats = async (req, res, next) => {
 
         // 1. Creation Method (Upload vs Scratch)
         // We look at DraftCVs. explicit 'source' field is best, but we fall back to title heuristic for older docs if needed.
-        // Actually, let's just use the 'source' field. Unknowns can be grouped or ignored.
-        const creationStats = await require('../models/DraftCV').aggregate([
-            { $group: { _id: "$source", count: { $sum: 1 } } }
-        ]);
+        const allDrafts = await require('../models/DraftCV').find({}, 'source title');
+
+        let uploadCount = 0;
+        let scratchCount = 0;
+
+        allDrafts.forEach(draft => {
+            if (draft.source === 'upload') {
+                uploadCount++;
+            } else if (draft.source === 'scratch') {
+                scratchCount++;
+            } else if (draft.title === 'Uploaded Resume') {
+                uploadCount++; // Heuristic for older documents without 'source' field
+            } else {
+                scratchCount++; // Heuristic: if it's named anything else, it was likely typed
+            }
+        });
+
         const creationMethod = {
-            upload: creationStats.find(s => s._id === 'upload')?.count || 0,
-            scratch: creationStats.find(s => s._id === 'scratch')?.count || 0,
-            unknown: creationStats.find(s => s._id === 'unknown' || !s._id)?.count || 0
+            upload: uploadCount,
+            scratch: scratchCount,
+            unknown: 0 // we've bucketed everything via heuristics
         };
 
         // 2. CV Generation (AI Optimizations & Downloads)
