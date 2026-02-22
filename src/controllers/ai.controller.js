@@ -122,7 +122,7 @@ const generateSkills = async (req, res) => {
 
         // Deduct credits
         user.credits -= SKILLS_COST;
-        await user.save();
+        await user.updateOne({ credits: user.credits });
 
         // Record Transaction
         await require('../models/Transaction').create({

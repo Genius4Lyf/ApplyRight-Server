@@ -86,7 +86,7 @@ const analyzeFit = async (req, res) => {
 
             // 3. Deduct Credits for Upload
             user.credits -= ANALYSIS_COST;
-            await user.save();
+            await user.updateOne({ credits: user.credits });
 
             return res.status(200).json({
                 message: 'Resume parsed successfully',
@@ -219,7 +219,7 @@ const analyzeFit = async (req, res) => {
         // 5. Return Result
         // 5. Deduct Credits
         user.credits -= ANALYSIS_COST;
-        await user.save();
+        await user.updateOne({ credits: user.credits });
 
         res.status(200).json({
             fitScore: fitScore,
