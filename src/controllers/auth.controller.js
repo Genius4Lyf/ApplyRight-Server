@@ -103,7 +103,10 @@ const registerUser = async (req, res, next) => {
                 // Award Referrer
                 referrer.credits += REFERRAL_BONUS;
                 referrer.referralCount += 1;
-                await referrer.save();
+                await referrer.updateOne({
+                    credits: referrer.credits,
+                    referralCount: referrer.referralCount
+                });
 
                 await Transaction.create({
                     userId: referrer.id,
@@ -238,8 +241,8 @@ const loginUser = async (req, res, next) => {
                     newReferralCode = generateReferralCode();
                     codeExists = await User.findOne({ referralCode: newReferralCode });
                 }
+                await user.updateOne({ referralCode: newReferralCode });
                 user.referralCode = newReferralCode;
-                await user.save();
             }
 
             res.json({
@@ -303,9 +306,20 @@ const updateProfile = async (req, res, next) => {
                 };
             }
 
-            // REMOVED: Mock Plan Upgrade Logic (Security Vulnerability)
+            // Prepare update object to avoid validation errors
+            const updateFields = {
+                firstName: user.firstName,
+                lastName: user.lastName,
+                currentStatus: user.currentStatus,
+                education: user.education,
+                settings: user.settings
+            };
 
-            const updatedUser = await user.save();
+            const updatedUser = await User.findByIdAndUpdate(
+                user.id,
+                { $set: updateFields },
+                { new: true, runValidators: true }
+            );
 
             res.json({
                 _id: updatedUser.id,
@@ -345,18 +359,21 @@ const forgotPassword = async (req, res) => {
 
         // Hash OTP and save to database
         const salt = await bcrypt.genSalt(10);
-        user.resetPasswordToken = await bcrypt.hash(otp, salt);
-        user.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 Minutes
+        const hashedToken = await bcrypt.hash(otp, salt);
+        const expireTime = Date.now() + 10 * 60 * 1000; // 10 Minutes
 
-        await user.save();
+        await user.updateOne({
+            resetPasswordToken: hashedToken,
+            resetPasswordExpire: expireTime
+        });
 
         try {
             await sendWhatsAppOTP(user.phone, otp);
             res.status(200).json({ success: true, data: 'WhatsApp OTP sent' });
         } catch (err) {
-            user.resetPasswordToken = undefined;
-            user.resetPasswordExpire = undefined;
-            await user.save();
+            await user.updateOne({
+                $unset: { resetPasswordToken: 1, resetPasswordExpire: 1 }
+            });
             res.status(500).json({ message: 'WhatsApp message could not be sent' });
         }
     } catch (err) {
@@ -389,12 +406,12 @@ const resetPassword = async (req, res) => {
 
         // Set new password
         const salt = await bcrypt.genSalt(10);
-        user.password = await bcrypt.hash(password, salt);
+        const newPasswordHash = await bcrypt.hash(password, salt);
 
-        user.resetPasswordToken = undefined;
-        user.resetPasswordExpire = undefined;
-
-        await user.save();
+        await user.updateOne({
+            password: newPasswordHash,
+            $unset: { resetPasswordToken: 1, resetPasswordExpire: 1 }
+        });
 
         res.status(200).json({ success: true, data: 'Password updated successfully' });
     } catch (err) {

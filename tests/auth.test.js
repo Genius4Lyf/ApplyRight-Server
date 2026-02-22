@@ -8,6 +8,12 @@ const jwt = require('jsonwebtoken');
 jest.mock('../src/models/User');
 jest.mock('bcryptjs');
 jest.mock('jsonwebtoken');
+jest.mock('../src/services/settings.service', () => ({
+    getSettings: jest.fn().mockResolvedValue({
+        features: { maintenanceMode: false },
+        credits: { signupBonus: 10, referralBonus: 5 }
+    })
+}));
 
 // Mock Data
 const mockUser = {
