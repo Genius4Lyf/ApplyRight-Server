@@ -110,6 +110,9 @@ exports.getDashboardStats = async (req, res, next) => {
             }
         });
 
+        // Add pure resume uploads to upload count
+        uploadCount += totalResumes;
+
         const creationMethod = {
             upload: uploadCount,
             scratch: scratchCount,
@@ -120,11 +123,11 @@ exports.getDashboardStats = async (req, res, next) => {
         // AI Optimizations = Total Applications (since every App is an optimization/analysis result)
         const totalOptimizations = await Application.countDocuments();
 
-        // Downloads = Sum of exportCount from Applications + DraftCVs
-        const appExports = await Application.aggregate([{ $group: { _id: null, total: { $sum: "$exportCount" } } }]);
-        const draftExports = await require('../models/DraftCV').aggregate([{ $group: { _id: null, total: { $sum: "$exportCount" } } }]);
+        // Lazy load DownloadLog if not imported at top
+        const DownloadLog = require('../models/DownloadLog');
 
-        const totalDownloads = (appExports[0]?.total || 0) + (draftExports[0]?.total || 0);
+        // Downloads = Total count of DownloadLogs
+        const totalDownloads = await DownloadLog.countDocuments();
 
         // 3. Analysis Usage (With Job Description)
         // An Application implies a Job ID exists (schema requires it). So totalApplications is effectively analysis usage.
@@ -132,8 +135,6 @@ exports.getDashboardStats = async (req, res, next) => {
         // Schema: jobId is required. So all Applications are analyses.
 
         // 4. Template Popularity (Based on Downloads)
-        // Lazy load DownloadLog if not imported at top
-        const DownloadLog = require('../models/DownloadLog');
         const ALL_TEMPLATES = require('../data/templates'); // Import master list
 
         const downloadStats = await DownloadLog.aggregate([
