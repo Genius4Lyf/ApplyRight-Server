@@ -4,9 +4,9 @@ const systemSettingsSchema = new mongoose.Schema({
     credits: {
         signupBonus: { type: Number, default: 20 },
         referralBonus: { type: Number, default: 10 },
-        analysisCost: { type: Number, default: 20 },
-        uploadCost: { type: Number, default: 10 },
-        aiSkillsCost: { type: Number, default: 2 },
+        analysisCost: { type: Number, default: 30 },
+        uploadCost: { type: Number, default: 15 },
+        aiSkillsCost: { type: Number, default: 10 },
         adReward: { type: Number, default: 5 }
     },
     features: {

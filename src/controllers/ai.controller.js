@@ -99,7 +99,7 @@ const generateBullets = async (req, res) => {
 // @access  Private
 const generateSkills = async (req, res) => {
     const { education, experience, projects, targetJob } = req.body;
-    const SKILLS_COST = 5;
+    const SKILLS_COST = 10;
 
     try {
         const user = await require('../models/User').findById(req.user.id);

@@ -13,9 +13,9 @@ const analyzeFit = async (req, res) => {
         const userId = req.user._id;
 
         // Determine Cost based on operation type
-        // If jobId is present -> Full Analysis (20 credits)
-        // If jobId is missing -> Create/Upload Only (10 credits)
-        const ANALYSIS_COST = jobId ? 20 : 10;
+        // If jobId is present -> Full Analysis (30 credits)
+        // If jobId is missing -> Create/Upload Only (15 credits)
+        const ANALYSIS_COST = jobId ? 30 : 15;
 
         // 0. Check Credit Balance
         const user = req.user; // Assuming user is fully attached by middleware
