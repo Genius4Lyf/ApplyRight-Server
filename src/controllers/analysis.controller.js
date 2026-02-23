@@ -112,16 +112,17 @@ const analyzeFit = async (req, res) => {
         // We get a smarter profile analysis from the AI
         const aiResult = await aiService.analyzeProfile(resume.rawText, job.description);
 
-        // Update Job Metadata if AI detects better info and current info is generic or missing
+        // Update Job Metadata with AI-detected title/company
+        // The AI prompt strictly extracts these from the JOB DESCRIPTION only (not the resume)
+        // Scraped titles from HTML (h1/title tags) are often unreliable (e.g., page titles, link text)
+        // so the AI analysis of the actual job description content is the better source of truth
         if (aiResult.detectedJobTitle) {
-            // Heuristic: Update if current title is generic OR if we trust AI more.
-            // Let's trust AI to refine it.
             job.title = aiResult.detectedJobTitle;
-            if (aiResult.detectedCompany && aiResult.detectedCompany !== 'Unknown Company') {
-                job.company = aiResult.detectedCompany;
-            }
-            await job.save();
         }
+        if (aiResult.detectedCompany && aiResult.detectedCompany !== 'Unknown Company') {
+            job.company = aiResult.detectedCompany;
+        }
+        await job.save();
 
         // Map AI result to our standard format
         let fitScore = aiResult.fitScore;

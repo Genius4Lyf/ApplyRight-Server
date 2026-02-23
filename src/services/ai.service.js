@@ -42,14 +42,14 @@ const analyzeProfile = async (resumeText, jobDescription) => {
     RESUME:
     ${resumeText.substring(0, 2000)}
 
-    EXTRACT METADATA:
-    - Look for the specific role being hired (e.g., "Fuel Receipt Officer"). Ignore generic headers.
-    - Look for the hiring company (e.g., "Dangote Industries"). Ignore recuitment agencies (e.g., "Work Link", "Jobberman") if possible.
+    EXTRACT METADATA (CRITICAL — use JOB DESCRIPTION section ONLY):
+    - "detectedJobTitle": Extract the specific role being advertised in the JOB DESCRIPTION above. Do NOT use any role from the RESUME (the candidate's past titles are irrelevant here). Look for phrases like "We are hiring a...", "Position:", "Role:", or the main heading.
+    - "detectedCompany": Extract the hiring company from the JOB DESCRIPTION above. Do NOT use any company from the RESUME. Ignore recruitment agencies (e.g., "Jobberman", "Work Link") and look for the actual employer.
 
     Output a JSON object ONLY. Do not output markdown code blocks. Structure:
     {
-        "detectedJobTitle": "<extracted_job_title_from_text>",
-        "detectedCompany": "<extracted_company_name_from_text>",
+        "detectedJobTitle": "<role_from_JOB_DESCRIPTION_only>",
+        "detectedCompany": "<company_from_JOB_DESCRIPTION_only>",
         "skills": ["matched_skill_1", "matched_skill_2"],
         "missingSkills": ["important_missing_skill"],
         "experienceYears": <integer_estimate_of_total_relevant_experience>,
