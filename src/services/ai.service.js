@@ -587,6 +587,40 @@ const generateBulletPoints = async (
             "suggestions": ["<The entire summary paragraph string>"]
         }
         `;
+  } else if (type === "project") {
+    const projectTitle = role || "Project";
+    prompt = `
+You are an expert Resume Writer.
+
+Your task is to rewrite 3 ATS-optimized bullet points for a PROJECT.
+Accuracy and factual integrity are more important than sounding impressive.
+
+INPUT:
+Project Title: "${projectTitle}"
+Project Context / Existing Notes: "${context}"
+
+RULES:
+1. Preserve facts. Do NOT add new tools, metrics, users, business outcomes, or claims not in the input.
+2. If metrics are not provided, use qualitative impact without numbers.
+3. Keep scope at project level; avoid company-wide or organizational claims.
+4. Prefer action verbs and technical specificity only when provided.
+5. If the context is thin, keep bullets general and credible rather than speculative.
+6. Ignore any target job description completely.
+
+SUGGESTED CONTENT MIX:
+- Bullet 1: Goal/problem the project addressed.
+- Bullet 2: Implementation/approach and key technologies (only if mentioned).
+- Bullet 3: Outcome, quality improvement, or learning (non-inflated).
+
+OUTPUT STRICT JSON ONLY:
+{
+  "suggestions": [
+    "Bullet 1",
+    "Bullet 2",
+    "Bullet 3"
+  ]
+}
+`;
   } else {
     // IMPROVED PROMPT FOR WORK HISTORY BULLETS
     // User Requirement: "It shouldn't look at the Target Job Description... it should look at the company and what the role is for the company"
