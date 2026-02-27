@@ -70,9 +70,9 @@ class PdfService {
                 footerTemplate: '<div></div>', // Empty footer
                 margin: options.margin || {
                     top: '0px',
-                    right: '10px',
-                    bottom: '10px',
-                    left: '10px'
+                    right: '25px',
+                    bottom: '25px',
+                    left: '25px'
                 },
                 ...options
             });
