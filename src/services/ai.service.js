@@ -627,8 +627,8 @@ OUTPUT STRICT JSON ONLY:
     prompt = `
 You are an expert Resume Writer and Recruiter.
 
-Your task is to generate 3 realistic, ATS-optimized bullet points for a specific work history role.
-Accuracy and role realism are more important than sounding impressive.
+Your task is to generate 6 realistic, ATS-optimized bullet points for a specific work history role.
+Accuracy and role realism are more important than sounding impressive. Imagine you are chatting with a user to uncover real, grounded achievements—avoid overly exaggerated claims ("too much") and generic fluff ("too little").
 
 INPUT:
 Job Title: "${role}"
@@ -671,11 +671,14 @@ STEP 3: Enforce Role Scope (CRITICAL)
   - Cost-saving claims
 UNLESS the role is OWNERSHIP-LEVEL.
 
-STEP 4: Generate Bullet Points
-- Use realistic responsibilities typical for this role + industry.
-- Prefer contribution and execution over ownership when uncertain.
-- If metrics are used, they must be plausible for the role level.
-- Every bullet must be defensible in a real interview.
+STEP 4: Generate 6 Varied Options
+Create 6 distinct bullet points covering different aspects of the job. For example:
+  1. Technical Execution or Daily Operations
+  2. Collaboration or Teamwork
+  3. Problem Solving or Troubleshooting
+  4. Process Adherence or Efficiency
+  5. Tools / Software / Equipment usage
+  6. Client / Stakeholder interaction (if applicable) or Quality Assurance
 
 GENERATION RULES:
 1. Ignore any future or target job description completely.
@@ -684,15 +687,19 @@ GENERATION RULES:
    - EXECUTION: Executed, Performed, Monitored, Operated, Supported
    - SPECIALIST: Analyzed, Implemented, Configured, Validated, Improved
    - OWNERSHIP: Led, Designed, Optimized, Defined, Owned
-4. If user context lacks specifics, generate typical but believable duties.
-5. Do NOT exaggerate authority or impact.
+4. Be "real" - use plausible impact and scope matching the inferred seniority of the role.
+5. If user context lacks specifics, generate typical but believable, grounded duties.
+6. Do NOT exaggerate authority, impact, or use inflated metrics.
 
 OUTPUT STRICT JSON ONLY:
 {
   "suggestions": [
-    "Bullet 1",
-    "Bullet 2",
-    "Bullet 3"
+    "Bullet 1 text...",
+    "Bullet 2 text...",
+    "Bullet 3 text...",
+    "Bullet 4 text...",
+    "Bullet 5 text...",
+    "Bullet 6 text..."
   ]
 }
 `;
