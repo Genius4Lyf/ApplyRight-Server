@@ -1,5 +1,7 @@
 const puppeteer = require('puppeteer');
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 class PdfService {
     constructor() {
         this.browser = null;
@@ -8,22 +10,28 @@ class PdfService {
     async init() {
         if (!this.browser) {
             try {
-                // Configure launch options for Render/Production environments
+                const args = [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--font-render-hinting=none',
+                ];
+
+                // --single-process and --no-zygote help on resource-constrained servers (Render)
+                // but cause "Navigating frame was detached" crashes on Windows/local dev
+                if (isProduction) {
+                    args.push('--single-process', '--no-zygote');
+                }
+
                 const launchOptions = {
-                    headless: true, // Use new headless mode (or 'shell' in newer versions)
-                    args: [
-                        '--no-sandbox',
-                        '--disable-setuid-sandbox',
-                        '--disable-dev-shm-usage',
-                        '--disable-gpu',
-                        '--font-render-hinting=none',
-                        '--single-process', // Sometimes helps in resource-constrained envs
-                        '--no-zygote'
-                    ],
-                    // executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null // Fallback if env var is set
+                    headless: true,
+                    args,
+                    // If PUPPETEER_EXECUTABLE_PATH is provided in .env (e.g., local development), use it.
+                    ...(process.env.PUPPETEER_EXECUTABLE_PATH && { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH })
                 };
 
-                console.log('Launching Puppeteer with options:', JSON.stringify(launchOptions));
+                console.log(`Launching Puppeteer (${isProduction ? 'production' : 'local'}) with options:`, JSON.stringify(launchOptions));
 
                 this.browser = await puppeteer.launch(launchOptions);
 
@@ -56,9 +64,12 @@ class PdfService {
             // Set content with options
             console.log('--- [PdfService] Setting page content... ---');
             await page.setContent(htmlContent, {
-                waitUntil: ['load', 'networkidle0'], // Wait for external resources like fonts/images
+                waitUntil: 'domcontentloaded', // Use domcontentloaded to avoid frame detachment from external scripts
                 timeout: 30000
             });
+
+            // Give Tailwind CDN and fonts time to process after DOM is ready
+            await new Promise(resolve => setTimeout(resolve, 2000));
             console.log('--- [PdfService] Page content set. Generating PDF... ---');
 
             // Specific PDF options for CVs
@@ -68,6 +79,7 @@ class PdfService {
                 displayHeaderFooter: true, // Required for margins to work
                 headerTemplate: '<div></div>', // Empty header
                 footerTemplate: '<div></div>', // Empty footer
+                preferCSSPageSize: true, // Respect @page CSS margin rules
                 margin: options.margin || {
                     top: '0px',
                     right: '25px',
