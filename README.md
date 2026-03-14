@@ -4,19 +4,19 @@ The backend REST API powering **ApplyRight**, an AI-driven job application assis
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| **Runtime** | Node.js |
-| **Framework** | Express 5 |
-| **Database** | MongoDB (Mongoose ODM) |
-| **Authentication** | JWT (jsonwebtoken) + bcryptjs |
-| **AI Providers** | Google Gemini (`@google/generative-ai`) · OpenAI |
-| **PDF Generation** | Puppeteer (headless Chrome) |
-| **File Parsing** | pdf-parse · mammoth (DOCX) |
-| **Web Scraping** | Cheerio + Axios |
-| **Security** | Helmet · CORS · Compression |
-| **Testing** | Jest · Supertest |
-| **Deployment** | Render |
+| Layer              | Technology                                       |
+| ------------------ | ------------------------------------------------ |
+| **Runtime**        | Node.js                                          |
+| **Framework**      | Express 5                                        |
+| **Database**       | MongoDB (Mongoose ODM)                           |
+| **Authentication** | JWT (jsonwebtoken) + bcryptjs                    |
+| **AI Providers**   | Google Gemini (`@google/generative-ai`) · OpenAI |
+| **PDF Generation** | Puppeteer (headless Chrome)                      |
+| **File Parsing**   | pdf-parse · mammoth (DOCX)                       |
+| **Web Scraping**   | Cheerio + Axios                                  |
+| **Security**       | Helmet · CORS · Compression                      |
+| **Testing**        | Jest · Supertest                                 |
+| **Deployment**     | Render                                           |
 
 ## Features
 
@@ -117,21 +117,21 @@ npm test
 
 ## API Routes Overview
 
-| Prefix | Module | Description |
-|---|---|---|
-| `/api/auth` | auth | Register, login, password reset |
-| `/api/users` | user | Profile management |
-| `/api/cv` | cv | Draft CV CRUD |
-| `/api/resume` | resume | Resume upload & retrieval |
-| `/api/ai` | ai | AI content generation |
-| `/api/analysis` | analysis | ATS scoring & analysis |
-| `/api/applications` | application | Job application tracking |
-| `/api/jobs` | job | Job listing management |
-| `/api/pdf` | pdf | Server-side PDF generation |
-| `/api/billing` | billing | Credits & transactions |
-| `/api/feedback` | feedback | User feedback |
-| `/api/admin` | admin | Admin dashboard & settings |
-| `/api/system` | system | System health & configuration |
+| Prefix              | Module      | Description                     |
+| ------------------- | ----------- | ------------------------------- |
+| `/api/auth`         | auth        | Register, login, password reset |
+| `/api/users`        | user        | Profile management              |
+| `/api/cv`           | cv          | Draft CV CRUD                   |
+| `/api/resume`       | resume      | Resume upload & retrieval       |
+| `/api/ai`           | ai          | AI content generation           |
+| `/api/analysis`     | analysis    | ATS scoring & analysis          |
+| `/api/applications` | application | Job application tracking        |
+| `/api/jobs`         | job         | Job listing management          |
+| `/api/pdf`          | pdf         | Server-side PDF generation      |
+| `/api/billing`      | billing     | Credits & transactions          |
+| `/api/feedback`     | feedback    | User feedback                   |
+| `/api/admin`        | admin       | Admin dashboard & settings      |
+| `/api/system`       | system      | System health & configuration   |
 
 ## Deployment
 

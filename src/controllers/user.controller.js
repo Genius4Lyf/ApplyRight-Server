@@ -1,67 +1,68 @@
-const User = require('../models/User');
+const User = require("../models/User");
 
 exports.updateProfile = async (req, res) => {
-    try {
-        const {
-            firstName,
-            lastName,
-            otherName,
-            phone,
-            linkedinUrl,
-            portfolioUrl,
-            currentJobTitle,
-            currentStatus,
-            education,
-            careerGoals,
-            skills,
-            onboardingCompleted,
-            settings
-        } = req.body;
+  try {
+    const {
+      firstName,
+      lastName,
+      otherName,
+      phone,
+      linkedinUrl,
+      portfolioUrl,
+      currentJobTitle,
+      currentStatus,
+      education,
+      careerGoals,
+      skills,
+      onboardingCompleted,
+      settings,
+    } = req.body;
 
-        // Build update object
-        const updateFields = {};
-        if (firstName) updateFields.firstName = firstName;
-        if (lastName) updateFields.lastName = lastName;
-        if (otherName !== undefined) updateFields.otherName = otherName;
-        if (phone !== undefined) updateFields.phone = phone;
-        if (linkedinUrl !== undefined) updateFields.linkedinUrl = linkedinUrl;
-        if (portfolioUrl !== undefined) updateFields.portfolioUrl = portfolioUrl;
-        if (currentJobTitle !== undefined) updateFields.currentJobTitle = currentJobTitle;
-        if (currentStatus) updateFields.currentStatus = currentStatus;
-        if (education) updateFields.education = education;
-        if (careerGoals) updateFields.careerGoals = careerGoals;
-        if (skills) updateFields.skills = skills;
-        if (typeof onboardingCompleted !== 'undefined') updateFields.onboardingCompleted = onboardingCompleted;
+    // Build update object
+    const updateFields = {};
+    if (firstName) updateFields.firstName = firstName;
+    if (lastName) updateFields.lastName = lastName;
+    if (otherName !== undefined) updateFields.otherName = otherName;
+    if (phone !== undefined) updateFields.phone = phone;
+    if (linkedinUrl !== undefined) updateFields.linkedinUrl = linkedinUrl;
+    if (portfolioUrl !== undefined) updateFields.portfolioUrl = portfolioUrl;
+    if (currentJobTitle !== undefined) updateFields.currentJobTitle = currentJobTitle;
+    if (currentStatus) updateFields.currentStatus = currentStatus;
+    if (education) updateFields.education = education;
+    if (careerGoals) updateFields.careerGoals = careerGoals;
+    if (skills) updateFields.skills = skills;
+    if (typeof onboardingCompleted !== "undefined")
+      updateFields.onboardingCompleted = onboardingCompleted;
 
-        // Handle nested settings using dot notation to avoid overwriting other settings
-        if (settings) {
-            if (settings.showOnboardingTutorials !== undefined) {
-                updateFields['settings.showOnboardingTutorials'] = settings.showOnboardingTutorials;
-            }
-            if (settings.autoGenerateAnalysis !== undefined) {
-                updateFields['settings.autoGenerateAnalysis'] = settings.autoGenerateAnalysis;
-            }
-        }
-
-        const user = await User.findByIdAndUpdate(
-            req.user.id,
-            { $set: updateFields },
-            { new: true }
-        ).select('-password');
-
-        res.json(user);
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
+    // Handle nested settings using dot notation to avoid overwriting other settings
+    if (settings) {
+      if (settings.showOnboardingTutorials !== undefined) {
+        updateFields["settings.showOnboardingTutorials"] = settings.showOnboardingTutorials;
+      }
+      if (settings.autoGenerateAnalysis !== undefined) {
+        updateFields["settings.autoGenerateAnalysis"] = settings.autoGenerateAnalysis;
+      }
     }
+
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { $set: updateFields },
+      { new: true }
+    ).select("-password");
+
+    res.json(user);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Server Error");
+  }
 };
 
 exports.getProfile = async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select('-password');
-        res.json(user);
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
+  try {
+    const user = await User.findById(req.user.id).select("-password");
+    res.json(user);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Server Error");
+  }
 };

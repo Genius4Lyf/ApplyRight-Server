@@ -19,12 +19,8 @@ if (process.env.OPENAI_API_KEY) {
 } else {
   // Requested Enhancement: Explicitly log error to terminal when keys are missing
   console.log("\n❌ [ERROR] AI Service Initialization Failed");
-  console.log(
-    "   Reason: No API Keys found (OPENAI_API_KEY or GEMINI_API_KEY)",
-  );
-  console.log(
-    "   Action: Falling back to Mock Mode. Real analysis will not work.\n",
-  );
+  console.log("   Reason: No API Keys found (OPENAI_API_KEY or GEMINI_API_KEY)");
+  console.log("   Action: Falling back to Mock Mode. Real analysis will not work.\n");
 }
 
 const analyzeProfile = async (resumeText, jobDescription) => {
@@ -102,11 +98,7 @@ const analyzeProfile = async (resumeText, jobDescription) => {
   }
 };
 
-const generateOptimizedContent = async (
-  resumeText,
-  jobDescription,
-  userContext = {},
-) => {
+const generateOptimizedContent = async (resumeText, jobDescription, userContext = {}) => {
   // If mock mode, return the old mock response
   if (activeProvider === "mock") {
     const currentYear = new Date().getFullYear();
@@ -172,9 +164,7 @@ Alexander James
     console.log("Beginning Parallel Generation: CV & Cover Letter...");
     const [cvResult, clResult] = await Promise.all([
       generateCV(resumeText, jobDescription || "General Professional Role"),
-      jobDescription
-        ? generateCoverLetter(resumeText, jobDescription)
-        : Promise.resolve(null),
+      jobDescription ? generateCoverLetter(resumeText, jobDescription) : Promise.resolve(null),
     ]);
 
     console.log("Parallel Generation Complete.");
@@ -413,10 +403,7 @@ const generateInterviewQuestions = async (jobDescription, userSkills) => {
 
     return JSON.parse(jsonStr);
   } catch (error) {
-    console.error(
-      "AI Interview Generation Failed, falling back to mock:",
-      error,
-    );
+    console.error("AI Interview Generation Failed, falling back to mock:", error);
     return mockInterviewQuestions(jobDescription);
   }
 };
@@ -430,8 +417,7 @@ const mockInterviewQuestions = (jobDescription) => {
     },
     {
       type: "behavioral",
-      question:
-        "Describe a situation where you had to learn a new tool quickly.",
+      question: "Describe a situation where you had to learn a new tool quickly.",
     },
   ];
 
@@ -471,9 +457,7 @@ const mockInterviewQuestions = (jobDescription) => {
     questionsToAsk.push("How does your team practice Agile/Scrum day-to-day?");
   }
   if (lowerJD.includes("remote") || lowerJD.includes("hybrid")) {
-    questionsToAsk.push(
-      "How does the team maintain communication in a remote/hybrid setting?",
-    );
+    questionsToAsk.push("How does the team maintain communication in a remote/hybrid setting?");
   }
 
   return {
@@ -545,17 +529,9 @@ const extractResumeProfile = async (resumeText) => {
   }
 };
 
-const generateBulletPoints = async (
-  role,
-  context,
-  type = "experience",
-  targetJob = "",
-) => {
+const generateBulletPoints = async (role, context, type = "experience", targetJob = "") => {
   if (activeProvider === "mock") {
-    return [
-      "Developed a feature using React.",
-      "Optimized backend performance.",
-    ];
+    return ["Developed a feature using React.", "Optimized backend performance."];
   }
 
   // Customize prompt based on type
@@ -736,12 +712,7 @@ OUTPUT STRICT JSON ONLY:
   }
 };
 
-const generateSkillsFromContext = async (
-  education,
-  experience,
-  projects,
-  targetJob = "",
-) => {
+const generateSkillsFromContext = async (education, experience, projects, targetJob = "") => {
   if (activeProvider === "mock") {
     return mockSkillsGeneration();
   }
@@ -752,9 +723,7 @@ const generateSkillsFromContext = async (
   const experienceText = experience
     .map((e) => `${e.title} at ${e.company}: ${e.description}`)
     .join("\n");
-  const projectsText = projects
-    .map((p) => `${p.title}: ${p.description}`)
-    .join("\n");
+  const projectsText = projects.map((p) => `${p.title}: ${p.description}`).join("\n");
 
   const prompt = `
     You are an expert Career Coach and Technical Recruiter.
@@ -839,9 +808,7 @@ const mockResumeExtraction = () => {
         description: ["Mock bullet 1", "Mock bullet 2"],
       },
     ],
-    education: [
-      { degree: "BS", field: "CS", school: "Mock Univ", date: "2022" },
-    ],
+    education: [{ degree: "BS", field: "CS", school: "Mock Univ", date: "2022" }],
     projects: [
       {
         title: "Mock Project",

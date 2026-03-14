@@ -1,14 +1,14 @@
 const express = require("express");
 const router = express.Router();
 const {
-    getDashboardStats,
-    getAllUsers,
-    updateUserRole,
-    deleteUser,
-    getAllTransactions,
-    getUserDetails,
-    getSettings,
-    updateSettings
+  getDashboardStats,
+  getAllUsers,
+  updateUserRole,
+  deleteUser,
+  getAllTransactions,
+  getUserDetails,
+  getSettings,
+  updateSettings,
 } = require("../controllers/admin.controller");
 const NotificationController = require("../controllers/notification.controller");
 const { protect } = require("../middleware/auth.middleware");
