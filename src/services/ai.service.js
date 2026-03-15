@@ -631,7 +631,20 @@ Return STRICT JSON only. No markdown code blocks. No extra text.
 IMPORTANT:
 - Return ALL roles from WORK EXPERIENCE in the same order provided.
 - Return ALL projects in the same order provided.
-- For "skills", return the candidate's skills PLUS any that can be reasonably inferred from their experience. Do NOT add skills the candidate clearly doesn't have.
+
+═══ SKILLS INFERENCE RULES ═══
+For the "skills" array, you MUST:
+1. Start with ALL skills the candidate explicitly lists or mentions.
+2. INFER additional skills that are clearly implied by their work. Examples of valid inference:
+   - Used React → infer "JavaScript", "HTML", "CSS", "Frontend Development"
+   - Built REST APIs → infer "API Development", "HTTP"
+   - Managed a team → infer "Team Leadership", "Mentoring"
+   - Used Git → infer "Version Control"
+   - Deployed to AWS → infer "Cloud Computing"
+   - Wrote unit tests → infer "Testing", "Quality Assurance"
+3. Include skills from the MISSING KEYWORDS list IF the candidate's experience supports them (even loosely).
+4. Do NOT add skills the candidate clearly has zero connection to.
+5. AIM for 20-30 total skills. More is better than fewer — a rich skills section helps ATS matching.
 `;
 
   try {
@@ -1354,6 +1367,93 @@ const generateStructuredSkills = async (contextData) => {
 };
 
 /**
+ * Categorize an explicit list of skills into professional groups.
+ * Unlike generateStructuredSkills (which extracts from profile), this takes
+ * a pre-built list and just organizes it.
+ *
+ * Also handles deduplication (e.g., "REST APIs" and "RESTful APIs" → keep one).
+ *
+ * @param {string[]} skillsList - All skills to categorize
+ * @param {string} targetJobTitle - Target role for context
+ * @returns {Array<{ name: string, category: string }>}
+ */
+const categorizeSkillsList = async (skillsList, targetJobTitle = "") => {
+  if (!skillsList || skillsList.length === 0) return [];
+
+  if (activeProvider === "mock") {
+    return skillsList.map((s) => ({ name: s, category: "Technical Skills" }));
+  }
+
+  const prompt = `
+You are an expert Resume Skills Organizer who works across ALL industries and professions.
+
+You are given a list of professional skills. Your job is to:
+
+1. DEDUPLICATE — merge obvious duplicates and synonyms into one clean entry. Examples:
+   - "REST APIs" + "RESTful APIs" → keep "REST APIs"
+   - "Git" + "Git & GitHub" → keep "Git & GitHub"
+   - "Problem-solving" + "Problem Solving" → keep "Problem Solving"
+   - Remove meta-labels that aren't real skills (e.g., "Full-stack Development" when specific frontend + backend skills already exist, or "Web Development" when HTML/CSS/JS are listed).
+
+2. CATEGORIZE — group each skill into a specific, domain-appropriate category.
+   - INFER categories from the skills themselves and the target role. Do NOT use a fixed list.
+   - Use 4-7 categories. Each category MUST have at least 2 skills. If a skill would be alone in a category, merge it into a related one.
+   - Category names should be SHORT (2-3 words max) and specific to the profession.
+   - BAD (too generic): "Technical Skills", "Other", "General", "Miscellaneous", "Hard Skills"
+   - The right categories depend entirely on the profession — a nurse, a developer, a chef, and an accountant should all get completely different category names.
+   - SOFT SKILLS RULE: All interpersonal and transferable skills (e.g., Leadership, Communication, Problem Solving, Teamwork, Time Management, Critical Thinking, Creativity, Attention to Detail, Adaptability, Conflict Resolution, etc.) MUST be grouped together under ONE category called "Soft Skills". Never scatter them across other categories or create separate categories for each.
+
+3. ORDER — within each category, most relevant skills to the target role come first.
+
+4. KEEP ALL SKILLS — include every unique skill after deduplication. Do NOT drop skills. Only trim if there are 30+ skills, and never below 20.
+
+SKILLS TO ORGANIZE:
+${skillsList.join(", ")}
+
+TARGET ROLE: ${targetJobTitle || "Professional Role"}
+
+Return STRICT JSON array only. No markdown code blocks. No extra text.
+[
+  { "name": "Skill Name", "category": "Category Name" }
+]
+`;
+
+  try {
+    let resultText = "";
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3,
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
+    }
+
+    let jsonStr = resultText
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+    const startIndex = jsonStr.indexOf("[");
+    const endIndex = jsonStr.lastIndexOf("]");
+    if (startIndex !== -1 && endIndex !== -1) {
+      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+    }
+
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("Skills Categorization Failed:", error);
+    // Fallback: return uncategorized
+    return skillsList.slice(0, 25).map((s) => ({
+      name: s,
+      category: "Skills",
+    }));
+  }
+};
+
+/**
  * Extract job title, company, and location from raw job description text.
  * Lightweight AI call used when users paste text or when scraper returns weak metadata.
  */
@@ -1436,5 +1536,6 @@ module.exports = {
   generateBulletPoints,
   generateSkillsFromContext,
   generateStructuredSkills,
+  categorizeSkillsList,
   activeProvider,
 };

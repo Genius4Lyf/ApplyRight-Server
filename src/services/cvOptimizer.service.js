@@ -261,13 +261,17 @@ const buildOptimizedSkills = (candidateSkills, jobData) => {
  * @param {object} params.candidateData - Original extracted candidate data
  * @param {object} params.jobData - Extracted job requirements
  * @param {object} params.job - Job document (for title)
+ * @param {object[]} [params.categorizedSkills] - Pre-categorized skills from generateStructuredSkills
  * @returns {object} DraftCV-ready object
  */
-const assembleDraftCV = ({ user, aiEnhanced, candidateData, jobData, job }) => {
-  const skills = buildOptimizedSkills(
-    aiEnhanced.skills || candidateData.skills || [],
-    jobData
-  );
+const assembleDraftCV = ({ user, aiEnhanced, candidateData, jobData, job, categorizedSkills }) => {
+  // Use pre-categorized skills if provided, otherwise fall back to basic categorization
+  const skills = categorizedSkills && categorizedSkills.length > 0
+    ? categorizedSkills
+    : buildOptimizedSkills(
+        aiEnhanced.skills || candidateData.skills || [],
+        jobData
+      );
 
   return {
     title: `Optimized for ${job?.title || jobData.detectedJobTitle || "Target Role"}`,
