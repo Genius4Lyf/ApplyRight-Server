@@ -494,6 +494,220 @@ const generateCV = async (resumeText, jobDescription) => {
   }
 };
 
+/**
+ * Enhanced CV Content Generation (Stage 3 of CV Optimizer Pipeline)
+ *
+ * One structured AI call that enhances content per-section with strict rules:
+ * - IMMUTABLE: job titles, company names, dates, school names, degrees
+ * - ENHANCED: professional summary, bullet points, project descriptions
+ * - MODERATE: can infer obvious skills from context, cannot invent achievements
+ *
+ * @param {object} params
+ * @param {object} params.candidateData - Extracted candidate profile
+ * @param {object} params.jobData - Extracted job requirements
+ * @param {object[]} params.rankedExperiences - Relevance-scored experiences
+ * @param {object[]} params.rankedProjects - Relevance-scored projects
+ * @param {string[]} params.missingKeywords - JD keywords not found in resume
+ * @returns {object} Enhanced content: { professionalSummary, experience[], projects[], skills[] }
+ */
+const enhanceCVContent = async ({
+  candidateData,
+  jobData,
+  rankedExperiences,
+  rankedProjects,
+  missingKeywords,
+}) => {
+  if (activeProvider === "mock") {
+    return {
+      professionalSummary:
+        "Results-oriented professional with experience in relevant technologies. Proven track record of delivering quality solutions.",
+      experience: rankedExperiences.map((exp) => ({
+        title: exp.role || exp.title,
+        company: exp.company,
+        startDate: exp.startDate,
+        endDate: exp.endDate,
+        bullets: Array.isArray(exp.description)
+          ? exp.description
+          : [exp.description || "Contributed to team projects."],
+      })),
+      projects: rankedProjects.map((proj) => ({
+        title: proj.title,
+        link: proj.link,
+        bullets: Array.isArray(proj.description)
+          ? proj.description
+          : [proj.description || "Built a project."],
+      })),
+      skills: candidateData.skills || [],
+    };
+  }
+
+  // Build experience context for AI
+  const experienceContext = rankedExperiences
+    .map(
+      (exp, i) =>
+        `ROLE_${i + 1}:
+  Title (IMMUTABLE): "${exp.role || exp.title}"
+  Company (IMMUTABLE): "${exp.company}"
+  Start Date (IMMUTABLE): "${exp.startDate}"
+  End Date (IMMUTABLE): "${exp.endDate}"
+  Relevance Score: ${exp.relevanceScore}/100
+  Target Bullets: ${exp.targetBulletCount}
+  Original Content: "${Array.isArray(exp.description) ? exp.description.join("; ") : exp.description || "No details provided"}"`
+    )
+    .join("\n\n");
+
+  const projectContext = rankedProjects
+    .map(
+      (proj, i) =>
+        `PROJECT_${i + 1}:
+  Title (IMMUTABLE): "${proj.title}"
+  Link (IMMUTABLE): "${proj.link || "none"}"
+  Original Content: "${Array.isArray(proj.description) ? proj.description.join("; ") : proj.description || "No details provided"}"`
+    )
+    .join("\n\n");
+
+  const prompt = `
+You are an expert Resume Optimizer. Your task is to enhance CV content for a specific job application.
+
+TARGET JOB: ${jobData.detectedJobTitle || "Professional Role"} at ${jobData.detectedCompany || "Target Company"}
+
+KEY JOB REQUIREMENTS:
+- Must-have skills: ${(jobData.requiredSkills || []).map((s) => s.name).join(", ") || "None specified"}
+- Preferred skills: ${(jobData.preferredSkills || []).map((s) => s.name).join(", ") || "None specified"}
+- Experience: ${jobData.requiredYearsExperience || 0}+ years
+- Level: ${jobData.seniorityLevel || "mid"}
+
+CANDIDATE PROFILE:
+- Skills: ${(candidateData.skills || []).join(", ")}
+- Total Experience: ${candidateData.totalYearsExperience || 0} years
+- Level: ${candidateData.seniorityLevel || "mid"}
+
+MISSING KEYWORDS (try to naturally incorporate where truthful):
+${missingKeywords.map((k) => k.name).join(", ") || "None"}
+
+═══ STRICT RULES ═══
+1. IMMUTABLE FIELDS: You MUST NOT change job titles, company names, dates, school names, or degrees. Copy them exactly as provided.
+2. NO FABRICATION: Do NOT invent achievements, metrics, or claims not supported by the original content. If original says "managed database", you may say "Administered and maintained database systems" but NOT "Managed database serving 10,000 users" unless that detail exists.
+3. MODERATE INFERENCE: You MAY infer obvious related skills (e.g., if they used React, you can mention JavaScript/frontend development). You MAY reword descriptions to be more achievement-oriented.
+4. KEYWORD INTEGRATION: Where truthful, weave missing keywords into descriptions naturally. Do NOT force irrelevant keywords into unrelated roles.
+5. BULLET FORMAT: Each bullet should start with a strong action verb. Use "Action + Context + Result" format where possible. Keep each bullet under 120 characters.
+6. AUTHORITY MATCHING: Match bullet point authority to role seniority:
+   - Junior/Entry: "Executed", "Supported", "Assisted", "Performed"
+   - Mid: "Developed", "Implemented", "Managed", "Analyzed"
+   - Senior/Lead: "Led", "Designed", "Architected", "Mentored"
+
+═══ WORK EXPERIENCE ═══
+${experienceContext || "No experience provided"}
+
+═══ PROJECTS ═══
+${projectContext || "No projects provided"}
+
+═══ CANDIDATE SUMMARY (to base professional summary on) ═══
+${candidateData.summary || "No summary available"}
+
+═══ OUTPUT FORMAT ═══
+Return STRICT JSON only. No markdown code blocks. No extra text.
+{
+  "professionalSummary": "A compelling 3-4 sentence professional summary. Use candidate's ACTUAL most recent job title. Highlight real skills and experience relevant to the target job. Do NOT upgrade titles.",
+  "experience": [
+    {
+      "title": "EXACT ORIGINAL TITLE — DO NOT CHANGE",
+      "company": "EXACT ORIGINAL COMPANY — DO NOT CHANGE",
+      "startDate": "EXACT ORIGINAL — DO NOT CHANGE",
+      "endDate": "EXACT ORIGINAL — DO NOT CHANGE",
+      "bullets": ["Enhanced bullet 1", "Enhanced bullet 2", "..."]
+    }
+  ],
+  "projects": [
+    {
+      "title": "EXACT ORIGINAL TITLE — DO NOT CHANGE",
+      "link": "EXACT ORIGINAL — DO NOT CHANGE",
+      "bullets": ["Enhanced bullet 1", "Enhanced bullet 2", "Enhanced bullet 3"]
+    }
+  ],
+  "skills": ["Skill1", "Skill2", "..."]
+}
+
+IMPORTANT:
+- Return ALL roles from WORK EXPERIENCE in the same order provided.
+- Return ALL projects in the same order provided.
+- For "skills", return the candidate's skills PLUS any that can be reasonably inferred from their experience. Do NOT add skills the candidate clearly doesn't have.
+`;
+
+  try {
+    let resultText = "";
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3,
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
+    }
+
+    let jsonStr = resultText
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+    const startIndex = jsonStr.indexOf("{");
+    const endIndex = jsonStr.lastIndexOf("}");
+    if (startIndex !== -1 && endIndex !== -1) {
+      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+    }
+
+    const enhanced = JSON.parse(jsonStr);
+
+    // SAFETY: Enforce immutable fields — override AI output with originals
+    if (enhanced.experience) {
+      enhanced.experience = enhanced.experience.map((exp, i) => {
+        const original = rankedExperiences[i];
+        if (original) {
+          exp.title = original.role || original.title || exp.title;
+          exp.company = original.company || exp.company;
+          exp.startDate = original.startDate || exp.startDate;
+          exp.endDate = original.endDate || exp.endDate;
+        }
+        return exp;
+      });
+    }
+
+    if (enhanced.projects) {
+      enhanced.projects = enhanced.projects.map((proj, i) => {
+        const original = rankedProjects[i];
+        if (original) {
+          proj.title = original.title || proj.title;
+          proj.link = original.link || proj.link;
+        }
+        return proj;
+      });
+    }
+
+    return enhanced;
+  } catch (error) {
+    console.error("CV Enhancement AI call failed:", error);
+    // Fallback: return original data with minimal formatting
+    return {
+      professionalSummary: candidateData.summary || "",
+      experience: rankedExperiences.map((exp) => ({
+        title: exp.role || exp.title,
+        company: exp.company,
+        startDate: exp.startDate,
+        endDate: exp.endDate,
+        bullets: Array.isArray(exp.description) ? exp.description : [exp.description || ""],
+      })),
+      projects: rankedProjects.map((proj) => ({
+        title: proj.title,
+        link: proj.link,
+        bullets: Array.isArray(proj.description) ? proj.description : [proj.description || ""],
+      })),
+      skills: candidateData.skills || [],
+    };
+  }
+};
+
 const generateCoverLetter = async (resumeText, jobDescription) => {
   const prompt = `
     You are an expert Career Coach.
@@ -1212,6 +1426,7 @@ module.exports = {
   extractJobRequirements,
   extractCandidateData,
   generateAnalysisFeedback,
+  enhanceCVContent,
   generateOptimizedContent,
   generateCV,
   generateCoverLetter,

@@ -59,7 +59,11 @@ const applicationSchema = new mongoose.Schema(
       },
     },
     optimizedCV: {
-      type: String, // Markdown or HTML content
+      type: String, // Markdown (backwards compatibility)
+    },
+    draftCVId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DraftCV",
     },
     coverLetter: {
       type: String, // Markdown or HTML content
