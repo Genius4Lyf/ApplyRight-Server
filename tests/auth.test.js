@@ -47,9 +47,10 @@ describe("Auth API (Mocked DB)", () => {
   describe("POST /api/auth/register", () => {
     it("should register a new user successfully", async () => {
       const res = await request(app).post("/api/auth/register").send({
+        name: "Test User",
         email: "new@example.com",
         password: "password123",
-        phone: "0987654321",
+        phoneNumber: "0987654321",
       });
 
       expect(res.statusCode).toEqual(201);
@@ -62,9 +63,10 @@ describe("Auth API (Mocked DB)", () => {
       User.findOne.mockResolvedValue(mockUser);
 
       const res = await request(app).post("/api/auth/register").send({
+        name: "Test User",
         email: "test@example.com",
         password: "password123",
-        phone: "1234567890",
+        phoneNumber: "1234567890",
       });
 
       expect(res.statusCode).toEqual(400);
@@ -72,7 +74,7 @@ describe("Auth API (Mocked DB)", () => {
     });
 
     it("should return 400 if fields are missing", async () => {
-      const res = await request(app).post("/api/auth/register").send({ email: "test@example.com" }); // Missing password/phone
+      const res = await request(app).post("/api/auth/register").send({ email: "test@example.com" }); // Missing name/password
 
       expect(res.statusCode).toEqual(400);
     });
