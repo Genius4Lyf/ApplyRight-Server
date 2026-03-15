@@ -3,45 +3,70 @@ const DraftCV = require("../models/DraftCV");
 const Resume = require("../models/Resume");
 const Application = require("../models/Application");
 const extractionService = require("../services/extraction.service");
-const scoringService = require("../services/scoring.service");
-
 const aiService = require("../services/ai.service");
 
+// Credit costs
+const COSTS = {
+  ANALYSIS: 10,
+  GENERATE_CV: 10,
+  GENERATE_COVER_LETTER: 5,
+  GENERATE_INTERVIEW: 5,
+  CREATE_FROM_UPLOAD: 15,
+};
+
+/**
+ * Helper: Check and deduct credits atomically
+ * Returns the updated credit balance, or throws if insufficient
+ */
+const deductCredits = async (user, cost) => {
+  if (user.credits < cost) {
+    const err = new Error("Insufficient credits");
+    err.code = "INSUFFICIENT_CREDITS";
+    err.required = cost;
+    err.current = user.credits;
+    throw err;
+  }
+  user.credits -= cost;
+  await user.updateOne({ credits: user.credits });
+  return user.credits;
+};
+
+/**
+ * Helper: Standard error response for insufficient credits
+ */
+const handleCreditError = (res, err) => {
+  return res.status(403).json({
+    message: "Insufficient credits",
+    code: "INSUFFICIENT_CREDITS",
+    required: err.required,
+    current: err.current,
+  });
+};
+
+/**
+ * POST /analysis/analyze
+ *
+ * Two modes:
+ * - With jobId: Analyze resume vs job (10 credits) → returns fitScore, fitAnalysis, actionPlan
+ * - Without jobId: Create from upload (15 credits) → returns draftId
+ */
 const analyzeFit = async (req, res) => {
   try {
-    const { jobId, resumeId, templateId } = req.body;
+    const { jobId, resumeId } = req.body;
     const userId = req.user._id;
+    const user = req.user;
 
-    // Determine Cost based on operation type
-    // If jobId is present -> Full Analysis (30 credits)
-    // If jobId is missing -> Create/Upload Only (15 credits)
-    const ANALYSIS_COST = jobId ? 30 : 15;
-
-    // 0. Check Credit Balance
-    const user = req.user; // Assuming user is fully attached by middleware
-    if (user.credits < ANALYSIS_COST) {
-      return res.status(403).json({
-        message: "Insufficient credits",
-        code: "INSUFFICIENT_CREDITS",
-        required: ANALYSIS_COST,
-        current: user.credits,
-      });
-    }
-
-    // 1. Fetch Data
-    const job = jobId ? await Job.findById(jobId) : null;
     const resume = await Resume.findById(resumeId);
-
     if (!resume) {
       return res.status(404).json({ message: "Resume not found" });
     }
 
-    // NEW: Handle "Create from Upload" (No Job ID)
+    // ── Create from Upload (no job) ──
     if (!jobId) {
-      // 1. Extract Data
+      const remainingCredits = await deductCredits(user, COSTS.CREATE_FROM_UPLOAD);
+
       const extractedData = await aiService.extractResumeProfile(resume.rawText);
 
-      // 1b. Generate Categorized Skills using AI
       const structuredSkills = await aiService.generateStructuredSkills({
         education: extractedData.education,
         experience: extractedData.experience,
@@ -49,14 +74,13 @@ const analyzeFit = async (req, res) => {
         targetJob: null,
       });
 
-      // 2. Create Draft
       const draft = await DraftCV.create({
         userId,
         title: "Uploaded Resume",
         source: "upload",
         personalInfo: {
-          fullName: req.user.firstName ? `${req.user.firstName} ${req.user.lastName}` : "Candidate",
-          email: req.user.email,
+          fullName: user.firstName ? `${user.firstName} ${user.lastName}` : "Candidate",
+          email: user.email,
         },
         professionalSummary: extractedData.summary || "",
         experience:
@@ -65,7 +89,6 @@ const analyzeFit = async (req, res) => {
             company: e.company,
             startDate: e.startDate,
             endDate: e.endDate,
-            // If description is array, join distinct bullets. If string, use as is.
             description: Array.isArray(e.description)
               ? e.description.map((d) => `• ${d}`).join("\n")
               : e.description || "",
@@ -96,38 +119,28 @@ const analyzeFit = async (req, res) => {
         isComplete: true,
       });
 
-      // 3. Deduct Credits for Upload
-      user.credits -= ANALYSIS_COST;
-      await user.updateOne({ credits: user.credits });
-
       return res.status(200).json({
         message: "Resume parsed successfully",
         draftId: draft._id,
         fitScore: null,
         fitAnalysis: null,
-        remainingCredits: user.credits, // Return new balance
+        remainingCredits,
       });
     }
 
+    // ── Analysis Flow (with job) ──
+    const job = await Job.findById(jobId);
     if (!job) {
       return res.status(404).json({ message: "Job not found" });
     }
 
-    // 2. Perform Extraction (if not already done)
-    if (!job.analysis || job.analysis.skills.length === 0) {
-      const extractedJob = extractionService.extractRequirements(job.description);
-      job.analysis = extractedJob;
-      await job.save();
-    }
+    // Check credits before any AI calls
+    const remainingCredits = await deductCredits(user, COSTS.ANALYSIS);
 
-    // 3. AI Analysis (replaces old manual extraction + scoringService logic if AI is active)
-    // We get a smarter profile analysis from the AI
+    // ── New Pipeline: Extract → Score → Feedback ──
     const aiResult = await aiService.analyzeProfile(resume.rawText, job.description);
 
-    // Update Job Metadata with AI-detected title/company
-    // The AI prompt strictly extracts these from the JOB DESCRIPTION only (not the resume)
-    // Scraped titles from HTML (h1/title tags) are often unreliable (e.g., page titles, link text)
-    // so the AI analysis of the actual job description content is the better source of truth
+    // Update job metadata from AI detection
     if (aiResult.detectedJobTitle) {
       job.title = aiResult.detectedJobTitle;
     }
@@ -136,78 +149,38 @@ const analyzeFit = async (req, res) => {
     }
     await job.save();
 
-    // Map AI result to our standard format
-    let fitScore = aiResult.fitScore;
-    let fitAnalysis = {
-      overallFeedback: aiResult.reasoning || "Analysis complete.",
-      skillsGap: aiResult.missingSkills || [],
-
-      // Use AI detailed analysis if available, otherwise fallback to simple heuristics
-      experienceMatch:
-        aiResult.experienceAnalysis?.match ??
-        aiResult.experienceYears >= (job.analysis?.experience?.minYears || 0),
-      experienceFeedback:
-        aiResult.experienceAnalysis?.feedback ||
-        (aiResult.experienceYears >= (job.analysis?.experience?.minYears || 0)
-          ? "Meets requirements"
-          : "Less than preferred"),
-
-      seniorityMatch: aiResult.seniorityAnalysis?.match ?? true,
-      seniorityFeedback: aiResult.seniorityAnalysis?.feedback || "Aligned with role",
-
+    // Map pipeline result to structured format
+    const fitScore = aiResult.fitScore;
+    const fitAnalysis = {
+      overallFeedback: aiResult.overallFeedback || "Analysis complete.",
       recommendation: aiResult.recommendation,
-      mode: aiResult.mode, // "AI" or "Standard"
+      mode: aiResult.mode,
+      matchedSkills: aiResult.matchedSkills || [],
+      missingSkills: aiResult.missingSkills || [],
+      experienceAnalysis: {
+        candidateYears: aiResult.experienceAnalysis?.candidateYears ?? 0,
+        requiredYears: aiResult.experienceAnalysis?.requiredYears ?? 0,
+        match: aiResult.experienceAnalysis?.match ?? true,
+        feedback: aiResult.experienceAnalysis?.feedback || "Meets requirements",
+      },
+      seniorityAnalysis: {
+        candidateLevel: aiResult.seniorityAnalysis?.candidateLevel || "mid",
+        requiredLevel: aiResult.seniorityAnalysis?.requiredLevel || "mid",
+        match: aiResult.seniorityAnalysis?.match ?? true,
+        feedback: aiResult.seniorityAnalysis?.feedback || "Aligned with role",
+      },
+      scoreBreakdown: {
+        skillsScore: aiResult.scoreBreakdown?.skillsScore ?? fitScore,
+        experienceScore: aiResult.scoreBreakdown?.experienceScore ?? fitScore,
+        educationScore: aiResult.scoreBreakdown?.educationScore ?? fitScore,
+        seniorityScore: aiResult.scoreBreakdown?.seniorityScore ?? fitScore,
+        overallScore: aiResult.scoreBreakdown?.overallScore ?? fitScore,
+      },
     };
 
-    // 3b. Generate Smart Action Plan
-    // If AI provided an action plan, use it. Otherwise fallback to hardcoded actions.
-    const actionPlan =
-      aiResult.actionPlan || scoringService.generateActionPlan(fitAnalysis.skillsGap);
+    const actionPlan = aiResult.actionPlan || [];
 
-    // 3c. Generate Professional Assets (NEW: merged into analysis flow)
-    // We use the same service that was used in the separate /generate endpoint
-    const { optimizedCV, coverLetter } = await aiService.generateOptimizedContent(
-      resume.rawText,
-      job.description,
-      {
-        graduationYear: req.user.graduationYear,
-      }
-    );
-
-    const { questionsToAnswer: interviewQuestions, questionsToAsk } =
-      await aiService.generateInterviewQuestions(job.description, []);
-
-    // 3d. Generate Categorized Skills for Application Record
-    // We use the AI analysis data if possible, or parsing data
-    const skillsContext = {
-      education: resume.education, // Assuming resume model has parsed data? Or we rely on text?
-      experience: [], // Resume Extract Service might be needed here if resume.rawText is all we have.
-      // Simplified: We pass nulls and let the AI do its best with limited context or we rely on the previous extraction?
-      // BETTER APPROACH: We don't have parsed data easily available here unless we re-parse.
-      // HOWEVER, we have 'aiResult' which might have some info, but 'extractionService' data is on 'job' not 'resume'.
-      // Let's assume for now we use a simpler context derived from AI or skip if empty.
-      // ACTUALLY: The user pays 17 credits. We should redo extraction if needed or use what we have.
-      // Let's use aiService.extractResumeProfile again? No, expensive.
-      // Let's rely on `aiService.analyzeProfile` - maybe update it to return structured skills?
-      // DIFFERENT STRATEGY: We call generateSkillsFromContext just with what we know.
-      // Since we don't have parsed resume object here (only rawText), let's skip re-parsing for now to avoid latency.
-      // We will just create an empty/basic set or rely on what's in the DraftCV if it exists?
-      // Issue: `resume` model might just be { rawText }.
-      // SOLUTION: We'll skip skills generation for Analysis flow *unless* we want to enable it.
-      // The requirement says "Analysis Flow: Call generateSkillsFromContext and save...".
-      // So we MUST extract.
-    };
-
-    // Quick extraction for context
-    const resumeDataForSkills = await aiService.extractResumeProfile(resume.rawText);
-    const structuredSkillsApp = await aiService.generateStructuredSkills({
-      education: resumeDataForSkills.education,
-      experience: resumeDataForSkills.experience,
-      projects: resumeDataForSkills.projects,
-      targetJob: job,
-    });
-
-    // 4. Save/Update Application Record
+    // Save or update Application — analysis fields only
     let application = await Application.findOne({ userId, jobId, resumeId });
 
     if (!application) {
@@ -215,68 +188,209 @@ const analyzeFit = async (req, res) => {
         userId,
         jobId,
         resumeId,
-        fitScore: fitScore,
-        fitAnalysis: fitAnalysis,
-        actionPlan: actionPlan,
-        optimizedCV: optimizedCV,
-        coverLetter: coverLetter,
-        interviewQuestions: interviewQuestions,
-        questionsToAsk: questionsToAsk, // NEW
-        templateId: templateId || "ats-clean", // Default template
-        skills: (structuredSkillsApp || []).map((s) => ({ ...s, isAutoGenerated: true })),
+        fitScore,
+        fitAnalysis,
+        actionPlan,
       });
     } else {
       application.fitScore = fitScore;
       application.fitAnalysis = fitAnalysis;
       application.actionPlan = actionPlan;
-      // Only update assets if they haven't been customized?
-      // For now, we overwrite on re-analysis to keep fresh with the new analysis
-      application.optimizedCV = optimizedCV;
-      application.coverLetter = coverLetter;
-      application.interviewQuestions = interviewQuestions;
-      application.questionsToAsk = questionsToAsk; // NEW
-      application.skills = (structuredSkillsApp || []).map((s) => ({
-        ...s,
-        isAutoGenerated: true,
-      }));
-      if (templateId) application.templateId = templateId;
     }
 
     await application.save();
 
-    // 5. Return Result
-    // 5. Deduct Credits
-    user.credits -= ANALYSIS_COST;
-    await user.updateOne({ credits: user.credits });
-
     res.status(200).json({
-      fitScore: fitScore,
-      fitAnalysis: fitAnalysis,
-      actionPlan: actionPlan,
-      optimizedCV: optimizedCV,
-      coverLetter: coverLetter,
-      interviewQuestions: interviewQuestions,
-      questionsToAsk: questionsToAsk,
+      fitScore,
+      fitAnalysis,
+      actionPlan,
       applicationId: application._id,
-      templateId: application.templateId,
-      job: job, // NEW: Return updated job details
-      remainingCredits: user.credits, // Return new balance
+      job,
+      remainingCredits,
     });
   } catch (error) {
-    console.error("Analysis Error Details:", {
+    if (error.code === "INSUFFICIENT_CREDITS") {
+      return handleCreditError(res, error);
+    }
+    console.error("Analysis Error:", {
       message: error.message,
       stack: error.stack,
-      body: req.body,
-      user: req.user ? req.user._id : "No User",
     });
     res.status(500).json({
       message: "Failed to analyze fit",
       error: error.message,
-      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
   }
 };
 
+/**
+ * POST /analysis/:id/generate-cv
+ *
+ * Generate an optimized CV for an existing application (10 credits)
+ */
+const generateApplicationCV = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { templateId } = req.body || {};
+    const userId = req.user._id;
+    const user = req.user;
+
+    const application = await Application.findOne({ _id: id, userId });
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    const [resume, job] = await Promise.all([
+      Resume.findById(application.resumeId),
+      Job.findById(application.jobId),
+    ]);
+
+    if (!resume || !job) {
+      return res.status(404).json({ message: "Resume or Job not found" });
+    }
+
+    const remainingCredits = await deductCredits(user, COSTS.GENERATE_CV);
+
+    // Generate CV and extract structured skills in parallel
+    const [optimizedCV, resumeData] = await Promise.all([
+      aiService.generateCV(resume.rawText, job.description),
+      aiService.extractResumeProfile(resume.rawText),
+    ]);
+
+    const structuredSkills = await aiService.generateStructuredSkills({
+      education: resumeData.education,
+      experience: resumeData.experience,
+      projects: resumeData.projects,
+      targetJob: job,
+    });
+
+    // Update application
+    application.optimizedCV = optimizedCV;
+    application.skills = (structuredSkills || []).map((s) => ({
+      ...s,
+      isAutoGenerated: true,
+    }));
+    if (templateId) application.templateId = templateId;
+    await application.save();
+
+    res.status(200).json({
+      optimizedCV,
+      skills: application.skills,
+      templateId: application.templateId,
+      remainingCredits,
+    });
+  } catch (error) {
+    if (error.code === "INSUFFICIENT_CREDITS") {
+      return handleCreditError(res, error);
+    }
+    console.error("CV Generation Error:", error.message);
+    res.status(500).json({
+      message: "Failed to generate CV",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * POST /analysis/:id/generate-cover-letter
+ *
+ * Generate a cover letter for an existing application (5 credits)
+ */
+const generateApplicationCoverLetter = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+    const user = req.user;
+
+    const application = await Application.findOne({ _id: id, userId });
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    const [resume, job] = await Promise.all([
+      Resume.findById(application.resumeId),
+      Job.findById(application.jobId),
+    ]);
+
+    if (!resume || !job) {
+      return res.status(404).json({ message: "Resume or Job not found" });
+    }
+
+    const remainingCredits = await deductCredits(user, COSTS.GENERATE_COVER_LETTER);
+
+    const coverLetter = await aiService.generateCoverLetter(resume.rawText, job.description);
+
+    application.coverLetter = coverLetter;
+    await application.save();
+
+    res.status(200).json({
+      coverLetter,
+      remainingCredits,
+    });
+  } catch (error) {
+    if (error.code === "INSUFFICIENT_CREDITS") {
+      return handleCreditError(res, error);
+    }
+    console.error("Cover Letter Generation Error:", error.message);
+    res.status(500).json({
+      message: "Failed to generate cover letter",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * POST /analysis/:id/generate-interview
+ *
+ * Generate interview prep for an existing application (5 credits)
+ */
+const generateApplicationInterview = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+    const user = req.user;
+
+    const application = await Application.findOne({ _id: id, userId });
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    const job = await Job.findById(application.jobId);
+    if (!job) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    const remainingCredits = await deductCredits(user, COSTS.GENERATE_INTERVIEW);
+
+    const { questionsToAnswer: interviewQuestions, questionsToAsk } =
+      await aiService.generateInterviewQuestions(job.description, []);
+
+    application.interviewQuestions = interviewQuestions;
+    application.questionsToAsk = questionsToAsk;
+    await application.save();
+
+    res.status(200).json({
+      interviewQuestions,
+      questionsToAsk,
+      remainingCredits,
+    });
+  } catch (error) {
+    if (error.code === "INSUFFICIENT_CREDITS") {
+      return handleCreditError(res, error);
+    }
+    console.error("Interview Generation Error:", error.message);
+    res.status(500).json({
+      message: "Failed to generate interview prep",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * POST /analysis/:id/edit
+ *
+ * Create a DraftCV from an application's optimized CV for editing in the builder
+ */
 const editApplication = async (req, res) => {
   try {
     const { id } = req.params;
@@ -287,40 +401,32 @@ const editApplication = async (req, res) => {
       return res.status(404).json({ message: "Application not found" });
     }
 
-    // We use the same extraction service to parse the Optimized CV (Markdown)
-    // treating it as if it were a resume text.
     const cvText = application.optimizedCV || "";
     if (!cvText) {
-      return res.status(400).json({ message: "No CV content to edit" });
+      return res.status(400).json({ message: "No CV content to edit. Generate a CV first." });
     }
 
-    // 1. Extract Structured Data from the Markdown
+    // Extract structured data from the optimized CV markdown
     const extractedData = await aiService.extractResumeProfile(cvText);
 
-    // 1b. Generate Structured Skills (or reuse existing if we trust them?
-    // Logic: Application has structured skills now. We should prefer those!)
-    // However, extractedData.skills might differ.
-    // Let's use the Application's stored skills if available, otherwise regenerate.
+    // Use stored skills if available, otherwise regenerate
     let structuredSkills = [];
     if (application.skills && application.skills.length > 0) {
       structuredSkills = application.skills.map((s) => ({
         name: s.name,
         category: s.category,
-        isAutoGenerated: true, // Assume true for simplicity or check schema
+        isAutoGenerated: true,
       }));
     } else {
-      // Fallback: Generate from context
       structuredSkills = await aiService.generateStructuredSkills({
         education: extractedData.education,
         experience: extractedData.experience,
         projects: extractedData.projects,
-        targetJob: null, // Generic skills
+        targetJob: null,
       });
-      // Map to DraftCV schema format
       structuredSkills = structuredSkills.map((s) => ({ ...s, isAutoGenerated: true }));
     }
 
-    // 2. Create Draft
     const draft = await DraftCV.create({
       userId,
       title: `Edit of ${application.jobId ? (await Job.findById(application.jobId))?.title || "Application" : "Application"}`,
@@ -374,5 +480,8 @@ const editApplication = async (req, res) => {
 
 module.exports = {
   analyzeFit,
+  generateApplicationCV,
+  generateApplicationCoverLetter,
+  generateApplicationInterview,
   editApplication,
 };

@@ -1,10 +1,30 @@
 const { scrapeJob } = require("../services/jobScraper.service");
 const Job = require("../models/Job");
 const extractionService = require("../services/extraction.service");
+const aiService = require("../services/ai.service");
 
-// @desc    Extract job details from URL
-// @route   POST /api/jobs/extract
-// @access  Private
+/**
+ * Check if scraped metadata looks unreliable and needs AI fallback.
+ */
+const isWeakMetadata = (title, company) => {
+  if (!title || !company) return true;
+  if (company === "Unknown Company") return true;
+
+  // Page-title patterns: "Title | Site", "Title - Site - More"
+  const pageTitlePatterns = [" | ", " — ", " :: "];
+  if (pageTitlePatterns.some((p) => title.includes(p))) return true;
+
+  // Company is a job board, not the actual employer
+  const jobBoards = [
+    "linkedin", "indeed", "glassdoor", "jobberman", "myjobbermag",
+    "careers", "jobs", "workday", "lever", "greenhouse", "bamboohr",
+  ];
+  const lowerCompany = company.toLowerCase();
+  if (jobBoards.some((board) => lowerCompany.includes(board))) return true;
+
+  return false;
+};
+
 // @desc    Extract job details from URL or Description
 // @route   POST /api/jobs/extract
 // @access  Private
@@ -16,39 +36,61 @@ const extractJob = async (req, res) => {
   }
 
   try {
-    let jobData = {};
+    let title = "";
+    let company = "";
+    let jobDescription = "";
+    let finalUrl = "";
 
     if (jobUrl) {
-      jobData = await scrapeJob(jobUrl);
+      // ── URL Path: Scrape then validate ──
+      const scraped = await scrapeJob(jobUrl);
+      title = scraped.title || "";
+      company = scraped.company || "";
+      jobDescription = scraped.description || "";
+      finalUrl = scraped.jobUrl || jobUrl;
+
+      // If scraper returned weak metadata, use AI to extract from the scraped text
+      if (isWeakMetadata(title, company) && jobDescription.length > 50) {
+        const aiMeta = await aiService.extractJobMetadata(jobDescription);
+        if (aiMeta.title) title = aiMeta.title;
+        if (aiMeta.company) company = aiMeta.company;
+      }
     } else {
-      // Text-only mode
-      jobData = {
-        title: "Job Application", // Could be improved with NLP to extract title
-        company: "Unknown Company",
-        description: description,
-        jobUrl: "",
-        keywords: [],
-      };
+      // ── Text Path: Use AI to extract title and company from pasted text ──
+      jobDescription = description;
+
+      const aiMeta = await aiService.extractJobMetadata(description);
+      title = aiMeta.title || "Untitled Job";
+      company = aiMeta.company || "Unknown Company";
     }
 
-    // Perform analysis on the description (scraped or provided)
-    const analysis = extractionService.extractRequirements(jobData.description || description);
+    // Clean up title — strip page-title suffixes the scraper might have kept
+    // e.g. "Senior Engineer | LinkedIn" → "Senior Engineer"
+    const titleSeparators = [" | ", " — ", " :: ", " - "];
+    for (const sep of titleSeparators) {
+      if (title.includes(sep)) {
+        title = title.split(sep)[0].trim();
+        break;
+      }
+    }
 
-    // Ensure required fields for Mongoose validation are present
+    // Keyword extraction (lightweight, deterministic — runs on every job)
+    const analysis = extractionService.extractRequirements(jobDescription);
+
     const jobToSave = {
-      title: jobData.title || "Untitled Job",
-      company: jobData.company || "Unknown Company",
-      description: jobData.description || description || "No description available",
-      jobUrl: jobData.jobUrl || jobUrl || "",
-      keywords: analysis.skills.map((s) => s.name) || [], // Populate keywords from analysis
-      analysis: analysis, // Save the detailed analysis
+      title: title || "Untitled Job",
+      company: company || "Unknown Company",
+      description: jobDescription || "No description available",
+      jobUrl: finalUrl,
+      keywords: analysis.skills.map((s) => s.name) || [],
+      analysis: analysis,
     };
 
     const job = await Job.create(jobToSave);
 
     res.status(200).json(job);
   } catch (error) {
-    console.error(error);
+    console.error("Job extraction error:", error.message);
     if (error.message === "ACCESS_DENIED") {
       return res.status(403).json({ message: "Access denied to job URL" });
     }

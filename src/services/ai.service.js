@@ -23,58 +23,78 @@ if (process.env.OPENAI_API_KEY) {
   console.log("   Action: Falling back to Mock Mode. Real analysis will not work.\n");
 }
 
-const analyzeProfile = async (resumeText, jobDescription) => {
+/**
+ * Smart truncation: keeps content from both the start and end of the text
+ * so that sections at the bottom (skills, education) aren't lost.
+ * If the text fits within maxLen, returns it as-is.
+ */
+const smartTruncate = (text, maxLen) => {
+  if (!text || text.length <= maxLen) return text || "";
+  const headSize = Math.ceil(maxLen * 0.7);
+  const tailSize = maxLen - headSize - 20; // 20 chars for separator
+  const head = text.substring(0, headSize);
+  const tail = text.substring(text.length - tailSize);
+  return `${head}\n\n[... content trimmed ...]\n\n${tail}`;
+};
+
+/**
+ * Extract structured requirements from a job description.
+ * Returns skills (classified by importance), experience requirements,
+ * education requirements, seniority level, and metadata.
+ */
+const extractJobRequirements = async (jobDescription) => {
   if (activeProvider === "mock") {
-    return mockAnalysis();
+    return {
+      detectedJobTitle: "Software Engineer",
+      detectedCompany: "Mock Company",
+      requiredSkills: [
+        { name: "JavaScript", importance: "must_have" },
+        { name: "React", importance: "must_have" },
+      ],
+      preferredSkills: [
+        { name: "Docker", importance: "nice_to_have" },
+      ],
+      requiredYearsExperience: 3,
+      requiredEducation: { degree: "Bachelor's", field: "Computer Science" },
+      seniorityLevel: "mid",
+    };
   }
 
   const prompt = `
-    You are an expert HR Recruiter and Technical Hiring Manager.
-    Analyze the following Candidate Resume against the Job Description.
+    You are a Job Description Parser. Extract ONLY factual requirements from this job posting.
+    Do NOT infer or assume — only extract what is explicitly stated or very strongly implied.
 
     JOB DESCRIPTION:
-    ${jobDescription.substring(0, 2000)}
+    ${smartTruncate(jobDescription, 16000)}
 
-    RESUME:
-    ${resumeText.substring(0, 2000)}
+    INSTRUCTIONS:
+    1. "detectedJobTitle": The specific role being advertised. Look for "Position:", "Role:", "Job Title:", or the main heading. Do NOT include the company name.
+    2. "detectedCompany": The hiring company. Ignore recruitment agencies and job boards (e.g., "Jobberman", "LinkedIn"). If not found, use null.
+    3. "requiredSkills": Skills explicitly listed under "Requirements", "Must have", "Required", or strongly emphasized. Each as { "name": "<skill>", "importance": "must_have" }.
+    4. "preferredSkills": Skills listed under "Preferred", "Nice to have", "Bonus", or mentioned casually. Each as { "name": "<skill>", "importance": "nice_to_have" }.
+    5. "requiredYearsExperience": Number of years explicitly required (e.g., "3+ years"). If not stated, use 0.
+    6. "requiredEducation": { "degree": "<minimum degree>", "field": "<field if specified>" }. If not stated, use null.
+    7. "seniorityLevel": One of "intern", "entry", "mid", "senior", "lead", "manager", "director", "executive". Infer from title and requirements.
 
-    EXTRACT METADATA (CRITICAL — use JOB DESCRIPTION section ONLY):
-    - "detectedJobTitle": Extract the specific role being advertised in the JOB DESCRIPTION above. Do NOT use any role from the RESUME (the candidate's past titles are irrelevant here). Look for phrases like "We are hiring a...", "Position:", "Role:", or the main heading.
-    - "detectedCompany": Extract the hiring company from the JOB DESCRIPTION above. Do NOT use any company from the RESUME. Ignore recruitment agencies (e.g., "Jobberman", "Work Link") and look for the actual employer.
-
-    Output a JSON object ONLY. Do not output markdown code blocks. Structure:
+    Return STRICT JSON only. No markdown code blocks. No extra text.
     {
-        "detectedJobTitle": "<role_from_JOB_DESCRIPTION_only>",
-        "detectedCompany": "<company_from_JOB_DESCRIPTION_only>",
-        "skills": ["matched_skill_1", "matched_skill_2"],
-        "missingSkills": ["important_missing_skill"],
-        "experienceYears": <integer_estimate_of_total_relevant_experience>,
-        "seniority": "<one_of: entry, mid, senior, executive>",
-        "experienceAnalysis": {
-            "match": <boolean>,
-            "feedback": "<short_string_e.g._Less_than_preferred_or_Meets_requirements>"
-        },
-        "seniorityAnalysis": {
-            "match": <boolean>,
-            "feedback": "<short_string_e.g._Aligned_with_role_or_Overqualified>"
-        },
-        "reasoning": "<short_sentence_explaining_seniority_and_fit>",
-        "fitScore": <integer_0_to_100_based_on_overall_match>,
-        "recommendation": "<short_advice_for_candidate>",
-        "actionPlan": [
-            { "skill": "missing_skill_1", "action": "Specific, actionable advice (e.g., Build a project using X...)" }
-        ]
+        "detectedJobTitle": "...",
+        "detectedCompany": "...",
+        "requiredSkills": [{ "name": "...", "importance": "must_have" }],
+        "preferredSkills": [{ "name": "...", "importance": "nice_to_have" }],
+        "requiredYearsExperience": 0,
+        "requiredEducation": { "degree": "...", "field": "..." },
+        "seniorityLevel": "..."
     }
     `;
 
   try {
     let resultText = "";
-
     if (activeProvider === "openai") {
       const response = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo", // Cost effective
+        model: "gpt-3.5-turbo",
         messages: [{ role: "user", content: prompt }],
-        temperature: 0.2, // Low creativity for analysis
+        temperature: 0.1,
       });
       resultText = response.choices[0].message.content;
     } else if (activeProvider === "gemini") {
@@ -82,18 +102,232 @@ const analyzeProfile = async (resumeText, jobDescription) => {
       resultText = result.response.text();
     }
 
-    // Clean up markdown code blocks if AI adds them
-    const jsonStr = resultText
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
+    let jsonStr = resultText.replace(/```json/g, "").replace(/```/g, "").trim();
+    const startIndex = jsonStr.indexOf("{");
+    const endIndex = jsonStr.lastIndexOf("}");
+    if (startIndex !== -1 && endIndex !== -1) {
+      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+    }
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("AI Job Extraction Failed:", error);
     return {
-      ...JSON.parse(jsonStr),
+      detectedJobTitle: null,
+      detectedCompany: null,
+      requiredSkills: [],
+      preferredSkills: [],
+      requiredYearsExperience: 0,
+      requiredEducation: null,
+      seniorityLevel: "mid",
+    };
+  }
+};
+
+/**
+ * Extract structured candidate data from resume text.
+ * Lighter version of extractResumeProfile focused on analysis needs.
+ */
+const extractCandidateData = async (resumeText) => {
+  if (activeProvider === "mock") {
+    return {
+      skills: ["JavaScript", "React", "Node.js"],
+      totalYearsExperience: 2,
+      seniorityLevel: "entry",
+      education: [{ degree: "Bachelor's", field: "Computer Science", school: "Mock Univ" }],
+      experience: [{ role: "Developer", company: "Mock Co", years: 2 }],
+      projects: [{ title: "Mock Project" }],
+      summary: "Mock candidate summary.",
+    };
+  }
+
+  const prompt = `
+    You are an expert Resume Analyzer. Extract structured data for job matching.
+
+    RESUME TEXT:
+    ${smartTruncate(resumeText, 16000)}
+
+    INSTRUCTIONS:
+    1. "skills": ALL skills, tools, technologies, and competencies demonstrated (through experience, projects, education, or explicit listing). Be thorough — include implied skills too (e.g., if they built a REST API, include "REST APIs", "API Development").
+    2. "totalYearsExperience": Total PROFESSIONAL years of experience. Calculate from work history dates. Round to nearest integer.
+    3. "seniorityLevel": One of "intern", "entry", "mid", "senior", "lead", "manager", "director", "executive". Based on most recent titles and total experience.
+    4. "education": Array of { "degree": "...", "field": "...", "school": "..." }.
+    5. "experience": Array of { "role": "...", "company": "...", "years": <number> } — years at each role.
+    6. "projects": Array of { "title": "..." } — project names if any.
+    7. "summary": A brief 1-2 sentence summary of who this candidate is professionally.
+
+    Return STRICT JSON only. No markdown code blocks:
+    {
+        "skills": ["..."],
+        "totalYearsExperience": 0,
+        "seniorityLevel": "...",
+        "education": [{ "degree": "...", "field": "...", "school": "..." }],
+        "experience": [{ "role": "...", "company": "...", "years": 0 }],
+        "projects": [{ "title": "..." }],
+        "summary": "..."
+    }
+    `;
+
+  try {
+    let resultText = "";
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.1,
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
+    }
+
+    let jsonStr = resultText.replace(/```json/g, "").replace(/```/g, "").trim();
+    const startIndex = jsonStr.indexOf("{");
+    const endIndex = jsonStr.lastIndexOf("}");
+    if (startIndex !== -1 && endIndex !== -1) {
+      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+    }
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("AI Candidate Extraction Failed:", error);
+    return {
+      skills: [],
+      totalYearsExperience: 0,
+      seniorityLevel: "mid",
+      education: [],
+      experience: [],
+      projects: [],
+      summary: "",
+    };
+  }
+};
+
+/**
+ * Generate human-readable feedback constrained by pre-computed scores.
+ * AI writes the narrative but cannot change the numbers.
+ */
+const generateAnalysisFeedback = async (scoringResult, candidateData, jobData) => {
+  if (activeProvider === "mock") {
+    return {
+      overallFeedback: "Analysis performed in Mock/Offline Mode. Add an API key for real analysis.",
+      recommendation: "Add an API Key to enable AI analysis.",
+    };
+  }
+
+  const prompt = `
+    You are an expert Career Advisor. Write human-readable feedback for a job fit analysis.
+    The scores have ALREADY been computed deterministically — you MUST NOT change them.
+    Your job is ONLY to explain the results in a helpful, encouraging way.
+
+    COMPUTED RESULTS (DO NOT MODIFY):
+    - Fit Score: ${scoringResult.fitScore}/100
+    - Skills Score: ${scoringResult.scoreBreakdown.skillsScore}/100
+    - Experience Score: ${scoringResult.scoreBreakdown.experienceScore}/100
+    - Education Score: ${scoringResult.scoreBreakdown.educationScore}/100
+    - Seniority Score: ${scoringResult.scoreBreakdown.seniorityScore}/100
+    - Matched Skills: ${scoringResult.matchedSkills.map(s => s.name).join(", ") || "None"}
+    - Missing Skills: ${scoringResult.missingSkills.map(s => s.name).join(", ") || "None"}
+    - Experience: ${scoringResult.experienceAnalysis.candidateYears} years (need ${scoringResult.experienceAnalysis.requiredYears})
+    - Candidate Level: ${scoringResult.seniorityAnalysis.candidateLevel}
+    - Required Level: ${scoringResult.seniorityAnalysis.requiredLevel}
+
+    CANDIDATE SUMMARY: ${candidateData.summary || "Not available"}
+    JOB TITLE: ${jobData.detectedJobTitle || "Unknown"}
+    COMPANY: ${jobData.detectedCompany || "Unknown"}
+
+    INSTRUCTIONS:
+    1. Write "overallFeedback": 2-3 sentences summarizing the fit. Mention strengths first, then gaps. Be specific.
+    2. Write "recommendation": 1-2 sentences of actionable advice. Be specific about what to do (not generic).
+
+    Return STRICT JSON only:
+    {
+        "overallFeedback": "...",
+        "recommendation": "..."
+    }
+    `;
+
+  try {
+    let resultText = "";
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.4,
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
+    }
+
+    let jsonStr = resultText.replace(/```json/g, "").replace(/```/g, "").trim();
+    const startIndex = jsonStr.indexOf("{");
+    const endIndex = jsonStr.lastIndexOf("}");
+    if (startIndex !== -1 && endIndex !== -1) {
+      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+    }
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("AI Feedback Generation Failed:", error);
+    return {
+      overallFeedback: `Your fit score is ${scoringResult.fitScore}/100. ${scoringResult.matchedSkills.length} skills matched, ${scoringResult.missingSkills.length} skills missing.`,
+      recommendation: scoringResult.recommendation === "strong_match"
+        ? "You're a strong match. Tailor your resume keywords to mirror the job description."
+        : "Focus on addressing skill gaps and highlighting transferable experience.",
+    };
+  }
+};
+
+/**
+ * NEW PIPELINE: analyzeProfile
+ *
+ * Stage 1: Extract candidate data from resume (AI)
+ * Stage 2: Extract job requirements from JD (AI)
+ * Stage 3: Normalize skills & compute deterministic score (no AI)
+ * Stage 4: Generate human-readable feedback constrained by scores (AI)
+ */
+const { computeFitScore } = require("./scoringEngine.service");
+
+const analyzeProfile = async (resumeText, jobDescription) => {
+  if (activeProvider === "mock") {
+    return mockAnalysis();
+  }
+
+  try {
+    // Stage 1 & 2: Parallel AI extraction (resume + JD)
+    console.log("[Analysis Pipeline] Stage 1-2: Extracting candidate & job data...");
+    const [candidateData, jobData] = await Promise.all([
+      extractCandidateData(resumeText),
+      extractJobRequirements(jobDescription),
+    ]);
+
+    // Stage 3: Deterministic scoring (no AI)
+    console.log("[Analysis Pipeline] Stage 3: Computing deterministic scores...");
+    const scoringResult = computeFitScore({ candidateData, jobData });
+
+    // Stage 4: AI feedback constrained by scores
+    console.log("[Analysis Pipeline] Stage 4: Generating feedback...");
+    const feedback = await generateAnalysisFeedback(scoringResult, candidateData, jobData);
+
+    console.log("[Analysis Pipeline] Complete. Fit score:", scoringResult.fitScore);
+
+    return {
+      detectedJobTitle: jobData.detectedJobTitle,
+      detectedCompany: jobData.detectedCompany,
+      fitScore: scoringResult.fitScore,
+      matchedSkills: scoringResult.matchedSkills,
+      missingSkills: scoringResult.missingSkills,
+      experienceAnalysis: scoringResult.experienceAnalysis,
+      seniorityAnalysis: scoringResult.seniorityAnalysis,
+      scoreBreakdown: scoringResult.scoreBreakdown,
+      overallFeedback: feedback.overallFeedback,
+      recommendation: feedback.recommendation,
+      actionPlan: scoringResult.actionPlan,
       mode: "AI",
       provider: activeProvider,
     };
   } catch (error) {
-    console.error("AI Analysis Failed, falling back to mock:", error);
+    console.error("Analysis Pipeline Failed, falling back to mock:", error);
     return mockAnalysis();
   }
 };
@@ -188,10 +422,10 @@ const generateCV = async (resumeText, jobDescription) => {
     Your job is to convert unstructured user career data into a clean, ATS-compliant CV using a strict pipeline.
 
     INPUT DATA:
-    ${jobDescription ? `JOB DESCRIPTION:\n    ${jobDescription.substring(0, 8000)}` : "TARGET ROLE: General Professional Role (Optimize for general readability and impact)"}
+    ${jobDescription ? `JOB DESCRIPTION:\n    ${smartTruncate(jobDescription, 16000)}` : "TARGET ROLE: General Professional Role (Optimize for general readability and impact)"}
 
     USER RESUME:
-    ${resumeText.substring(0, 8000)}
+    ${smartTruncate(resumeText, 16000)}
 
     TASK:
     Apply the following process exactly:
@@ -266,10 +500,10 @@ const generateCoverLetter = async (resumeText, jobDescription) => {
     Write a tailored, persuasive Cover Letter for this candidate applying to this job.
 
     JOB DESCRIPTION:
-    ${jobDescription.substring(0, 5000)}
+    ${smartTruncate(jobDescription, 12000)}
 
     USER RESUME:
-    ${resumeText.substring(0, 5000)}
+    ${smartTruncate(resumeText, 12000)}
 
     INSTRUCTIONS:
     1. Tone: Professional, confident, and enthusiastic.
@@ -315,24 +549,39 @@ const generateCoverLetter = async (resumeText, jobDescription) => {
 
 const mockAnalysis = () => {
   return {
-    skills: ["javascript", "react", "mock-skill"],
-    missingSkills: ["real-ai-key"],
-    experienceYears: 1,
-    seniority: "entry",
+    detectedJobTitle: "Software Engineer",
+    detectedCompany: "Mock Company",
+    matchedSkills: [
+      { name: "JavaScript", importance: "must_have" },
+      { name: "React", importance: "must_have" },
+    ],
+    missingSkills: [
+      { name: "AI API Key", importance: "must_have" },
+    ],
     experienceAnalysis: {
+      candidateYears: 1,
+      requiredYears: 3,
       match: false,
-      feedback: "Less than preferred",
+      feedback: "Less than preferred experience.",
     },
     seniorityAnalysis: {
-      match: true,
-      feedback: "Aligned with role",
+      candidateLevel: "entry",
+      requiredLevel: "mid",
+      match: false,
+      feedback: "Candidate is one level below the required seniority.",
     },
-    reasoning: "Analysis performed in Mock/Offline Mode.",
+    scoreBreakdown: {
+      skillsScore: 67,
+      experienceScore: 33,
+      seniorityScore: 60,
+    },
     fitScore: 50,
+    overallFeedback: "Analysis performed in Mock/Offline Mode. Add an API key for real analysis.",
     recommendation: "Add an API Key to enable AI analysis.",
     actionPlan: [
       {
-        skill: "real-ai-key",
+        skill: "AI API Key",
+        importance: "must_have",
         action: "Sign up for OpenAI or Google Gemini and add the key to .env",
       },
     ],
@@ -351,7 +600,7 @@ const generateInterviewQuestions = async (jobDescription, userSkills) => {
     Generate a set of interview questions and questions for the candidate to ask, based SPECIFICALLY on the Job Description provided.
 
     JOB DESCRIPTION:
-    ${jobDescription.substring(0, 5000)}
+    ${smartTruncate(jobDescription, 10000)}
 
     INSTRUCTIONS:
     1. Generate 3 "Questions to Answer" that the interviewer might ask the candidate.
@@ -476,7 +725,7 @@ const extractResumeProfile = async (resumeText) => {
     Extract structured data from the following resume text.
 
     RESUME TEXT:
-    ${resumeText.substring(0, 4000)}
+    ${smartTruncate(resumeText, 16000)}
 
     INSTRUCTIONS:
     1. Extract SKILLS as an array of strings.
@@ -890,11 +1139,85 @@ const generateStructuredSkills = async (contextData) => {
   }
 };
 
+/**
+ * Extract job title, company, and location from raw job description text.
+ * Lightweight AI call used when users paste text or when scraper returns weak metadata.
+ */
+const extractJobMetadata = async (descriptionText) => {
+  if (activeProvider === "mock") {
+    return {
+      title: "Job Application",
+      company: "Unknown Company",
+      location: null,
+    };
+  }
+
+  const prompt = `
+    You are a job posting parser. Extract ONLY the factual metadata from this job posting text.
+
+    JOB POSTING TEXT:
+    ${smartTruncate(descriptionText, 10000)}
+
+    INSTRUCTIONS:
+    1. "title": The specific job title/role being advertised (e.g., "Senior Software Engineer", "Marketing Manager"). Look for the main heading, "Position:", "Role:", "Job Title:" labels, or the most prominent role mentioned. Do NOT include the company name in the title.
+    2. "company": The name of the hiring company/organization. Ignore recruitment agencies, job boards, or platforms (e.g., ignore "Jobberman", "LinkedIn", "Indeed"). Look for "Company:", "About Us", "About [Company]", or the employer name in context. If genuinely not found, use null.
+    3. "location": The job location if mentioned (city, state, country, or "Remote"). If not found, use null.
+
+    Return STRICT JSON only. No markdown, no code blocks:
+    {
+        "title": "<extracted_job_title>",
+        "company": "<extracted_company_or_null>",
+        "location": "<extracted_location_or_null>"
+    }
+    `;
+
+  try {
+    let resultText = "";
+
+    if (activeProvider === "openai") {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.1,
+      });
+      resultText = response.choices[0].message.content;
+    } else if (activeProvider === "gemini") {
+      const result = await geminiModel.generateContent(prompt);
+      resultText = result.response.text();
+    }
+
+    let jsonStr = resultText
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+    const startIndex = jsonStr.indexOf("{");
+    const endIndex = jsonStr.lastIndexOf("}");
+    if (startIndex !== -1 && endIndex !== -1) {
+      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+    }
+
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("AI Job Metadata Extraction Failed:", error);
+    return {
+      title: null,
+      company: null,
+      location: null,
+    };
+  }
+};
+
 module.exports = {
   analyzeProfile,
+  extractJobRequirements,
+  extractCandidateData,
+  generateAnalysisFeedback,
   generateOptimizedContent,
+  generateCV,
+  generateCoverLetter,
   generateInterviewQuestions,
   extractResumeProfile,
+  extractJobMetadata,
   generateBulletPoints,
   generateSkillsFromContext,
   generateStructuredSkills,

@@ -24,14 +24,39 @@ const applicationSchema = new mongoose.Schema(
     },
     fitAnalysis: {
       overallFeedback: String,
-      skillsGap: [String],
-      experienceMatch: Boolean,
-      experienceFeedback: String, // New detailed feedback
-      educationMatch: Boolean,
-      seniorityMatch: Boolean,
-      seniorityFeedback: String, // New detailed feedback
       recommendation: String,
       mode: String, // 'AI' or 'Standard'
+      matchedSkills: [
+        {
+          name: String,
+          importance: { type: String, enum: ["must_have", "nice_to_have"] },
+        },
+      ],
+      missingSkills: [
+        {
+          name: String,
+          importance: { type: String, enum: ["must_have", "nice_to_have"] },
+        },
+      ],
+      experienceAnalysis: {
+        candidateYears: Number,
+        requiredYears: Number,
+        match: Boolean,
+        feedback: String,
+      },
+      seniorityAnalysis: {
+        candidateLevel: String,
+        requiredLevel: String,
+        match: Boolean,
+        feedback: String,
+      },
+      scoreBreakdown: {
+        skillsScore: Number,
+        experienceScore: Number,
+        educationScore: Number,
+        seniorityScore: Number,
+        overallScore: Number,
+      },
     },
     optimizedCV: {
       type: String, // Markdown or HTML content
@@ -55,8 +80,11 @@ const applicationSchema = new mongoose.Schema(
     ],
     actionPlan: [
       {
+        task: String,
         skill: String,
+        importance: { type: String, enum: ["must_have", "nice_to_have"] },
         action: String,
+        category: String,
       },
     ],
     interviewQuestions: [
