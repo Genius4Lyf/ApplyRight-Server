@@ -23,7 +23,7 @@ const migrateTemplates = async () => {
       { $set: { templateId: "ats-clean" } }
     );
 
-    console.log(`✅ Migration completed!`);
+    console.log("✅ Migration completed!");
     console.log(`   Updated ${result.modifiedCount} application(s)`);
     console.log(`   Matched ${result.matchedCount} application(s)`);
 

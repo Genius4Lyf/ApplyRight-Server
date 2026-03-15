@@ -342,14 +342,12 @@ exports.unlockTemplate = async (req, res) => {
 
     // Check if already unlocked
     if (user.unlockedTemplates && user.unlockedTemplates.includes(templateId)) {
-      return res
-        .status(200)
-        .json({
-          success: true,
-          message: "Template already unlocked",
-          credits: user.credits,
-          unlockedTemplates: user.unlockedTemplates,
-        });
+      return res.status(200).json({
+        success: true,
+        message: "Template already unlocked",
+        credits: user.credits,
+        unlockedTemplates: user.unlockedTemplates,
+      });
     }
 
     const costAmount = parseInt(cost, 10);

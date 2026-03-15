@@ -68,7 +68,7 @@ describe("Scoring Service", () => {
     it("should return specific actions for known skills", () => {
       const missingSkills = ["Python", "SQL"];
       const result = scoringService.generateActionPlan(missingSkills);
-      
+
       expect(result).toHaveLength(2);
       expect(result[0].action).toMatch(/Build a script/);
       expect(result[1].action).toMatch(/Practice complex joins/);
@@ -77,7 +77,7 @@ describe("Scoring Service", () => {
     it("should return a generic action for unknown skills", () => {
       const missingSkills = ["Quantum Computing"];
       const result = scoringService.generateActionPlan(missingSkills);
-      
+
       expect(result[0].action).toMatch(/Complete a crash course/);
     });
   });
