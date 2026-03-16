@@ -1,6 +1,5 @@
 const adzunaService = require("./adzuna.service");
 const jobbermanService = require("./jobberman.service");
-const indeedService = require("./indeed.service");
 const JobSearch = require("../models/JobSearch");
 
 // In-memory cache for hot queries (TTL: 30 minutes)
@@ -69,7 +68,7 @@ const search = async (query, sourceFilter = "mixed") => {
   }
 
   const isNigeria = query.country.toLowerCase() === "ng";
-  // Map frontend filter names: "global" = adzuna+indeed, "local" = jobberman, "mixed" = all
+  // Map frontend filter names: "global" = adzuna, "local" = jobberman, "mixed" = all
   const isGlobal = sourceFilter === "global";
   const isLocal = sourceFilter === "local";
   const isMixed = sourceFilter === "mixed";
@@ -83,15 +82,6 @@ const search = async (query, sourceFilter = "mixed") => {
     const adzunaKeywords = query.remote ? `${query.keywords} remote` : query.keywords;
     sourcePromises.adzuna = adzunaService
       .searchJobs(adzunaKeywords, query.remote ? "" : query.location, adzunaCountry, query.jobType)
-      .catch(() => ({ results: [], count: 0 }));
-  }
-
-  // Indeed for broad coverage (works globally including Nigeria)
-  if (isMixed || isGlobal || sourceFilter === "indeed") {
-    const indeedCountry = isNigeria && isGlobal ? "us" : query.country.toLowerCase();
-    const indeedKeywords = query.remote ? `${query.keywords} remote` : query.keywords;
-    sourcePromises.indeed = indeedService
-      .searchJobs(indeedKeywords, query.location, indeedCountry, query.jobType)
       .catch(() => ({ results: [], count: 0 }));
   }
 
@@ -113,11 +103,10 @@ const search = async (query, sourceFilter = "mixed") => {
   // Merge all results
   const allResults = [
     ...(sourceData.adzuna?.results || []),
-    ...(sourceData.indeed?.results || []),
     ...(sourceData.jobberman?.results || []),
   ];
 
-  // Deduplicate by title+company (keep first occurrence — priority: adzuna > indeed > jobberman)
+  // Deduplicate by title+company
   const seen = new Set();
   const deduplicated = allResults.filter((r) => {
     const key = `${r.title.toLowerCase()}|${r.company.toLowerCase()}`;
@@ -134,7 +123,6 @@ const search = async (query, sourceFilter = "mixed") => {
     count: deduplicated.length,
     sources: {
       adzuna: sourceData.adzuna?.results?.length || 0,
-      indeed: sourceData.indeed?.results?.length || 0,
       jobberman: sourceData.jobberman?.results?.length || 0,
     },
   };
@@ -235,10 +223,6 @@ const getJobDetails = async (result) => {
 
   if (result.source === "jobberman" && result.applyUrl) {
     return jobbermanService.getJobDetails(result.applyUrl);
-  }
-
-  if (result.source === "indeed" && result.applyUrl) {
-    return indeedService.getJobDetails(result.applyUrl);
   }
 
   // Adzuna results already come with descriptions

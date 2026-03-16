@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 const jobResultSchema = new mongoose.Schema(
   {
     externalId: String,
-    source: { type: String, enum: ["adzuna", "jobberman", "indeed"] },
+    source: { type: String, enum: ["adzuna", "jobberman"] },
     title: String,
     company: String,
     location: String,
@@ -47,7 +47,7 @@ const jobSearchSchema = new mongoose.Schema(
     },
     source: {
       type: String,
-      enum: ["adzuna", "jobberman", "indeed", "mixed", "global", "local"],
+      enum: ["adzuna", "jobberman", "mixed", "global", "local"],
       default: "mixed",
     },
     results: [jobResultSchema],
