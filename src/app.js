@@ -75,6 +75,7 @@ const applicationRoutes = require("./routes/application.routes");
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/jobs", jobRoutes);
+app.use("/api/job-search", require("./routes/jobSearch.routes"));
 app.use("/api/resumes", resumeRoutes);
 app.use("/api/ai", aiLimiter, aiRoutes); // Apply AI-specific rate limiter
 app.use("/api/applications", applicationRoutes);

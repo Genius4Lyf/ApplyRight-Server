@@ -9,11 +9,14 @@ const systemSettingsSchema = new mongoose.Schema(
       uploadCost: { type: Number, default: 15 },
       aiSkillsCost: { type: Number, default: 10 },
       adReward: { type: Number, default: 5 },
+      tailorCVCost: { type: Number, default: 15 },
+      tailorBundleCost: { type: Number, default: 20 },
     },
     features: {
       maintenanceMode: { type: Boolean, default: false },
       enablePdfGeneration: { type: Boolean, default: true },
       enableAiAnalysis: { type: Boolean, default: true },
+      enableJobSearch: { type: Boolean, default: true },
     },
     announcement: {
       enabled: { type: Boolean, default: false },

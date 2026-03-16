@@ -116,6 +116,30 @@ const userSchema = new mongoose.Schema(
         type: String,
       },
     ],
+    jobProfile: {
+      desiredTitle: { type: String, default: "" },
+      preferredLocation: {
+        country: { type: String, default: "" },
+        city: { type: String, default: "" },
+        remote: { type: Boolean, default: false },
+      },
+      jobType: {
+        type: String,
+        enum: ["fulltime", "parttime", "contract", "internship", ""],
+        default: "",
+      },
+      experienceLevel: {
+        type: String,
+        enum: ["entry", "mid", "senior", ""],
+        default: "",
+      },
+      topSkills: [String],
+      salaryExpectation: {
+        min: { type: Number, default: 0 },
+        max: { type: Number, default: 0 },
+        currency: { type: String, default: "NGN" },
+      },
+    },
     onboardingCompleted: {
       type: Boolean,
       default: false,

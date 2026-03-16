@@ -13,7 +13,7 @@ const transactionSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["purchase", "usage", "ad_reward", "streak_bonus", "daily_login", "referral_bonus"], // Updated enum based on comment
+      enum: ["purchase", "usage", "ad_reward", "streak_bonus", "daily_login", "referral_bonus", "cv_tailor", "tailor_bundle"],
       required: true,
     },
     reference: {
