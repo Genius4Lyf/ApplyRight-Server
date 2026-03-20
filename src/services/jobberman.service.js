@@ -145,19 +145,45 @@ const searchJobs = async (keywords, location, jobType, page = 1) => {
 
 /**
  * Get full job description from a Jobberman listing page
+ * Preserves HTML structure for proper frontend formatting
  */
 const getJobDetails = async (url) => {
   try {
     const { data } = await throttledFetch(url);
     const $ = cheerio.load(data);
 
-    const description =
-      $('[data-cy="job-description"], .job-description, article .prose, .job-details__description')
-        .first()
-        .text()
-        .trim() || $("article").first().text().trim() || "";
+    // Try to get the HTML content (preserving structure)
+    const descEl = $('[data-cy="job-description"], .job-description, article .prose, .job-details__description').first();
 
-    return description.replace(/\s+/g, " ").trim();
+    const cleanJobHtml = (el) => {
+      // Remove script/style tags, inputs, and SVGs/images to prevent massive broken icons
+      el.find('script, style, iframe, form, input, button, object, embed, svg, img').remove();
+      
+      // Remove Jobberman specific share/report links
+      el.find('a[href*="whatsapp"], a[href*="linkedin"], a[href*="facebook"], a[href*="twitter"], a[href*="x.com"]').parent().remove();
+      el.find('a[href*="/report"], a:contains("Report Job")').closest('div, p').remove();
+      
+      // Remove empty tags
+      el.find('p, div, span').filter(function() {
+        return $(this).text().trim() === '' && $(this).children().length === 0;
+      }).remove();
+    };
+
+    if (descEl.length) {
+      cleanJobHtml(descEl);
+      const html = descEl.html();
+      if (html && html.trim()) return html.trim();
+    }
+
+    // Fallback: try article
+    const articleEl = $('article').first();
+    if (articleEl.length) {
+      cleanJobHtml(articleEl);
+      const html = articleEl.html();
+      if (html && html.trim()) return html.trim();
+    }
+
+    return "";
   } catch (error) {
     console.error("Jobberman detail fetch error:", error.message);
     return "";
