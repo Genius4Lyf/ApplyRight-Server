@@ -7,6 +7,11 @@ const saveDraft = async (req, res) => {
   try {
     const { _id, ...data } = req.body;
 
+    // Mark complete when reaching finalize step
+    if (data.currentStep === "finalize") {
+      data.isComplete = true;
+    }
+
     // If ID exists, update existing
     if (_id) {
       let draft = await DraftCV.findById(_id);

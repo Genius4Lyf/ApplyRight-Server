@@ -1,5 +1,7 @@
 const DraftCV = require("../models/DraftCV");
 const aiService = require("./ai.service");
+const { computeFitScore } = require("./scoringEngine.service");
+const extractionService = require("./extraction.service");
 
 /**
  * Clone and tailor a CV for a specific job
@@ -10,16 +12,36 @@ const aiService = require("./ai.service");
  * @returns {object} The new tailored DraftCV document
  */
 const tailorCV = async (draftCVId, jobData, userId) => {
+  console.log("[tailorCV] Starting for CV:", draftCVId, "user:", userId);
+
   // 1. Load original CV
   const original = await DraftCV.findOne({ _id: draftCVId, userId });
   if (!original) {
     throw new Error("CV not found or access denied");
   }
+  console.log("[tailorCV] Step 1 OK - loaded original CV:", original.title);
 
   // 2. Build resume text from CV data for AI analysis
   const resumeText = buildResumeText(original);
+  console.log("[tailorCV] Step 2 OK - built resume text, length:", resumeText.length);
+
+  // 2b. Compute before-score and extract missing keywords for AI
+  let beforeScore = null;
+  let jobDataForScoring = null;
+  let missingKeywords = [];
+  try {
+    const jobRequirements = extractionService.extractRequirements(jobData.description || "");
+    const candidateDataForScoring = mapToScoringFormat(original);
+    jobDataForScoring = mapJobToScoringFormat(jobRequirements);
+    beforeScore = computeFitScore({ candidateData: candidateDataForScoring, jobData: jobDataForScoring });
+    missingKeywords = (beforeScore.missingSkills || []).map((s) => s.name);
+    console.log("[tailorCV] Step 2b OK - before score:", beforeScore.fitScore, "missing keywords:", missingKeywords);
+  } catch (scoreErr) {
+    console.error("[tailorCV] Pre-tailor scoring failed (non-fatal):", scoreErr.message);
+  }
 
   // 3. Use existing AI service to enhance the CV for this specific job
+  console.log("[tailorCV] Step 3 - calling AI enhanceCVContent...");
   const enhanced = await aiService.enhanceCVContent({
     candidateData: {
       skills: original.skills || [],
@@ -35,8 +57,9 @@ const tailorCV = async (draftCVId, jobData, userId) => {
     },
     rankedExperiences: original.experience || [],
     rankedProjects: original.projects || [],
-    missingKeywords: [],
+    missingKeywords,
   });
+  console.log("[tailorCV] Step 3 OK - AI enhancement done, has summary:", !!enhanced?.professionalSummary);
 
   // 4. Clone the CV with tailored content
   const cloneData = {
@@ -52,7 +75,9 @@ const tailorCV = async (draftCVId, jobData, userId) => {
     experience: mergeExperience(original.experience, enhanced?.experience),
     projects: mergeProjects(original.projects, enhanced?.projects),
     education: original.education,
-    skills: enhanced?.skills?.length ? enhanced.skills : original.skills,
+    skills: enhanced?.skills?.length
+      ? enhanced.skills.map((s) => typeof s === "string" ? { name: s, category: "Uncategorized" } : s)
+      : original.skills,
     isComplete: true,
     currentStep: "finalize",
     tailoredFrom: original._id,
@@ -64,8 +89,29 @@ const tailorCV = async (draftCVId, jobData, userId) => {
     },
   };
 
+  console.log("[tailorCV] Step 4 - creating DraftCV clone, source:", cloneData.source);
   const tailoredCV = await DraftCV.create(cloneData);
-  return tailoredCV;
+  console.log("[tailorCV] Step 4 OK - created tailored CV:", tailoredCV._id);
+
+  // Compute after-score on the tailored CV
+  let atsScores = null;
+  if (beforeScore && jobDataForScoring) {
+    try {
+      const afterCandidateData = mapToScoringFormat(tailoredCV);
+      const afterScore = computeFitScore({ candidateData: afterCandidateData, jobData: jobDataForScoring });
+      atsScores = {
+        before: { fitScore: beforeScore.fitScore, matchedSkills: beforeScore.matchedSkills, missingSkills: beforeScore.missingSkills, recommendation: beforeScore.recommendation },
+        after: { fitScore: afterScore.fitScore, matchedSkills: afterScore.matchedSkills, missingSkills: afterScore.missingSkills, recommendation: afterScore.recommendation },
+      };
+    } catch (scoreErr) {
+      console.error("Post-tailor scoring failed (non-fatal):", scoreErr.message);
+    }
+  }
+
+  return {
+    ...tailoredCV.toObject(),
+    atsScores,
+  };
 };
 
 /**
@@ -138,6 +184,71 @@ const mergeProjects = (original, enhanced) => {
   });
 };
 
+/**
+ * Map DraftCV to the format expected by computeFitScore
+ */
+const mapToScoringFormat = (cv) => ({
+  skills: (cv.skills || []).map((s) => (typeof s === "string" ? s : s.name)),
+  experience: cv.experience || [],
+  projects: cv.projects || [],
+  education: cv.education || [],
+  summary: cv.professionalSummary || "",
+  totalYearsExperience: estimateTotalYears(cv.experience || []),
+  seniorityLevel: "mid",
+});
+
+/**
+ * Map extracted job requirements to the format expected by computeFitScore
+ */
+const mapJobToScoringFormat = (requirements) => ({
+  requiredSkills: (requirements.skills || [])
+    .filter((s) => s.importance >= 3)
+    .map((s) => ({ name: s.name, importance: "must_have" })),
+  preferredSkills: (requirements.skills || [])
+    .filter((s) => s.importance < 3)
+    .map((s) => ({ name: s.name, importance: "nice_to_have" })),
+  requiredYearsExperience: requirements.experience?.minYears || 0,
+  requiredEducation: requirements.education?.degree !== "Unknown" ? requirements.education : null,
+  seniorityLevel: requirements.seniority !== "unknown" ? requirements.seniority : null,
+});
+
+/**
+ * Estimate total years of experience from experience entries
+ */
+const estimateTotalYears = (experiences) => {
+  let total = 0;
+  for (const exp of experiences) {
+    if (exp.startDate) {
+      const start = new Date(exp.startDate);
+      const end = exp.endDate ? new Date(exp.endDate) : new Date();
+      const years = (end - start) / (1000 * 60 * 60 * 24 * 365.25);
+      if (years > 0) total += years;
+    }
+  }
+  return Math.round(total);
+};
+
+/**
+ * Quick score a CV against a job (no AI, no credits)
+ */
+const quickScoreCV = async (cvId, jobDescription, userId) => {
+  const cv = await DraftCV.findOne({ _id: cvId, userId });
+  if (!cv) throw new Error("CV not found or access denied");
+
+  const jobRequirements = extractionService.extractRequirements(jobDescription);
+  const candidateData = mapToScoringFormat(cv);
+  const jobData = mapJobToScoringFormat(jobRequirements);
+  const result = computeFitScore({ candidateData, jobData });
+
+  return {
+    fitScore: result.fitScore,
+    matchedSkills: result.matchedSkills,
+    missingSkills: result.missingSkills,
+    recommendation: result.recommendation,
+  };
+};
+
 module.exports = {
   tailorCV,
+  quickScoreCV,
 };

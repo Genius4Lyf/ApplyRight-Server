@@ -14,6 +14,7 @@ const {
   tailorCV,
   tailorBundle,
   updateJobProfile,
+  quickScore,
 } = require("../controllers/jobSearch.controller");
 
 // Job profile / onboarding
@@ -37,6 +38,7 @@ router.get("/saved", protect, getSavedJobs);
 router.post("/:searchId/details/:resultId", protect, getJobDetails);
 router.post("/:searchId/click/:resultId", protect, trackClick);
 router.post("/:searchId/save/:resultId", protect, toggleSave);
+router.post("/:searchId/quick-score/:resultId", protect, quickScore);
 router.post("/:searchId/tailor/:resultId", protect, tailorCV);
 router.post("/:searchId/tailor-bundle/:resultId", protect, tailorBundle);
 

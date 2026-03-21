@@ -424,14 +424,18 @@ const tailorCV = async (req, res) => {
       status: "completed",
     });
 
-    // Dispatch credit update event info
+    // Extract atsScores from tailoredCV (added by cvTailor.service)
+    const { atsScores, ...tailoredCVData } = tailoredCV;
+
     res.json({
-      tailoredCV,
+      tailoredCV: tailoredCVData,
       remainingCredits: user.credits,
+      atsScores,
     });
   } catch (error) {
     console.error("Tailor CV error:", error.message);
-    res.status(500).json({ message: "Failed to tailor CV" });
+    console.error("Tailor CV stack:", error.stack);
+    res.status(500).json({ message: "Failed to tailor CV", error: error.message });
   }
 };
 
@@ -584,6 +588,46 @@ const buildResumeText = (cv) => {
   return parts.join("\n");
 };
 
+// @desc    Quick ATS score (no credits, deterministic)
+// @route   POST /api/job-search/:searchId/quick-score/:resultId
+// @access  Private
+const quickScore = async (req, res) => {
+  try {
+    const { searchId, resultId } = req.params;
+    const { cvId } = req.body;
+    const userId = req.user.id;
+
+    if (!cvId) {
+      return res.status(400).json({ message: "Please specify a CV" });
+    }
+
+    const search = await JobSearch.findOne({ _id: searchId, userId });
+    if (!search) {
+      return res.status(404).json({ message: "Search not found" });
+    }
+
+    const result = search.results.id(resultId);
+    if (!result) {
+      return res.status(404).json({ message: "Job result not found" });
+    }
+
+    // Fetch full description if needed
+    if (!result.fullDescription) {
+      const fullDesc = await jobSearchService.getJobDetails(result);
+      result.fullDescription = fullDesc;
+      await search.save();
+    }
+
+    const description = result.fullDescription || result.snippet;
+    const scoreResult = await cvTailorService.quickScoreCV(cvId, description, userId);
+
+    res.json(scoreResult);
+  } catch (error) {
+    console.error("Quick score error:", error.message);
+    res.status(500).json({ message: "Failed to compute score" });
+  }
+};
+
 module.exports = {
   searchJobs,
   getSearchResults,
@@ -597,4 +641,5 @@ module.exports = {
   tailorCV,
   tailorBundle,
   updateJobProfile,
+  quickScore,
 };
