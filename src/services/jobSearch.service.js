@@ -232,14 +232,18 @@ const getJobDetails = async (result) => {
 /**
  * Get cached search from DB (< 1 hour old)
  */
-const getCachedSearch = async (query, userId) => {
-  return JobSearch.findOne({
+const getCachedSearch = async (query, userId, source) => {
+  const filter = {
     userId,
     "query.keywords": query.keywords,
     "query.country": query.country,
     "query.location": query.location,
     cachedUntil: { $gt: new Date() },
-  }).sort({ createdAt: -1 });
+  };
+  if (source && source !== "mixed") {
+    filter.source = source;
+  }
+  return JobSearch.findOne(filter).sort({ createdAt: -1 });
 };
 
 /**

@@ -9,6 +9,16 @@ const SystemSettings = require("../models/SystemSettings");
 const DEFAULT_PAGE_SIZE = 10;
 
 /**
+ * Filter results by source (global = adzuna, local = jobberman, mixed = all)
+ */
+const filterBySource = (results, source) => {
+  if (!source || source === "mixed") return results;
+  if (source === "global") return results.filter((r) => r.source !== "jobberman");
+  if (source === "local") return results.filter((r) => r.source === "jobberman");
+  return results;
+};
+
+/**
  * Paginate an array of results
  */
 const paginate = (results, page = 1, limit = DEFAULT_PAGE_SIZE) => {
@@ -94,11 +104,12 @@ const getTrendingJobs = async (req, res) => {
     const sourceFilter = source || "mixed";
     const userId = req.user.id;
 
-    // Check if we already have a cached trending search for this user
+    // Check if we already have a cached trending search for this user + source
     const query = { keywords: "trending", location: "", country: "ng", jobType: "", remote: false };
-    const cached = await jobSearchService.getCachedSearch(query, userId);
+    const cached = await jobSearchService.getCachedSearch(query, userId, sourceFilter);
     if (cached) {
-      const paged = paginate(cached.results || [], page, limit);
+      const filteredResults = filterBySource(cached.results || [], sourceFilter);
+      const paged = paginate(filteredResults, page, limit);
       return res.json({ _id: cached._id, ...paged, categories: [] });
     }
 
@@ -133,9 +144,10 @@ const browseJobs = async (req, res) => {
     const query = { keywords: "jobs", location: "", country: "ng", jobType: "", remote: false };
 
     // Check DB cache
-    const cached = await jobSearchService.getCachedSearch(query, userId);
+    const cached = await jobSearchService.getCachedSearch(query, userId, sourceFilter);
     if (cached) {
-      const paged = paginate(cached.results || [], page, limit);
+      const filteredResults = filterBySource(cached.results || [], sourceFilter);
+      const paged = paginate(filteredResults, page, limit);
       return res.json({ _id: cached._id, ...paged });
     }
 
@@ -505,9 +517,17 @@ const tailorBundle = async (req, res) => {
       }, userId),
       aiService.generateCoverLetter(resumeText, jobDescription).catch(() => ""),
       aiService.generateInterviewQuestions
-        ? aiService.generateInterviewQuestions(resumeText, jobDescription).catch(() => [])
-        : Promise.resolve([]),
+        ? aiService.generateInterviewQuestions(jobDescription, resumeText).catch(() => ({ questionsToAnswer: [], questionsToAsk: [] }))
+        : Promise.resolve({ questionsToAnswer: [], questionsToAsk: [] }),
     ]);
+
+    // Normalize interview result — AI returns { questionsToAnswer, questionsToAsk }
+    const interviewData = interviewResult && typeof interviewResult === "object" && !Array.isArray(interviewResult)
+      ? interviewResult
+      : { questionsToAnswer: Array.isArray(interviewResult) ? interviewResult : [], questionsToAsk: [] };
+
+    const questionsToAnswer = Array.isArray(interviewData.questionsToAnswer) ? interviewData.questionsToAnswer : [];
+    const questionsToAsk = Array.isArray(interviewData.questionsToAsk) ? interviewData.questionsToAsk : [];
 
     // Deduct credits
     user.credits -= cost;
@@ -521,11 +541,41 @@ const tailorBundle = async (req, res) => {
       status: "completed",
     });
 
+    // Extract atsScores from tailoredCV
+    const { atsScores, ...tailoredCVData } = tailoredCV;
+
+    // Save bundle data to an Application record so the user can view it later
+    const Application = require("../models/Application");
+    let applicationId = null;
+    try {
+      const application = await Application.create({
+        userId,
+        resumeId: sourceCVId,
+        jobId: search._id,
+        draftCVId: tailoredCVData._id,
+        coverLetter: coverLetterResult || "",
+        interviewQuestions: questionsToAnswer,
+        questionsToAsk: questionsToAsk,
+        fitScore: atsScores?.after?.fitScore || atsScores?.before?.fitScore || null,
+        fitAnalysis: {
+          recommendation: atsScores?.after?.recommendation || "",
+          matchedSkills: atsScores?.after?.matchedSkills || [],
+          missingSkills: atsScores?.after?.missingSkills || [],
+        },
+      });
+      applicationId = application._id;
+    } catch (appErr) {
+      console.error("Failed to save Application record:", appErr.message);
+    }
+
     res.json({
-      tailoredCV,
+      tailoredCV: tailoredCVData,
       coverLetter: coverLetterResult,
-      interviewQuestions: interviewResult,
+      interviewQuestions: questionsToAnswer,
+      questionsToAsk: questionsToAsk,
       remainingCredits: user.credits,
+      atsScores,
+      applicationId,
     });
   } catch (error) {
     console.error("Tailor bundle error:", error.message);

@@ -47,7 +47,7 @@ app.use(
 );
 
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || "http://localhost:5173", // STARTUP_CHECK: Configure this to your frontend domain in production
+  origin: process.env.FRONTEND_URL || "*", // STARTUP_CHECK: Configure this to your frontend domain in production
   optionsSuccessStatus: 200,
 };
 app.use(cors(corsOptions));
