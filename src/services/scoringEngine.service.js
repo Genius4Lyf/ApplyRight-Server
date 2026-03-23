@@ -13,6 +13,7 @@
  */
 
 const { compareSkills } = require("./skillNormalizer.service");
+const extractionService = require("./extraction.service");
 
 // ─── Weight Configuration ───
 const WEIGHTS = {
@@ -46,7 +47,7 @@ const SENIORITY_RANK = {
  * Must-have skills weighted 2x compared to nice-to-have
  */
 const scoreSkills = (candidateSkills, requiredSkills) => {
-  if (!requiredSkills || requiredSkills.length === 0) return { score: 75, details: null };
+  if (!requiredSkills || requiredSkills.length === 0) return { score: 50, details: null };
 
   const comparison = compareSkills(
     candidateSkills.map((s) => (typeof s === "string" ? s : s.name)),
@@ -89,10 +90,10 @@ const scoreSkills = (candidateSkills, requiredSkills) => {
  * Considers years of experience relative to requirement
  */
 const scoreExperience = (candidateYears, requiredYears) => {
-  // No requirement stated → generous default
+  // No requirement stated → neutral default
   if (!requiredYears || requiredYears <= 0) {
     return {
-      score: candidateYears > 0 ? 80 : 60,
+      score: candidateYears > 0 ? 60 : 40,
       match: true,
       feedback: "No specific experience requirement stated.",
     };
@@ -180,9 +181,9 @@ const getDegreeRank = (degree) => {
 };
 
 const scoreEducation = (candidateEducation, requiredEducation) => {
-  if (!requiredEducation || !requiredEducation.degree) {
+  if (!requiredEducation || !requiredEducation.degree || requiredEducation.degree === "Unknown") {
     return {
-      score: 75,
+      score: 55,
       match: true,
       feedback: "No specific education requirement stated.",
     };
@@ -244,7 +245,7 @@ const scoreEducation = (candidateEducation, requiredEducation) => {
 const scoreSeniority = (candidateLevel, requiredLevel) => {
   if (!requiredLevel) {
     return {
-      score: 75,
+      score: 55,
       match: true,
       candidateLevel: candidateLevel || "mid",
       requiredLevel: "not specified",
@@ -362,14 +363,40 @@ const computeFitScore = ({ candidateData, jobData }) => {
   // 5. Overall profile score
   const overallResult = scoreOverall(candidateData);
 
+  // 6. Domain mismatch detection
+  // Compare the candidate's domain with the job's domain
+  const experienceTitles = (candidateData.experience || []).map((e) => e.title || "");
+  const candidateDomain = extractionService.detectCandidateDomain(candidateSkillNames, experienceTitles);
+  const jobTitle = jobData.jobTitle || "";
+  const jobDescription = jobData.jobDescription || "";
+  const jobDomain = extractionService.detectDomain(jobTitle, jobDescription);
+
+  let domainPenalty = 0;
+  if (jobDomain.primary !== "general" && candidateDomain.primary !== "general") {
+    // Check if the candidate has ANY overlap with the job's domain
+    const candidateDomains = new Set(candidateDomain.all);
+    const jobDomains = jobDomain.all;
+    const hasOverlap = jobDomains.some((d) => candidateDomains.has(d));
+
+    if (!hasOverlap) {
+      // Complete domain mismatch — significant penalty
+      domainPenalty = 25;
+    }
+  }
+
   // ─── Weighted final score ───
-  const fitScore = Math.round(
+  let fitScore = Math.round(
     skillsResult.score * WEIGHTS.skills +
     experienceResult.score * WEIGHTS.experience +
     educationResult.score * WEIGHTS.education +
     seniorityResult.score * WEIGHTS.seniority +
     overallResult.score * WEIGHTS.overall
   );
+
+  // Apply domain penalty
+  if (domainPenalty > 0) {
+    fitScore = Math.max(5, fitScore - domainPenalty);
+  }
 
   // ─── Recommendation ───
   let recommendation;

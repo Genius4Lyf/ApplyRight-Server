@@ -439,10 +439,34 @@ const tailorCV = async (req, res) => {
     // Extract atsScores from tailoredCV (added by cvTailor.service)
     const { atsScores, ...tailoredCVData } = tailoredCV;
 
+    // Save to Application record for job history
+    const Application = require("../models/Application");
+    let applicationId = null;
+    try {
+      const application = await Application.create({
+        userId,
+        resumeId: sourceCVId,
+        jobId: search._id,
+        draftCVId: tailoredCVData._id,
+        jobTitle: result.title,
+        jobCompany: result.company,
+        fitScore: atsScores?.after?.fitScore || atsScores?.before?.fitScore || null,
+        fitAnalysis: {
+          recommendation: atsScores?.after?.recommendation || "",
+          matchedSkills: atsScores?.after?.matchedSkills || [],
+          missingSkills: atsScores?.after?.missingSkills || [],
+        },
+      });
+      applicationId = application._id;
+    } catch (appErr) {
+      console.error("Failed to save Application record for tailor:", appErr.message);
+    }
+
     res.json({
       tailoredCV: tailoredCVData,
       remainingCredits: user.credits,
       atsScores,
+      applicationId,
     });
   } catch (error) {
     console.error("Tailor CV error:", error.message);
@@ -553,6 +577,8 @@ const tailorBundle = async (req, res) => {
         resumeId: sourceCVId,
         jobId: search._id,
         draftCVId: tailoredCVData._id,
+        jobTitle: result.title,
+        jobCompany: result.company,
         coverLetter: coverLetterResult || "",
         interviewQuestions: questionsToAnswer,
         questionsToAsk: questionsToAsk,
@@ -669,7 +695,7 @@ const quickScore = async (req, res) => {
     }
 
     const description = result.fullDescription || result.snippet;
-    const scoreResult = await cvTailorService.quickScoreCV(cvId, description, userId);
+    const scoreResult = await cvTailorService.quickScoreCV(cvId, description, userId, result.title);
 
     res.json(scoreResult);
   } catch (error) {

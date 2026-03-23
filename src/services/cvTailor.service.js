@@ -32,7 +32,7 @@ const tailorCV = async (draftCVId, jobData, userId) => {
   try {
     const jobRequirements = extractionService.extractRequirements(jobData.description || "");
     const candidateDataForScoring = mapToScoringFormat(original);
-    jobDataForScoring = mapJobToScoringFormat(jobRequirements);
+    jobDataForScoring = mapJobToScoringFormat(jobRequirements, jobData.title, jobData.description);
     beforeScore = computeFitScore({ candidateData: candidateDataForScoring, jobData: jobDataForScoring });
     missingKeywords = (beforeScore.missingSkills || []).map((s) => s.name);
     console.log("[tailorCV] Step 2b OK - before score:", beforeScore.fitScore, "missing keywords:", missingKeywords);
@@ -76,7 +76,14 @@ const tailorCV = async (draftCVId, jobData, userId) => {
     projects: mergeProjects(original.projects, enhanced?.projects),
     education: original.education,
     skills: enhanced?.skills?.length
-      ? enhanced.skills.map((s) => typeof s === "string" ? { name: s, category: "Uncategorized" } : s)
+      ? enhanced.skills.map((s) => {
+          if (typeof s !== "string") return s;
+          // Preserve category from original CV if the skill already existed
+          const orig = (original.skills || []).find(
+            (o) => o.name && o.name.toLowerCase() === s.toLowerCase()
+          );
+          return { name: s, category: orig?.category || "General" };
+        })
       : original.skills,
     isComplete: true,
     currentStep: "finalize",
@@ -200,7 +207,7 @@ const mapToScoringFormat = (cv) => ({
 /**
  * Map extracted job requirements to the format expected by computeFitScore
  */
-const mapJobToScoringFormat = (requirements) => ({
+const mapJobToScoringFormat = (requirements, jobTitle, jobDescription) => ({
   requiredSkills: (requirements.skills || [])
     .filter((s) => s.importance >= 3)
     .map((s) => ({ name: s.name, importance: "must_have" })),
@@ -210,6 +217,8 @@ const mapJobToScoringFormat = (requirements) => ({
   requiredYearsExperience: requirements.experience?.minYears || 0,
   requiredEducation: requirements.education?.degree !== "Unknown" ? requirements.education : null,
   seniorityLevel: requirements.seniority !== "unknown" ? requirements.seniority : null,
+  jobTitle: jobTitle || "",
+  jobDescription: jobDescription || "",
 });
 
 /**
@@ -231,13 +240,13 @@ const estimateTotalYears = (experiences) => {
 /**
  * Quick score a CV against a job (no AI, no credits)
  */
-const quickScoreCV = async (cvId, jobDescription, userId) => {
+const quickScoreCV = async (cvId, jobDescription, userId, jobTitle = "") => {
   const cv = await DraftCV.findOne({ _id: cvId, userId });
   if (!cv) throw new Error("CV not found or access denied");
 
   const jobRequirements = extractionService.extractRequirements(jobDescription);
   const candidateData = mapToScoringFormat(cv);
-  const jobData = mapJobToScoringFormat(jobRequirements);
+  const jobData = mapJobToScoringFormat(jobRequirements, jobTitle, jobDescription);
   const result = computeFitScore({ candidateData, jobData });
 
   return {

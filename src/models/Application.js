@@ -65,6 +65,8 @@ const applicationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "DraftCV",
     },
+    jobTitle: String,
+    jobCompany: String,
     coverLetter: {
       type: String, // Markdown or HTML content
     },

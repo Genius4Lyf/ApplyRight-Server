@@ -12,6 +12,12 @@ require("./config/env"); // This will validate env vars on startup
 
 const app = express();
 
+const corsOptions = {
+  origin: process.env.FRONTEND_URL || "*", // STARTUP_CHECK: Configure this to your frontend domain in production
+  optionsSuccessStatus: 200,
+};
+app.use(cors(corsOptions));
+
 // Middleware
 app.use(helmet());
 app.use(compression());
@@ -46,11 +52,6 @@ app.use(
   })
 );
 
-const corsOptions = {
-  origin: process.env.FRONTEND_URL || "*", // STARTUP_CHECK: Configure this to your frontend domain in production
-  optionsSuccessStatus: 200,
-};
-app.use(cors(corsOptions));
 app.use(express.json()); // Body parser
 
 // Swagger Documentation
