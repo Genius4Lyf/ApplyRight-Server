@@ -1,4 +1,5 @@
 const Job = require("../models/Job");
+const JobSearch = require("../models/JobSearch");
 const DraftCV = require("../models/DraftCV");
 const Resume = require("../models/Resume");
 const Application = require("../models/Application");
@@ -30,6 +31,38 @@ const deductCredits = async (user, cost) => {
   user.credits -= cost;
   await user.updateOne({ credits: user.credits });
   return user.credits;
+};
+
+/**
+ * Helper: Resolve job description from Job model or JobSearch results.
+ * Tailor/bundle applications store a JobSearch _id as jobId, not a Job _id.
+ */
+const resolveJobDescription = async (application) => {
+  // Try Job model first (legacy analysis flow)
+  const job = await Job.findById(application.jobId);
+  if (job) {
+    return { description: job.description, title: job.title, company: job.company, source: "job" };
+  }
+
+  // Fall back to JobSearch (tailor/bundle flow)
+  const search = await JobSearch.findById(application.jobId);
+  if (search) {
+    // Find the result that matches this application's job title/company
+    const result = search.results.find(
+      (r) => r.title === application.jobTitle && r.company === application.jobCompany
+    ) || search.results[0]; // fallback to first result if no match
+
+    if (result) {
+      return {
+        description: result.fullDescription || result.snippet || "",
+        title: result.title,
+        company: result.company,
+        source: "jobSearch",
+      };
+    }
+  }
+
+  return null;
 };
 
 /**
@@ -505,18 +538,28 @@ const generateApplicationCoverLetter = async (req, res) => {
       return res.status(404).json({ message: "Application not found" });
     }
 
-    const [resume, job] = await Promise.all([
-      Resume.findById(application.resumeId),
-      Job.findById(application.jobId),
-    ]);
+    // Resolve resume text
+    let resumeText = "";
+    const resume = await Resume.findById(application.resumeId);
+    if (resume) {
+      resumeText = resume.rawText;
+    } else {
+      // Tailor/bundle apps store a DraftCV _id as resumeId
+      const draft = await DraftCV.findById(application.draftCVId || application.resumeId);
+      if (draft) {
+        resumeText = buildMarkdownFromDraft(draft);
+      }
+    }
 
-    if (!resume || !job) {
+    // Resolve job description (works for both Job and JobSearch references)
+    const jobData = await resolveJobDescription(application);
+    if (!jobData || !resumeText) {
       return res.status(404).json({ message: "Resume or Job not found" });
     }
 
     const remainingCredits = await deductCredits(user, COSTS.GENERATE_COVER_LETTER);
 
-    const coverLetter = await aiService.generateCoverLetter(resume.rawText, job.description);
+    const coverLetter = await aiService.generateCoverLetter(resumeText, jobData.description);
 
     application.coverLetter = coverLetter;
     await application.save();
@@ -553,15 +596,16 @@ const generateApplicationInterview = async (req, res) => {
       return res.status(404).json({ message: "Application not found" });
     }
 
-    const job = await Job.findById(application.jobId);
-    if (!job) {
+    // Resolve job description (works for both Job and JobSearch references)
+    const jobData = await resolveJobDescription(application);
+    if (!jobData) {
       return res.status(404).json({ message: "Job not found" });
     }
 
     const remainingCredits = await deductCredits(user, COSTS.GENERATE_INTERVIEW);
 
     const { questionsToAnswer: interviewQuestions, questionsToAsk } =
-      await aiService.generateInterviewQuestions(job.description, []);
+      await aiService.generateInterviewQuestions(jobData.description, []);
 
     application.interviewQuestions = interviewQuestions;
     application.questionsToAsk = questionsToAsk;
