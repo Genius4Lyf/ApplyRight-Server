@@ -955,16 +955,18 @@ const extractResumeProfile = async (resumeText) => {
     ${smartTruncate(resumeText, 16000)}
 
     INSTRUCTIONS:
-    1. Extract SKILLS as an array of strings.
-    2. Extract EXPERIENCE as an array of objects: { "role": "...", "company": "...", "startDate": "...", "endDate": "...", "description": "array of strings (REWRITE into strong, achievement-oriented bullet points using action verbs)" }.
-    3. Extract EDUCATION as an array of objects: { "degree": "...", "field": "...", "school": "...", "date": "..." }.
-    4. Extract PROJECTS as an array of objects: { "title": "...", "link": "...", "description": "array of strings (bullet points)" }.
+    1. Extract CONTACT INFO as an object. Look at the top of the resume for name, email, phone, LinkedIn URL, portfolio/website URL, and location/address. Return NULL for any field not found.
+    2. Extract SKILLS as an array of strings.
+    3. Extract EXPERIENCE as an array of objects: { "role": "...", "company": "...", "startDate": "...", "endDate": "...", "description": "array of strings (REWRITE into strong, achievement-oriented bullet points using action verbs)" }.
+    4. Extract EDUCATION as an array of objects: { "degree": "...", "field": "...", "school": "...", "date": "..." }.
+    5. Extract PROJECTS as an array of objects: { "title": "...", "link": "...", "description": "array of strings (bullet points)" }.
        - IMPORTANT: "link" should be NULL if no valid URL (http/www) is found. Do NOT use the project title as the link.
-    5. Estimate SENIORITY level: 'entry', 'mid', 'senior', or 'executive'.
-    6. Generate a PROFESSIONAL SUMMARY (string). Write a compelling, ATS-optimized summary (3-4 sentences) based on the resume's history and skills. Do not just copy the existing one if it's weak.
+    6. Estimate SENIORITY level: 'entry', 'mid', 'senior', or 'executive'.
+    7. Generate a PROFESSIONAL SUMMARY (string). Write a compelling, ATS-optimized summary (3-4 sentences) based on the resume's history and skills. Do not just copy the existing one if it's weak.
 
     Output STRICT JSON format only:
     {
+        "contactInfo": { "fullName": "...", "email": "...", "phone": "...", "linkedin": "...", "website": "...", "address": "..." },
         "skills": ["..."],
         "experience": [{ "role": "...", "company": "...", "startDate": "...", "endDate": "...", "description": [...] }],
         "education": [{ "degree": "...", "field": "...", "school": "...", "date": "..." }],
@@ -1274,6 +1276,14 @@ const mockSkillsGeneration = () => {
 
 const mockResumeExtraction = () => {
   return {
+    contactInfo: {
+      fullName: "Mock User",
+      email: "mock@example.com",
+      phone: "+1234567890",
+      linkedin: null,
+      website: null,
+      address: null,
+    },
     skills: ["Mock Skill 1", "Mock Skill 2"],
     experience: [
       {

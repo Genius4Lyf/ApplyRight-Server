@@ -108,13 +108,20 @@ const analyzeFit = async (req, res) => {
         targetJob: null,
       });
 
+      // CV-extracted contact info takes priority, user profile is fallback
+      const cvContact = extractedData.contactInfo || {};
+      const userFullName = user.firstName ? `${user.firstName} ${user.lastName}`.trim() : "";
       const draft = await DraftCV.create({
         userId,
         title: "Uploaded Resume",
         source: "upload",
         personalInfo: {
-          fullName: user.firstName ? `${user.firstName} ${user.lastName}` : "Candidate",
-          email: user.email,
+          fullName: cvContact.fullName || userFullName || "Candidate",
+          email: cvContact.email || user.email || "",
+          phone: cvContact.phone || user.phone || "",
+          linkedin: cvContact.linkedin || user.linkedinUrl || "",
+          website: cvContact.website || user.portfolioUrl || "",
+          address: cvContact.address || user.location || "",
         },
         professionalSummary: extractedData.summary || "",
         experience:
