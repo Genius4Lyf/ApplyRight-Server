@@ -3,6 +3,7 @@ const Transaction = require("../models/Transaction");
 const Resume = require("../models/Resume");
 const Job = require("../models/Job");
 const JobSearch = require("../models/JobSearch");
+const screenshotService = require("../services/screenshot.service");
 const Application = require("../models/Application");
 const SettingsService = require("../services/settings.service");
 const NotificationController = require("./notification.controller");
@@ -543,5 +544,42 @@ exports.updateSettings = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
+// @desc    Generate ad report screenshot via Puppeteer
+// @route   POST /api/admin/report-screenshot
+// @access  Admin
+exports.generateReportScreenshot = async (req, res) => {
+  try {
+    const { templateId, stats, context } = req.body;
+
+    if (!templateId || !stats || !context) {
+      return res.status(400).json({
+        success: false,
+        message: "templateId, stats, and context are required",
+      });
+    }
+
+    const validTemplates = ["social-proof", "growth-story", "impact-report"];
+    if (!validTemplates.includes(templateId)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid template. Must be one of: ${validTemplates.join(", ")}`,
+      });
+    }
+
+    const buffer = await screenshotService.captureTemplate(templateId, stats, context);
+
+    res.set({
+      "Content-Type": "image/png",
+      "Content-Length": buffer.length,
+      "Content-Disposition": `attachment; filename="applyright-ad-${templateId}-${new Date().toISOString().split("T")[0]}.png"`,
+      "Cache-Control": "no-store",
+    });
+    res.send(buffer);
+  } catch (err) {
+    console.error("[generateReportScreenshot] Error:", err);
+    res.status(500).json({ success: false, message: "Failed to generate screenshot" });
   }
 };

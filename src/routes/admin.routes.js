@@ -10,6 +10,7 @@ const {
   getSettings,
   updateSettings,
   getJobSearches,
+  generateReportScreenshot,
 } = require("../controllers/admin.controller");
 const NotificationController = require("../controllers/notification.controller");
 const { protect, admin } = require("../middleware/auth.middleware");
@@ -32,6 +33,9 @@ router.get("/job-searches", admin, getJobSearches);
 // Settings
 router.get("/settings", admin, getSettings);
 router.put("/settings", admin, updateSettings);
+
+// Report Screenshot
+router.post("/report-screenshot", admin, generateReportScreenshot);
 
 // Notifications (Admin Broadcast)
 router.post("/notifications/broadcast", admin, NotificationController.broadcast);
