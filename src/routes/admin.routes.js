@@ -9,10 +9,10 @@ const {
   getUserDetails,
   getSettings,
   updateSettings,
+  getJobSearches,
 } = require("../controllers/admin.controller");
 const NotificationController = require("../controllers/notification.controller");
-const { protect } = require("../middleware/auth.middleware");
-const { admin } = require("../middleware/admin.middleware");
+const { protect, admin } = require("../middleware/auth.middleware");
 
 // All routes are protected and require admin role
 router.use(protect);
@@ -25,6 +25,9 @@ router.get("/transactions", admin, getAllTransactions);
 router.get("/users/:id", admin, getUserDetails);
 router.put("/users/:id/role", admin, updateUserRole);
 router.delete("/users/:id", admin, deleteUser);
+
+// Job Searches
+router.get("/job-searches", admin, getJobSearches);
 
 // Settings
 router.get("/settings", admin, getSettings);

@@ -2,6 +2,7 @@ const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const Resume = require("../models/Resume");
 const Job = require("../models/Job");
+const JobSearch = require("../models/JobSearch");
 const Application = require("../models/Application");
 const SettingsService = require("../services/settings.service");
 const NotificationController = require("./notification.controller");
@@ -171,6 +172,60 @@ exports.getDashboardStats = async (req, res, next) => {
       templatePopularity: templateStats, // Return FULL list
     };
 
+    // --- Job Search Metrics ---
+    const totalJobSearches = await JobSearch.countDocuments();
+
+    const searchesBySource = await JobSearch.aggregate([
+      { $group: { _id: "$source", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]);
+
+    const topKeywords = await JobSearch.aggregate([
+      { $match: { "query.keywords": { $exists: true, $nin: [null, ""] } } },
+      { $group: { _id: "$query.keywords", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 },
+    ]);
+
+    const topLocations = await JobSearch.aggregate([
+      { $match: { "query.location": { $exists: true, $nin: [null, ""] } } },
+      { $group: { _id: "$query.location", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 },
+    ]);
+
+    const engagementStats = await JobSearch.aggregate([
+      { $unwind: { path: "$results", preserveNullAndEmptyArrays: false } },
+      {
+        $group: {
+          _id: null,
+          totalClicks: { $sum: { $cond: [{ $eq: ["$results.clicked", true] }, 1, 0] } },
+          totalSaved: { $sum: { $cond: [{ $eq: ["$results.saved", true] }, 1, 0] } }
+        }
+      }
+    ]);
+
+    const jobEngagement = engagementStats.length > 0 ? engagementStats[0] : { totalClicks: 0, totalSaved: 0 };
+
+    // --- Conversion Funnel ---
+    const totalTailors = await Transaction.countDocuments({ type: "cv_tailor" });
+    const totalBundles = await Transaction.countDocuments({ type: "tailor_bundle" });
+
+    const jobMetrics = {
+      totalSearches: totalJobSearches,
+      engagement: jobEngagement,
+      searchesBySource,
+      topKeywords,
+      topLocations,
+      funnel: {
+        searches: totalJobSearches,
+        clicks: jobEngagement.totalClicks,
+        saves: jobEngagement.totalSaved,
+        tailors: totalTailors + totalBundles,
+        applications: totalApplications,
+      },
+    };
+
     res.status(200).json({
       success: true,
       data: {
@@ -183,6 +238,7 @@ exports.getDashboardStats = async (req, res, next) => {
         recentTransactions,
         chartData,
         featureUsage, // NEW
+        jobMetrics, // NEW: Job Search analytics
       },
     });
   } catch (err) {
@@ -337,6 +393,90 @@ exports.getUserDetails = async (req, res, next) => {
         stats,
         transactions,
       },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
+// @desc    Get job search activity log
+// @route   GET /api/v1/admin/job-searches
+// @access  Private/Admin
+exports.getJobSearches = async (req, res) => {
+  try {
+    const pageSize = 20;
+    const page = Number(req.query.page) || 1;
+    const { keyword, source, startDate, endDate, userId } = req.query;
+
+    const filter = {};
+
+    if (source && source !== "all") {
+      filter.source = source;
+    }
+
+    if (userId) {
+      filter.userId = userId;
+    }
+
+    if (keyword) {
+      filter["query.keywords"] = { $regex: keyword, $options: "i" };
+    }
+
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) filter.createdAt.$gte = new Date(startDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filter.createdAt.$lte = end;
+      }
+    }
+
+    const count = await JobSearch.countDocuments(filter);
+    const searches = await JobSearch.find(filter)
+      .populate("userId", "firstName lastName email")
+      .select("userId query source resultCount createdAt")
+      .sort({ createdAt: -1 })
+      .limit(pageSize)
+      .skip(pageSize * (page - 1));
+
+    // Compute engagement summary per search
+    const searchIds = searches.map((s) => s._id);
+    const engagementAgg = await JobSearch.aggregate([
+      { $match: { _id: { $in: searchIds } } },
+      { $unwind: { path: "$results", preserveNullAndEmptyArrays: true } },
+      {
+        $group: {
+          _id: "$_id",
+          clicks: { $sum: { $cond: [{ $eq: ["$results.clicked", true] }, 1, 0] } },
+          saves: { $sum: { $cond: [{ $eq: ["$results.saved", true] }, 1, 0] } },
+        },
+      },
+    ]);
+
+    const engagementMap = {};
+    engagementAgg.forEach((e) => {
+      engagementMap[e._id.toString()] = { clicks: e.clicks, saves: e.saves };
+    });
+
+    const data = searches.map((s) => ({
+      _id: s._id,
+      user: s.userId,
+      query: s.query,
+      source: s.source,
+      resultCount: s.resultCount,
+      clicks: engagementMap[s._id.toString()]?.clicks || 0,
+      saves: engagementMap[s._id.toString()]?.saves || 0,
+      createdAt: s.createdAt,
+    }));
+
+    res.status(200).json({
+      success: true,
+      searches: data,
+      page,
+      pages: Math.ceil(count / pageSize),
+      total: count,
     });
   } catch (err) {
     console.error(err);
