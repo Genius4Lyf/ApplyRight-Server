@@ -46,7 +46,7 @@ const searchJobs = async (keywords, location, country = "gb", jobType, page = 1)
       fulltime: "full_time",
       parttime: "part_time",
       contract: "contract",
-      internship: "permanent", // Adzuna doesn't have internship, use permanent as fallback
+      // Adzuna has no internship type — skip it so results aren't narrowed to permanent roles
     };
     if (typeMap[jobType]) params[typeMap[jobType]] = 1;
   }

@@ -63,15 +63,15 @@ const searchJobs = async (req, res) => {
       return res.status(400).json({ message: "Please provide search keywords or complete your job profile" });
     }
 
-    // Check DB cache first
-    const cached = await jobSearchService.getCachedSearch(query, userId);
-    if (cached) {
-      const paged = paginate(cached.results || [], page, limit);
-      return res.json({ _id: cached._id, ...paged });
-    }
-
     // Perform search
     const sourceFilter = source || "mixed";
+
+    // Check DB cache first (always pass source to avoid cross-tab collisions)
+    const cached = await jobSearchService.getCachedSearch(query, userId, sourceFilter);
+    if (cached) {
+      const paged = paginate(cached.results || [], page, limit);
+      return res.json({ _id: cached._id, searchId: cached._id, ...paged });
+    }
     const searchData = await jobSearchService.search(query, sourceFilter);
 
     // Score against CV if available
@@ -88,7 +88,7 @@ const searchJobs = async (req, res) => {
     );
 
     const paged = paginate(scoredResults, page, limit);
-    res.json({ _id: saved._id, ...paged });
+    res.json({ _id: saved._id, searchId: saved._id, ...paged });
   } catch (error) {
     console.error("Job search error:", error.message);
     res.status(500).json({ message: "Failed to search jobs" });
@@ -110,7 +110,7 @@ const getTrendingJobs = async (req, res) => {
     if (cached) {
       const filteredResults = filterBySource(cached.results || [], sourceFilter);
       const paged = paginate(filteredResults, page, limit);
-      return res.json({ _id: cached._id, ...paged, categories: [] });
+      return res.json({ _id: cached._id, searchId: cached._id, ...paged, categories: [] });
     }
 
     const data = await jobSearchService.searchTrending(sourceFilter);
@@ -125,7 +125,7 @@ const getTrendingJobs = async (req, res) => {
     );
 
     const paged = paginate(data.results || [], page, limit);
-    res.json({ _id: saved._id, ...paged, categories: data.categories });
+    res.json({ _id: saved._id, searchId: saved._id, ...paged, categories: data.categories });
   } catch (error) {
     console.error("Trending jobs error:", error.message);
     res.status(500).json({ message: "Failed to load trending jobs" });
@@ -148,7 +148,7 @@ const browseJobs = async (req, res) => {
     if (cached) {
       const filteredResults = filterBySource(cached.results || [], sourceFilter);
       const paged = paginate(filteredResults, page, limit);
-      return res.json({ _id: cached._id, ...paged });
+      return res.json({ _id: cached._id, searchId: cached._id, ...paged });
     }
 
     const data = await jobSearchService.search(query, sourceFilter);
@@ -163,7 +163,7 @@ const browseJobs = async (req, res) => {
     );
 
     const paged = paginate(data.results || [], page, limit);
-    res.json({ _id: saved._id, ...paged });
+    res.json({ _id: saved._id, searchId: saved._id, ...paged });
   } catch (error) {
     console.error("Browse jobs error:", error.message);
     res.status(500).json({ message: "Failed to browse jobs" });
@@ -213,21 +213,43 @@ const getRecommendations = async (req, res) => {
     }
 
     // Check cache
-    const cached = await jobSearchService.getCachedSearch(query, userId);
+    const scoredAgainstInfo = latestCV ? { _id: latestCV._id, title: latestCV.title || latestCV.targetJob?.title || "Untitled CV" } : null;
+    const cached = await jobSearchService.getCachedSearch(query, userId, "mixed");
     if (cached) {
       const paged = paginate(cached.results || [], page, limit);
-      return res.json({ searchId: cached._id, ...paged });
+      return res.json({ searchId: cached._id, ...paged, scoredAgainst: scoredAgainstInfo });
     }
 
-    // Fresh search
-    const searchData = await jobSearchService.search(query);
-    const scoredResults = jobSearchService.scoreResults(searchData.results, latestCV);
+    // Progressive fallback: try the full query first, then relax filters
+    // until we get results. This ensures users always see something.
+    const fallbackQueries = [
+      query, // 1. Full query (title + skills + location + jobType)
+      { ...query, location: "", jobType: "" }, // 2. Drop location & jobType
+      { ...query, location: "", jobType: "", keywords: user.jobProfile.desiredTitle }, // 3. Just the title (no appended skills)
+    ];
+
+    let searchData = null;
+    let usedQuery = query;
+
+    for (const q of fallbackQueries) {
+      searchData = await jobSearchService.search(q);
+      if (searchData.results?.length > 0) {
+        usedQuery = q;
+        break;
+      }
+    }
+
+    const scoredResults = jobSearchService.scoreResults(searchData.results || [], latestCV);
 
     // Save and return paginated results
-    const saved = await jobSearchService.saveSearch(userId, query, scoredResults, latestCV?._id, "mixed");
+    const saved = await jobSearchService.saveSearch(userId, usedQuery, scoredResults, latestCV?._id, "mixed");
 
     const paged = paginate(scoredResults, page, limit);
-    res.json({ searchId: saved._id, ...paged });
+    res.json({
+      searchId: saved._id,
+      ...paged,
+      scoredAgainst: scoredAgainstInfo,
+    });
   } catch (error) {
     console.error("Recommendations error:", error.message);
     res.status(500).json({ message: "Failed to get recommendations" });

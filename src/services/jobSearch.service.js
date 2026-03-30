@@ -80,8 +80,10 @@ const search = async (query, sourceFilter = "mixed") => {
   if (isMixed || isGlobal || sourceFilter === "adzuna") {
     const adzunaCountry = isNigeria ? "gb" : query.country;
     const adzunaKeywords = query.remote ? `${query.keywords} remote` : query.keywords;
+    // Don't pass Nigerian cities (e.g. "Port Harcourt") to Adzuna GB — they won't match
+    const adzunaLocation = (query.remote || isNigeria) ? "" : query.location;
     sourcePromises.adzuna = adzunaService
-      .searchJobs(adzunaKeywords, query.remote ? "" : query.location, adzunaCountry, query.jobType)
+      .searchJobs(adzunaKeywords, adzunaLocation, adzunaCountry, query.jobType)
       .catch(() => ({ results: [], count: 0 }));
   }
 
@@ -157,7 +159,7 @@ const scoreResults = (results, draftCV) => {
 
   return results.map((r) => {
     // Skills score: overlap between CV skills and job text
-    const jobText = `${r.title} ${r.snippet} ${r.fullDescription}`.toLowerCase();
+    const jobText = `${r.title} ${r.snippet || ""} ${r.fullDescription || ""}`.toLowerCase();
     const matchedSkills = cvSkills.filter((skill) => jobText.includes(skill));
     const skillsScore = cvSkills.length > 0
       ? Math.round((matchedSkills.length / cvSkills.length) * 100)
@@ -238,9 +240,13 @@ const getCachedSearch = async (query, userId, source) => {
     "query.keywords": query.keywords,
     "query.country": query.country,
     "query.location": query.location,
+    "query.jobType": query.jobType || "",
+    "query.remote": query.remote || false,
     cachedUntil: { $gt: new Date() },
   };
-  if (source && source !== "mixed") {
+  // Always filter by source to prevent cross-tab cache collisions
+  // (e.g. "All" tab picking up a "Global"-only cached entry)
+  if (source) {
     filter.source = source;
   }
   return JobSearch.findOne(filter).sort({ createdAt: -1 });

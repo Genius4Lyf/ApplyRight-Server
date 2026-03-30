@@ -61,5 +61,16 @@ const jobSearchSchema = new mongoose.Schema(
 
 jobSearchSchema.index({ userId: 1, createdAt: -1 });
 jobSearchSchema.index({ "query.keywords": 1, "query.country": 1 });
+// Compound index for getCachedSearch lookups
+jobSearchSchema.index({
+  userId: 1,
+  "query.keywords": 1,
+  "query.country": 1,
+  "query.location": 1,
+  "query.jobType": 1,
+  "query.remote": 1,
+  source: 1,
+  cachedUntil: 1,
+});
 
 module.exports = mongoose.model("JobSearch", jobSearchSchema);
