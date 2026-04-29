@@ -12,8 +12,19 @@ require("./config/env"); // This will validate env vars on startup
 
 const app = express();
 
+const allowedOrigins = [
+  process.env.FRONTEND_URL,        // Netlify production (set on Render)
+  "https://localhost",             // Capacitor Android default
+  "capacitor://localhost",         // Capacitor iOS default
+  "http://localhost:5173",         // Vite dev server
+].filter(Boolean);
+
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || "*", // STARTUP_CHECK: Configure this to your frontend domain in production
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // server-to-server, curl, native HTTP
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
   optionsSuccessStatus: 200,
 };
 app.use(cors(corsOptions));
@@ -85,6 +96,7 @@ app.use("/api/cv", require("./routes/cv.routes"));
 app.use("/api/pdf", require("./routes/pdf.routes"));
 app.use("/api/billing", require("./routes/billing.routes"));
 app.use("/api/feedback", require("./routes/feedback.routes"));
+app.use("/api/ai-feedback", require("./routes/aiFeedback.routes"));
 app.use("/api/admin", require("./routes/admin.routes"));
 app.use("/api/system", require("./routes/system.routes"));
 
