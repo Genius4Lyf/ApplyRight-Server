@@ -6,6 +6,7 @@ const Application = require("../models/Application");
 const extractionService = require("../services/extraction.service");
 const aiService = require("../services/ai.service");
 const cvOptimizer = require("../services/cvOptimizer.service");
+const metricCapture = require("../services/metricCapture.service");
 
 // Credit costs
 const COSTS = {
@@ -14,13 +15,18 @@ const COSTS = {
   GENERATE_COVER_LETTER: 5,
   GENERATE_INTERVIEW: 5,
   CREATE_FROM_UPLOAD: 15,
+  // Bundle: CV (10) + Cover letter (5) + Interview prep (5) = 20 individually,
+  // 18 as a bundle (10% discount, save 2 credits). All-or-nothing in v1: if
+  // any stage fails, the user is not charged at all.
+  GENERATE_BUNDLE: 18,
 };
 
 /**
- * Helper: Check and deduct credits atomically
- * Returns the updated credit balance, or throws if insufficient
+ * Helper: Verify the user has sufficient credits BEFORE running expensive AI work.
+ * Throws an INSUFFICIENT_CREDITS error if the balance is too low.
+ * Does NOT deduct — call deductCredits only after AI work succeeds.
  */
-const deductCredits = async (user, cost) => {
+const checkCredits = (user, cost) => {
   if (user.credits < cost) {
     const err = new Error("Insufficient credits");
     err.code = "INSUFFICIENT_CREDITS";
@@ -28,9 +34,43 @@ const deductCredits = async (user, cost) => {
     err.current = user.credits;
     throw err;
   }
+};
+
+/**
+ * Helper: Deduct credits atomically and return the new balance.
+ * Call this only after AI work has succeeded so users are never charged
+ * for failed or unavailable AI calls.
+ */
+const deductCredits = async (user, cost) => {
+  checkCredits(user, cost);
   user.credits -= cost;
   await user.updateOne({ credits: user.credits });
   return user.credits;
+};
+
+/**
+ * Helper: Map an error to a JSON response. Returns true if handled.
+ * Centralizes credit + AI-availability error handling so each controller
+ * doesn't have to duplicate it.
+ */
+const handleAIError = (res, err) => {
+  if (err && err.code === "INSUFFICIENT_CREDITS") {
+    res.status(403).json({
+      message: "Insufficient credits",
+      code: "INSUFFICIENT_CREDITS",
+      required: err.required,
+      current: err.current,
+    });
+    return true;
+  }
+  if (err && err.code === "AI_UNAVAILABLE") {
+    res.status(503).json({
+      message: "AI service is temporarily unavailable. You have not been charged. Please try again later.",
+      code: "AI_UNAVAILABLE",
+    });
+    return true;
+  }
+  return false;
 };
 
 /**
@@ -66,18 +106,6 @@ const resolveJobDescription = async (application) => {
 };
 
 /**
- * Helper: Standard error response for insufficient credits
- */
-const handleCreditError = (res, err) => {
-  return res.status(403).json({
-    message: "Insufficient credits",
-    code: "INSUFFICIENT_CREDITS",
-    required: err.required,
-    current: err.current,
-  });
-};
-
-/**
  * POST /analysis/analyze
  *
  * Two modes:
@@ -97,16 +125,20 @@ const analyzeFit = async (req, res) => {
 
     // ── Create from Upload (no job) ──
     if (!jobId) {
-      const remainingCredits = await deductCredits(user, COSTS.CREATE_FROM_UPLOAD);
+      checkCredits(user, COSTS.CREATE_FROM_UPLOAD);
 
-      const extractedData = await aiService.extractResumeProfile(resume.rawText);
+      const meta = { userId };
+      const extractedData = await aiService.extractResumeProfile(resume.rawText, meta);
 
       const structuredSkills = await aiService.generateStructuredSkills({
         education: extractedData.education,
         experience: extractedData.experience,
         projects: extractedData.projects,
         targetJob: null,
-      });
+      }, meta);
+
+      // AI work succeeded — now charge the user
+      const remainingCredits = await deductCredits(user, COSTS.CREATE_FROM_UPLOAD);
 
       // CV-extracted contact info takes priority, user profile is fallback
       const cvContact = extractedData.contactInfo || {};
@@ -175,11 +207,15 @@ const analyzeFit = async (req, res) => {
       return res.status(404).json({ message: "Job not found" });
     }
 
-    // Check credits before any AI calls
-    const remainingCredits = await deductCredits(user, COSTS.ANALYSIS);
+    // Pre-flight balance check — does NOT deduct yet
+    checkCredits(user, COSTS.ANALYSIS);
 
     // ── New Pipeline: Extract → Score → Feedback ──
-    const aiResult = await aiService.analyzeProfile(resume.rawText, job.description);
+    // applicationId not yet known until upsert below; pass it along after.
+    const aiResult = await aiService.analyzeProfile(resume.rawText, job.description, { userId });
+
+    // AI succeeded — now charge the user
+    const remainingCredits = await deductCredits(user, COSTS.ANALYSIS);
 
     // Update job metadata from AI detection
     if (aiResult.detectedJobTitle) {
@@ -250,42 +286,274 @@ const analyzeFit = async (req, res) => {
       remainingCredits,
     });
   } catch (error) {
-    if (error.code === "INSUFFICIENT_CREDITS") {
-      return handleCreditError(res, error);
-    }
+    if (handleAIError(res, error)) return;
     console.error("Analysis Error:", {
       message: error.message,
       stack: error.stack,
     });
     res.status(500).json({
-      message: "Failed to analyze fit",
+      message: "Failed to analyze fit. You have not been charged.",
       error: error.message,
     });
+  }
+};
+
+// Stages used in generationStatus for CV generation. Progress percentages are
+// rough — the AI calls (extract + enhance + categorize) dominate latency, so
+// we weight progress around when each stage is *complete*.
+const CV_STAGES = {
+  extracting: { progress: 10, message: "Reading your CV and the role…" },
+  scoring: { progress: 30, message: "Ranking your experience by relevance…" },
+  enhancing: { progress: 50, message: "Rewriting bullets and weaving in keywords…" },
+  categorizing: { progress: 80, message: "Organizing your skills…" },
+  assembling: { progress: 95, message: "Putting it all together…" },
+  completed: { progress: 100, message: "Done." },
+};
+
+/**
+ * Set generationStatus on an application doc and persist. Best-effort:
+ * never throws back into the pipeline since stage updates aren't worth
+ * killing a successful generation over.
+ */
+const setGenerationStage = async (applicationId, stage, extra = {}) => {
+  try {
+    const config = CV_STAGES[stage] || {};
+    await Application.updateOne(
+      { _id: applicationId },
+      {
+        $set: {
+          "generationStatus.stage": stage,
+          "generationStatus.progress": config.progress ?? 0,
+          "generationStatus.stageMessage": extra.message || config.message || "",
+          ...(extra.completedAt ? { "generationStatus.completedAt": extra.completedAt } : {}),
+          ...(extra.error ? { "generationStatus.error": extra.error } : {}),
+        },
+      }
+    );
+  } catch (e) {
+    console.error(`[CV Pipeline] Failed to write stage=${stage}:`, e.message);
+  }
+};
+
+/**
+ * Async CV generation pipeline. Runs after the controller returns 202.
+ *
+ * Each stage updates application.generationStatus so the frontend can poll
+ * GET /applications/:id and render a progress bar. On error, stage becomes
+ * "failed" and the user is NOT charged. On success, credits are deducted at
+ * the end (atomicity is best-effort: if the deduct fails, the user got the
+ * artifact for free — preferable to charging for nothing).
+ *
+ * `chargeOnSuccess: false` — used by the bundle pipeline so the parent owns
+ * credit accounting across multiple stages. When false this function does
+ * the full pipeline but skips the credit deduction; caller must charge.
+ *
+ * Returns `{ draftId, beforeScore, afterScore }` on success.
+ */
+const runCVGenerationPipeline = async ({ application, resume, job, user, templateId, chargeOnSuccess = true, providedMetrics = {} }) => {
+  const userId = user._id;
+  const applicationId = application._id;
+  const meta = { userId, applicationId };
+
+  try {
+    // Stage 1: Extract (parallel)
+    await setGenerationStage(applicationId, "extracting");
+    const [candidateData, jobData] = await Promise.all([
+      aiService.extractCandidateData(resume.rawText, meta),
+      aiService.extractJobRequirements(job.description, meta),
+    ]);
+    if (!jobData.detectedJobTitle) jobData.detectedJobTitle = job.title;
+    if (!jobData.detectedCompany) jobData.detectedCompany = job.company;
+
+    // Stage 2: Relevance scoring (deterministic)
+    await setGenerationStage(applicationId, "scoring");
+    const rankedExperiences = cvOptimizer.rankExperiences(candidateData.experience || [], jobData);
+    const rankedProjects = cvOptimizer.rankProjects(candidateData.projects || [], jobData);
+    const missingKeywords = cvOptimizer.findKeywordGaps(candidateData.skills || [], jobData);
+
+    // Stage 3: AI content enhancement
+    await setGenerationStage(applicationId, "enhancing");
+    const aiEnhanced = await aiService.enhanceCVContent({
+      candidateData,
+      jobData,
+      rankedExperiences,
+      rankedProjects,
+      missingKeywords,
+      providedMetrics,
+      meta,
+    });
+
+    // Stage 4: Merge + categorize skills
+    await setGenerationStage(applicationId, "categorizing");
+    const allSkillNames = new Set();
+    for (const s of candidateData.skills || []) {
+      allSkillNames.add(typeof s === "string" ? s : s.name);
+    }
+    for (const s of aiEnhanced.skills || []) {
+      allSkillNames.add(typeof s === "string" ? s : s.name);
+    }
+    const { compareSkills } = require("../services/skillNormalizer.service");
+    const candidateSkillStrings = (candidateData.skills || []).map((s) =>
+      typeof s === "string" ? s : s.name
+    );
+    const allJdSkills = [...(jobData.requiredSkills || []), ...(jobData.preferredSkills || [])];
+    const skillComparison = compareSkills(candidateSkillStrings, allJdSkills);
+    for (const matched of skillComparison.matched) allSkillNames.add(matched.name);
+
+    // Word-boundary scan instead of plain substring includes(): "Java" in the
+    // JD must NOT match "JavaScript" in the resume, but "C++"/"C#"/".NET" DO
+    // need to match (a vanilla \b boundary fails on those because + and # are
+    // not word chars). The custom boundary below treats anything non-alnum as
+    // a separator, so trailing punctuation works correctly.
+    const allDescriptionText = [
+      ...(candidateData.experience || []).map((e) =>
+        Array.isArray(e.description) ? e.description.join(" ") : e.description || ""
+      ),
+      ...(candidateData.projects || []).map((p) =>
+        Array.isArray(p.description) ? p.description.join(" ") : p.description || ""
+      ),
+    ].join(" ");
+
+    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const skillBoundaryMatch = (skill, text) => {
+      const re = new RegExp(`(^|[^A-Za-z0-9])${escapeRegex(skill)}(?=[^A-Za-z0-9]|$)`, "i");
+      return re.test(text);
+    };
+
+    for (const jdSkill of allJdSkills) {
+      const name = typeof jdSkill === "string" ? jdSkill : jdSkill.name;
+      if (name && skillBoundaryMatch(name, allDescriptionText)) allSkillNames.add(name);
+    }
+
+    const categorized = await aiService.categorizeSkillsList(
+      [...allSkillNames],
+      jobData.detectedJobTitle || job.title || "",
+      meta
+    );
+    const categorizedSkills = (categorized || []).map((s) => ({
+      name: s.name,
+      category: s.category,
+      isAutoGenerated: true,
+    }));
+
+    // Re-score deterministically for the before → after delta
+    const { computeFitScore } = require("../services/scoringEngine.service");
+    const beforeScore = application.fitScore;
+    let afterScore = beforeScore;
+    try {
+      const rescored = computeFitScore({
+        candidateData: { ...candidateData, skills: categorizedSkills.map((s) => s.name) },
+        jobData,
+      });
+      afterScore = rescored.fitScore;
+    } catch (scoreErr) {
+      console.error("[CV Pipeline] Re-score failed (non-fatal):", scoreErr.message);
+    }
+
+    // Stage 5: Assembly
+    await setGenerationStage(applicationId, "assembling");
+    const draftData = cvOptimizer.assembleDraftCV({
+      user,
+      aiEnhanced,
+      candidateData,
+      jobData,
+      job,
+      categorizedSkills,
+    });
+
+    // All AI stages succeeded — charge the user (unless caller is owning the
+    // credit accounting, e.g. the bundle pipeline).
+    if (chargeOnSuccess) {
+      await deductCredits(user, COSTS.GENERATE_CV);
+    }
+
+    // Create DraftCV and persist results onto the Application
+    const draft = await DraftCV.create({ userId, ...draftData });
+    const markdownCV = buildMarkdownFromDraft(draftData);
+
+    const fresh = await Application.findById(applicationId);
+    if (fresh) {
+      fresh.optimizedCV = markdownCV;
+      fresh.draftCVId = draft._id;
+      fresh.optimizedFitScore = afterScore;
+      fresh.skills = draftData.skills.map((s) => ({
+        name: s.name,
+        category: s.category,
+        isAutoGenerated: true,
+      }));
+      if (templateId) fresh.templateId = templateId;
+      if (fresh.status === "analyzed" || !fresh.status) {
+        fresh.status = "assets_generated";
+        fresh.statusUpdatedAt = new Date();
+      }
+      fresh.generationStatus = {
+        stage: "completed",
+        progress: 100,
+        stageMessage: CV_STAGES.completed.message,
+        startedAt: fresh.generationStatus?.startedAt,
+        completedAt: new Date(),
+      };
+      await fresh.save();
+    }
+
+    console.log(
+      `[CV Pipeline] Complete. Draft ID: ${draft._id}. Fit score: ${beforeScore} → ${afterScore}`
+    );
+    return { draftId: draft._id, beforeScore, afterScore, jobData, candidateData, fresh };
+  } catch (err) {
+    console.error("[CV Pipeline] Failed:", err.message, err.stack);
+    const friendly =
+      err.code === "AI_UNAVAILABLE"
+        ? "AI service is temporarily unavailable. You have not been charged."
+        : "Generation failed. You have not been charged.";
+    await setGenerationStage(applicationId, "failed", {
+      message: friendly,
+      error: friendly,
+      completedAt: new Date(),
+    });
+    // Re-throw so wrapping pipelines (e.g. the bundle) can short-circuit and
+    // skip the cover-letter / interview stages instead of running into bad
+    // state. The standalone fire-and-forget caller catches at the top level.
+    throw err;
   }
 };
 
 /**
  * POST /analysis/:id/generate-cv
  *
- * Generate an optimized CV for an existing application (10 credits)
- *
- * Pipeline:
- *   Stage 1: Extract candidate data + job requirements (AI, parallel)
- *   Stage 2: Relevance-score experiences/projects (deterministic)
- *   Stage 3: Enhance content per-section (AI, one structured call)
- *   Stage 4: Keyword gap-fill + skill optimization (deterministic)
- *   Stage 5: Assemble into DraftCV (deterministic)
+ * Starts an async CV generation pipeline. Returns 202 immediately so the
+ * client can poll /applications/:id for stage progress. Credits are deducted
+ * inside the pipeline only after AI work completes successfully.
  */
 const generateApplicationCV = async (req, res) => {
   try {
     const { id } = req.params;
-    const { templateId } = req.body || {};
+    const { templateId, providedMetrics } = req.body || {};
     const userId = req.user._id;
     const user = req.user;
 
     const application = await Application.findOne({ _id: id, userId });
     if (!application) {
       return res.status(404).json({ message: "Application not found" });
+    }
+
+    // Concurrent-request guard: refuse a second start while one is in flight.
+    const inFlightStages = new Set([
+      "extracting",
+      "scoring",
+      "enhancing",
+      "categorizing",
+      "assembling",
+    ]);
+    if (
+      application.generationStatus &&
+      inFlightStages.has(application.generationStatus.stage)
+    ) {
+      return res.status(409).json({
+        message: "A CV generation is already in progress for this application.",
+        code: "GENERATION_IN_PROGRESS",
+        generationStatus: application.generationStatus,
+      });
     }
 
     const [resume, job] = await Promise.all([
@@ -297,156 +565,35 @@ const generateApplicationCV = async (req, res) => {
       return res.status(404).json({ message: "Resume or Job not found" });
     }
 
-    const remainingCredits = await deductCredits(user, COSTS.GENERATE_CV);
+    // Pre-flight balance check — does NOT deduct yet
+    checkCredits(user, COSTS.GENERATE_CV);
 
-    // ── Stage 1: Extract candidate data + job requirements (parallel) ──
-    console.log("[CV Optimizer] Stage 1: Extracting data...");
-    const [candidateData, jobData] = await Promise.all([
-      aiService.extractCandidateData(resume.rawText),
-      aiService.extractJobRequirements(job.description),
-    ]);
-
-    // Fill in detected metadata on job if available
-    if (jobData.detectedJobTitle) jobData.detectedJobTitle = jobData.detectedJobTitle;
-    if (!jobData.detectedJobTitle) jobData.detectedJobTitle = job.title;
-    if (!jobData.detectedCompany) jobData.detectedCompany = job.company;
-
-    // ── Stage 2: Relevance scoring (deterministic) ──
-    console.log("[CV Optimizer] Stage 2: Scoring relevance...");
-    const rankedExperiences = cvOptimizer.rankExperiences(
-      candidateData.experience || [],
-      jobData
-    );
-    const rankedProjects = cvOptimizer.rankProjects(
-      candidateData.projects || [],
-      jobData
-    );
-
-    // ── Stage 3: AI content enhancement (one structured call) ──
-    console.log("[CV Optimizer] Stage 3: Enhancing content...");
-    const missingKeywords = cvOptimizer.findKeywordGaps(
-      candidateData.skills || [],
-      jobData
-    );
-
-    const aiEnhanced = await aiService.enhanceCVContent({
-      candidateData,
-      jobData,
-      rankedExperiences,
-      rankedProjects,
-      missingKeywords,
-    });
-
-    // ── Stage 4: Merge + Categorize all skills (one AI call) ──
-    console.log("[CV Optimizer] Stage 4: Categorizing skills...");
-
-    // Merge ALL skill sources — no skill should be lost
-    const allSkillNames = new Set();
-
-    // Source 1: Original resume skills (from extractCandidateData)
-    for (const s of candidateData.skills || []) {
-      allSkillNames.add(typeof s === "string" ? s : s.name);
-    }
-    const source1Count = allSkillNames.size;
-
-    // Source 2: AI-inferred skills (from enhanceCVContent)
-    for (const s of aiEnhanced.skills || []) {
-      allSkillNames.add(typeof s === "string" ? s : s.name);
-    }
-    const source2Count = allSkillNames.size - source1Count;
-
-    // Source 3: JD-matched skills (confirmed by skill normalizer)
-    const { compareSkills } = require("../services/skillNormalizer.service");
-    const candidateSkillStrings = (candidateData.skills || []).map((s) =>
-      typeof s === "string" ? s : s.name
-    );
-    const allJdSkills = [
-      ...(jobData.requiredSkills || []),
-      ...(jobData.preferredSkills || []),
-    ];
-    const skillComparison = compareSkills(candidateSkillStrings, allJdSkills);
-    for (const matched of skillComparison.matched) {
-      allSkillNames.add(matched.name);
-    }
-
-    // Source 4: Skills mentioned in experience/project descriptions (scan raw text)
-    // This catches skills the AI extraction missed but are clearly in the resume
-    const allDescriptionText = [
-      ...(candidateData.experience || []).map((e) =>
-        Array.isArray(e.description) ? e.description.join(" ") : e.description || ""
-      ),
-      ...(candidateData.projects || []).map((p) =>
-        Array.isArray(p.description) ? p.description.join(" ") : p.description || ""
-      ),
-    ].join(" ").toLowerCase();
-
-    // Check each JD skill against description text — if mentioned, candidate has it
-    for (const jdSkill of allJdSkills) {
-      const name = typeof jdSkill === "string" ? jdSkill : jdSkill.name;
-      if (name && allDescriptionText.includes(name.toLowerCase())) {
-        allSkillNames.add(name);
-      }
-    }
-
-    console.log(`[CV Optimizer] Skills merge: ${source1Count} extracted, +${source2Count} AI-inferred, ${allSkillNames.size} total after all sources`);
-
-    // Single AI call to deduplicate + categorize the full list
-    const categorized = await aiService.categorizeSkillsList(
-      [...allSkillNames],
-      jobData.detectedJobTitle || job.title || ""
-    );
-
-    const categorizedSkills = (categorized || []).map((s) => ({
-      name: s.name,
-      category: s.category,
-      isAutoGenerated: true,
-    }));
-
-    // ── Stage 5: Assembly (deterministic) ──
-    console.log("[CV Optimizer] Stage 5: Assembling DraftCV...");
-    const draftData = cvOptimizer.assembleDraftCV({
-      user,
-      aiEnhanced,
-      candidateData,
-      jobData,
-      job,
-      categorizedSkills,
-    });
-
-    // Create the DraftCV
-    const draft = await DraftCV.create({
-      userId,
-      ...draftData,
-    });
-
-    // Also store markdown version on application for backwards compatibility
-    const markdownCV = buildMarkdownFromDraft(draftData);
-    application.optimizedCV = markdownCV;
-    application.draftCVId = draft._id;
-    application.skills = draftData.skills.map((s) => ({
-      name: s.name,
-      category: s.category,
-      isAutoGenerated: true,
-    }));
-    if (templateId) application.templateId = templateId;
+    // Mark as started and return 202 so the client can poll.
+    application.generationStatus = {
+      stage: "extracting",
+      progress: CV_STAGES.extracting.progress,
+      stageMessage: CV_STAGES.extracting.message,
+      startedAt: new Date(),
+      completedAt: undefined,
+      error: undefined,
+    };
     await application.save();
 
-    console.log("[CV Optimizer] Complete. Draft ID:", draft._id);
+    res.status(202).json({
+      applicationId: application._id,
+      generationStatus: application.generationStatus,
+    });
 
-    res.status(200).json({
-      optimizedCV: markdownCV,
-      draftId: draft._id,
-      skills: application.skills,
-      templateId: application.templateId,
-      remainingCredits,
+    // Fire-and-forget: pipeline runs after the response is sent. Errors are
+    // caught inside runCVGenerationPipeline and persisted to generationStatus.
+    runCVGenerationPipeline({ application, resume, job, user, templateId, providedMetrics }).catch((e) => {
+      console.error("[CV Pipeline] Unhandled top-level error:", e);
     });
   } catch (error) {
-    if (error.code === "INSUFFICIENT_CREDITS") {
-      return handleCreditError(res, error);
-    }
+    if (handleAIError(res, error)) return;
     console.error("CV Generation Error:", error.message, error.stack);
     res.status(500).json({
-      message: "Failed to generate CV",
+      message: "Failed to start CV generation. You have not been charged.",
       error: error.message,
     });
   }
@@ -564,24 +711,39 @@ const generateApplicationCoverLetter = async (req, res) => {
       return res.status(404).json({ message: "Resume or Job not found" });
     }
 
+    // Pre-flight balance check
+    checkCredits(user, COSTS.GENERATE_COVER_LETTER);
+
+    const coverLetter = await aiService.generateCoverLetter(resumeText, jobData.description, {
+      userId,
+      applicationId: application._id,
+    });
+
+    // AI succeeded — now charge the user
     const remainingCredits = await deductCredits(user, COSTS.GENERATE_COVER_LETTER);
 
-    const coverLetter = await aiService.generateCoverLetter(resumeText, jobData.description);
+    // Best-effort post-generation fact check. The function never throws —
+    // failures return [] so the user always sees their letter.
+    const coverLetterWarnings = await aiService.factCheckCoverLetter(
+      resumeText,
+      coverLetter,
+      { userId, applicationId: application._id }
+    );
 
     application.coverLetter = coverLetter;
+    application.coverLetterWarnings = coverLetterWarnings;
     await application.save();
 
     res.status(200).json({
       coverLetter,
+      coverLetterWarnings,
       remainingCredits,
     });
   } catch (error) {
-    if (error.code === "INSUFFICIENT_CREDITS") {
-      return handleCreditError(res, error);
-    }
+    if (handleAIError(res, error)) return;
     console.error("Cover Letter Generation Error:", error.message);
     res.status(500).json({
-      message: "Failed to generate cover letter",
+      message: "Failed to generate cover letter. You have not been charged.",
       error: error.message,
     });
   }
@@ -609,10 +771,39 @@ const generateApplicationInterview = async (req, res) => {
       return res.status(404).json({ message: "Job not found" });
     }
 
-    const remainingCredits = await deductCredits(user, COSTS.GENERATE_INTERVIEW);
+    // Pre-flight balance check
+    checkCredits(user, COSTS.GENERATE_INTERVIEW);
+
+    // Build candidate context so the prompt can anchor behavioral questions
+    // to real roles. Source from the linked DraftCV if present (already
+    // structured), else fall back to the analysis's stored fitAnalysis hints.
+    let candidateContext = null;
+    try {
+      const draft =
+        application.draftCVId && (await DraftCV.findById(application.draftCVId));
+      if (draft) {
+        candidateContext = {
+          summary: draft.professionalSummary,
+          experience: (draft.experience || []).slice(0, 3).map((e) => ({
+            role: e.title,
+            company: e.company,
+          })),
+          topSkills: (draft.skills || []).map((s) => s.name).slice(0, 8),
+        };
+      }
+    } catch (e) {
+      // Non-critical — fall back to JD-only prompt
+      console.error("[Interview] Failed to build candidate context:", e.message);
+    }
 
     const { questionsToAnswer: interviewQuestions, questionsToAsk } =
-      await aiService.generateInterviewQuestions(jobData.description, []);
+      await aiService.generateInterviewQuestions(jobData.description, candidateContext, {
+        userId,
+        applicationId: application._id,
+      });
+
+    // AI succeeded — now charge the user
+    const remainingCredits = await deductCredits(user, COSTS.GENERATE_INTERVIEW);
 
     application.interviewQuestions = interviewQuestions;
     application.questionsToAsk = questionsToAsk;
@@ -624,12 +815,163 @@ const generateApplicationInterview = async (req, res) => {
       remainingCredits,
     });
   } catch (error) {
-    if (error.code === "INSUFFICIENT_CREDITS") {
-      return handleCreditError(res, error);
-    }
+    if (handleAIError(res, error)) return;
     console.error("Interview Generation Error:", error.message);
     res.status(500).json({
-      message: "Failed to generate interview prep",
+      message: "Failed to generate interview prep. You have not been charged.",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * POST /analysis/:id/generate-bundle
+ *
+ * Generate the full application kit (CV + cover letter + interview prep) in
+ * one async pipeline at a discounted rate (18 credits vs. 20 individually).
+ *
+ * Behavior:
+ *   - Pre-flight check 18 credits (no deduct).
+ *   - Return 202 immediately with `{ applicationId, generationStatus }`.
+ *   - Run the existing async CV pipeline with `chargeOnSuccess: false`.
+ *   - On CV success, run cover letter (with fact-check) inline.
+ *   - On cover letter success, run interview prep inline.
+ *   - All-or-nothing: charge 18 credits ONLY when all three complete. If any
+ *     stage fails, the user is not charged at all (the partial CV stays on
+ *     the application as a usable byproduct — generous in v1).
+ */
+const generateApplicationBundle = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { templateId, providedMetrics } = req.body || {};
+    const userId = req.user._id;
+    const user = req.user;
+
+    const application = await Application.findOne({ _id: id, userId });
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    const inFlightStages = new Set([
+      "extracting", "scoring", "enhancing", "categorizing", "assembling",
+    ]);
+    if (
+      application.generationStatus &&
+      inFlightStages.has(application.generationStatus.stage)
+    ) {
+      return res.status(409).json({
+        message: "A generation is already in progress for this application.",
+        code: "GENERATION_IN_PROGRESS",
+        generationStatus: application.generationStatus,
+      });
+    }
+
+    const [resume, job] = await Promise.all([
+      Resume.findById(application.resumeId),
+      Job.findById(application.jobId),
+    ]);
+    if (!resume || !job) {
+      return res.status(404).json({ message: "Resume or Job not found" });
+    }
+
+    checkCredits(user, COSTS.GENERATE_BUNDLE);
+
+    // Mark CV stage so the polling UI sees motion immediately.
+    application.generationStatus = {
+      stage: "extracting",
+      progress: CV_STAGES.extracting.progress,
+      stageMessage: CV_STAGES.extracting.message,
+      startedAt: new Date(),
+      completedAt: undefined,
+      error: undefined,
+    };
+    await application.save();
+
+    res.status(202).json({
+      applicationId: application._id,
+      generationStatus: application.generationStatus,
+      bundle: true,
+    });
+
+    // Fire-and-forget bundle pipeline. Errors caught inside, never bubble out.
+    (async () => {
+      try {
+        // Stage 1: CV pipeline (skip charge — bundle owns it)
+        const cvResult = await runCVGenerationPipeline({
+          application,
+          resume,
+          job,
+          user,
+          templateId,
+          chargeOnSuccess: false,
+          providedMetrics,
+        });
+
+        // Stage 2: Cover letter (resume text from raw resume)
+        const coverLetter = await aiService.generateCoverLetter(
+          resume.rawText,
+          job.description,
+          { userId, applicationId: application._id }
+        );
+        const coverLetterWarnings = await aiService.factCheckCoverLetter(
+          resume.rawText,
+          coverLetter,
+          { userId, applicationId: application._id }
+        );
+
+        // Stage 3: Interview prep (with candidate context from the new CV draft)
+        let candidateContext = null;
+        try {
+          const draft = await DraftCV.findById(cvResult.draftId);
+          if (draft) {
+            candidateContext = {
+              summary: draft.professionalSummary,
+              experience: (draft.experience || []).slice(0, 3).map((e) => ({
+                role: e.title,
+                company: e.company,
+              })),
+              topSkills: (draft.skills || []).map((s) => s.name).slice(0, 8),
+            };
+          }
+        } catch (e) {
+          console.error("[Bundle] Failed to build candidate context:", e.message);
+        }
+
+        const { questionsToAnswer: interviewQuestions, questionsToAsk } =
+          await aiService.generateInterviewQuestions(job.description, candidateContext, {
+            userId,
+            applicationId: application._id,
+          });
+
+        // All three succeeded — charge once at bundle rate.
+        await deductCredits(user, COSTS.GENERATE_BUNDLE);
+
+        // Persist the additional artifacts onto the application doc. Re-fetch
+        // because runCVGenerationPipeline already modified `fresh`.
+        const finalApp = await Application.findById(application._id);
+        if (finalApp) {
+          finalApp.coverLetter = coverLetter;
+          finalApp.coverLetterWarnings = coverLetterWarnings;
+          finalApp.interviewQuestions = interviewQuestions;
+          finalApp.questionsToAsk = questionsToAsk;
+          await finalApp.save();
+        }
+
+        console.log(
+          `[Bundle] Complete for ${application._id}. Score: ${cvResult.beforeScore} → ${cvResult.afterScore}. Warnings: ${coverLetterWarnings.length}.`
+        );
+      } catch (err) {
+        console.error("[Bundle] Pipeline failed:", err.message);
+        // Bundle pipeline failures already write a 'failed' generationStatus
+        // via runCVGenerationPipeline OR leave the doc in a non-bundle state
+        // if the failure was after CV. No charge has been applied.
+      }
+    })().catch((e) => console.error("[Bundle] Unhandled top-level error:", e));
+  } catch (error) {
+    if (handleAIError(res, error)) return;
+    console.error("Bundle Generation Error:", error.message, error.stack);
+    res.status(500).json({
+      message: "Failed to start bundle generation. You have not been charged.",
       error: error.message,
     });
   }
@@ -640,6 +982,59 @@ const generateApplicationInterview = async (req, res) => {
  *
  * Create a DraftCV from an application's optimized CV for editing in the builder
  */
+/**
+ * POST /analysis/:id/preflight-metrics
+ *
+ * Cheap pre-flight before CV generation. Returns the small set of "vague"
+ * bullets the user could improve by supplying numbers (team size, percentages,
+ * scale). The extraction calls are cached so on the warm path this is sub-100ms.
+ *
+ * No charge. No AI work beyond reading the cached extractions. If extractions
+ * miss the cache, the call still runs them — 1-2 LLM calls — because we need
+ * the bullet text to detect from. That cost is borne by the analyze step the
+ * user already paid for; we do not deduct here.
+ */
+const preflightMetrics = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+
+    const application = await Application.findOne({ _id: id, userId });
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    const [resume, job] = await Promise.all([
+      Resume.findById(application.resumeId),
+      Job.findById(application.jobId),
+    ]);
+    if (!resume || !job) {
+      return res.status(404).json({ message: "Resume or Job not found" });
+    }
+
+    const meta = { userId, applicationId: application._id };
+    const [candidateData, jobData] = await Promise.all([
+      aiService.extractCandidateData(resume.rawText, meta),
+      aiService.extractJobRequirements(job.description, meta),
+    ]);
+    if (!jobData.detectedJobTitle) jobData.detectedJobTitle = job.title;
+    if (!jobData.detectedCompany) jobData.detectedCompany = job.company;
+
+    const rankedExperiences = cvOptimizer.rankExperiences(
+      candidateData.experience || [],
+      jobData
+    );
+    const vagueBullets = metricCapture.detectVagueBullets(rankedExperiences);
+
+    return res.json({ vagueBullets });
+  } catch (error) {
+    if (handleAIError(res, error)) return;
+    console.error("Preflight metrics error:", error.message);
+    // Non-fatal — fall through with an empty list so the user can still proceed.
+    return res.json({ vagueBullets: [] });
+  }
+};
+
 const editApplication = async (req, res) => {
   try {
     const { id } = req.params;
@@ -653,6 +1048,26 @@ const editApplication = async (req, res) => {
     const cvText = application.optimizedCV || "";
     if (!cvText) {
       return res.status(400).json({ message: "No CV content to edit. Generate a CV first." });
+    }
+
+    // Idempotency: if a draft was already created from this application in the
+    // last 10 minutes, return that one instead of running the (slow, AI-backed)
+    // extraction again. Protects against double-clicks and connection-drop
+    // retries that would otherwise leave duplicate "Edit of X" drafts behind.
+    const TEN_MIN = 10 * 60 * 1000;
+    const recent = await DraftCV.findOne({
+      userId,
+      sourceApplicationId: application._id,
+      createdAt: { $gte: new Date(Date.now() - TEN_MIN) },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+    if (recent) {
+      return res.status(200).json({
+        message: "Existing draft returned",
+        draftId: recent._id,
+        cached: true,
+      });
     }
 
     // Extract structured data from the optimized CV markdown
@@ -678,6 +1093,7 @@ const editApplication = async (req, res) => {
 
     const draft = await DraftCV.create({
       userId,
+      sourceApplicationId: application._id,
       title: `Edit of ${application.jobId ? (await Job.findById(application.jobId))?.title || "Application" : "Application"}`,
       personalInfo: {
         fullName: req.user.firstName ? `${req.user.firstName} ${req.user.lastName}` : "Candidate",
@@ -722,8 +1138,12 @@ const editApplication = async (req, res) => {
       draftId: draft._id,
     });
   } catch (error) {
+    if (handleAIError(res, error)) return;
     console.error("Edit Application Error:", error);
-    res.status(500).json({ message: "Failed to prepare edit", error: error.message });
+    res.status(500).json({
+      message: "Failed to prepare edit. You have not been charged.",
+      error: error.message,
+    });
   }
 };
 
@@ -732,5 +1152,7 @@ module.exports = {
   generateApplicationCV,
   generateApplicationCoverLetter,
   generateApplicationInterview,
+  generateApplicationBundle,
+  preflightMetrics,
   editApplication,
 };

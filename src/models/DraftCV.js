@@ -7,6 +7,16 @@ const draftCVSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    // Set when this draft was created via "Edit in Builder" on an Application.
+    // Lets us short-circuit duplicate edit requests and recover from a dropped
+    // connection: if the POST fails after the draft was already created, the
+    // frontend can find it by sourceApplicationId instead of creating a duplicate.
+    sourceApplicationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Application",
+      default: null,
+      index: true,
+    },
     title: {
       type: String,
       default: "Untitled CV",

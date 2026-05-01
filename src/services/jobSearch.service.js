@@ -8,93 +8,51 @@ const CACHE_TTL_MS = 30 * 60 * 1000;
 const DB_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour for DB cache
 
 /**
- * Build a search query from user's job profile and optional CV data
+ * Build a search query from request overrides
  */
-const buildSearchQuery = (jobProfile, draftCV, overrides = {}) => {
-  let keywords = overrides.keywords || "";
-  let location = overrides.location || "";
-  let country = overrides.country || "";
-  let jobType = overrides.jobType || "";
-  let remote = overrides.remote || false;
+const buildSearchQuery = (overrides = {}) => {
+  const keywords = (overrides.keywords || "").trim();
+  const location = (overrides.location || "").trim();
+  const country = (overrides.country || "").trim() || "ng";
+  const jobType = overrides.jobType || "";
+  const remote = overrides.remote || false;
 
-  // Fill from job profile
-  if (jobProfile) {
-    if (!keywords) keywords = jobProfile.desiredTitle || "";
-    if (!location && jobProfile.preferredLocation) {
-      location = jobProfile.preferredLocation.city || "";
-      if (!country) country = jobProfile.preferredLocation.country || "";
-      if (!remote) remote = jobProfile.preferredLocation.remote || false;
-    }
-    if (!jobType) jobType = jobProfile.jobType || "";
-
-    // Append top skills as supplementary keywords
-    if (jobProfile.topSkills?.length && keywords) {
-      const skillStr = jobProfile.topSkills.slice(0, 3).join(" ");
-      keywords = `${keywords} ${skillStr}`;
-    }
-  }
-
-  // Enrich from CV data if available
-  if (draftCV) {
-    if (!keywords && draftCV.targetJob?.title) {
-      keywords = draftCV.targetJob.title;
-    }
-    // Add CV skills for richer search
-    if (draftCV.skills?.length && !jobProfile?.topSkills?.length) {
-      const cvSkills = draftCV.skills.slice(0, 3).map((s) => s.name).join(" ");
-      keywords = keywords ? `${keywords} ${cvSkills}` : cvSkills;
-    }
-  }
-
-  return {
-    keywords: keywords.trim(),
-    location: location.trim(),
-    country: country.trim() || "ng",
-    jobType,
-    remote,
-  };
+  return { keywords, location, country, jobType, remote };
 };
 
 /**
- * Search jobs from Adzuna, Jobberman, and Indeed
+ * Search jobs from Adzuna and Jobberman
  */
 const search = async (query, sourceFilter = "mixed") => {
   const cacheKey = JSON.stringify({ ...query, sourceFilter });
 
-  // Check in-memory cache
   const cached = queryCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     return cached.data;
   }
 
   const isNigeria = query.country.toLowerCase() === "ng";
-  // Map frontend filter names: "global" = adzuna, "local" = jobberman, "mixed" = all
   const isGlobal = sourceFilter === "global";
   const isLocal = sourceFilter === "local";
   const isMixed = sourceFilter === "mixed";
 
-  // Build promises array for all sources in parallel
   const sourcePromises = {};
 
-  // Adzuna for international jobs
   if (isMixed || isGlobal || sourceFilter === "adzuna") {
     const adzunaCountry = isNigeria ? "gb" : query.country;
     const adzunaKeywords = query.remote ? `${query.keywords} remote` : query.keywords;
-    // Don't pass Nigerian cities (e.g. "Port Harcourt") to Adzuna GB — they won't match
     const adzunaLocation = (query.remote || isNigeria) ? "" : query.location;
     sourcePromises.adzuna = adzunaService
       .searchJobs(adzunaKeywords, adzunaLocation, adzunaCountry, query.jobType)
       .catch(() => ({ results: [], count: 0 }));
   }
 
-  // Jobberman for Nigerian jobs
   if (isMixed || isLocal || sourceFilter === "jobberman") {
     sourcePromises.jobberman = jobbermanService
       .searchJobs(query.keywords, query.location, query.jobType)
       .catch(() => ({ results: [], count: 0 }));
   }
 
-  // Run all sources in parallel
   const keys = Object.keys(sourcePromises);
   const values = await Promise.all(Object.values(sourcePromises));
   const sourceData = {};
@@ -102,13 +60,11 @@ const search = async (query, sourceFilter = "mixed") => {
     sourceData[key] = values[i];
   });
 
-  // Merge all results
   const allResults = [
     ...(sourceData.adzuna?.results || []),
     ...(sourceData.jobberman?.results || []),
   ];
 
-  // Deduplicate by title+company
   const seen = new Set();
   const deduplicated = allResults.filter((r) => {
     const key = `${r.title.toLowerCase()}|${r.company.toLowerCase()}`;
@@ -117,7 +73,6 @@ const search = async (query, sourceFilter = "mixed") => {
     return true;
   });
 
-  // Sort by date (newest first)
   deduplicated.sort((a, b) => new Date(b.postedDate) - new Date(a.postedDate));
 
   const result = {
@@ -129,92 +84,9 @@ const search = async (query, sourceFilter = "mixed") => {
     },
   };
 
-  // Cache the result
   queryCache.set(cacheKey, { data: result, timestamp: Date.now() });
 
   return result;
-};
-
-/**
- * Score search results against a user's CV
- */
-const scoreResults = (results, draftCV) => {
-  if (!draftCV) {
-    return results.map((r) => ({
-      ...r,
-      matchScore: null,
-      matchBreakdown: {
-        skillsScore: null,
-        experienceScore: null,
-        locationScore: null,
-        titleScore: null,
-      },
-    }));
-  }
-
-  const cvSkills = (draftCV.skills || []).map((s) => s.name.toLowerCase());
-  const cvTitle = (draftCV.targetJob?.title || "").toLowerCase();
-  const cvLocation = (draftCV.personalInfo?.address || "").toLowerCase();
-  const experienceYears = (draftCV.experience || []).length; // rough proxy
-
-  return results.map((r) => {
-    // Skills score: overlap between CV skills and job text
-    const jobText = `${r.title} ${r.snippet || ""} ${r.fullDescription || ""}`.toLowerCase();
-    const matchedSkills = cvSkills.filter((skill) => jobText.includes(skill));
-    const skillsScore = cvSkills.length > 0
-      ? Math.round((matchedSkills.length / cvSkills.length) * 100)
-      : 50;
-
-    // Title score: similarity between CV target job and job title
-    const titleWords = cvTitle.split(/\s+/).filter(Boolean);
-    const jobTitleLower = r.title.toLowerCase();
-    const titleMatches = titleWords.filter((w) => jobTitleLower.includes(w));
-    const titleScore = titleWords.length > 0
-      ? Math.round((titleMatches.length / titleWords.length) * 100)
-      : 50;
-
-    // Location score
-    const jobLocation = r.location.toLowerCase();
-    let locationScore = 50; // neutral if no location data
-    if (cvLocation && jobLocation) {
-      if (jobLocation.includes(cvLocation) || cvLocation.includes(jobLocation)) {
-        locationScore = 100;
-      } else if (jobLocation.includes("remote")) {
-        locationScore = 80;
-      } else {
-        locationScore = 30;
-      }
-    }
-
-    // Experience score (rough heuristic)
-    let experienceScore = 60;
-    const seniorKeywords = ["senior", "lead", "principal", "staff", "manager", "director"];
-    const juniorKeywords = ["junior", "entry", "intern", "graduate", "trainee"];
-    const isSeniorRole = seniorKeywords.some((k) => jobTitleLower.includes(k));
-    const isJuniorRole = juniorKeywords.some((k) => jobTitleLower.includes(k));
-
-    if (isSeniorRole && experienceYears >= 3) experienceScore = 80;
-    else if (isSeniorRole && experienceYears < 2) experienceScore = 30;
-    else if (isJuniorRole && experienceYears <= 2) experienceScore = 90;
-    else if (isJuniorRole && experienceYears > 4) experienceScore = 50;
-    else experienceScore = 65;
-
-    // Overall match score (weighted average)
-    const matchScore = Math.round(
-      skillsScore * 0.4 + titleScore * 0.3 + experienceScore * 0.2 + locationScore * 0.1
-    );
-
-    return {
-      ...r,
-      matchScore,
-      matchBreakdown: {
-        skillsScore,
-        experienceScore,
-        locationScore,
-        titleScore,
-      },
-    };
-  });
 };
 
 /**
@@ -227,16 +99,14 @@ const getJobDetails = async (result) => {
     return jobbermanService.getJobDetails(result.applyUrl);
   }
 
-  // Adzuna results already come with descriptions
   return result.snippet || "";
 };
 
 /**
- * Get cached search from DB (< 1 hour old)
+ * Get a cached search from DB (< 1 hour old). Shared across all visitors.
  */
-const getCachedSearch = async (query, userId, source) => {
+const getCachedSearch = async (query, source) => {
   const filter = {
-    userId,
     "query.keywords": query.keywords,
     "query.country": query.country,
     "query.location": query.location,
@@ -244,8 +114,6 @@ const getCachedSearch = async (query, userId, source) => {
     "query.remote": query.remote || false,
     cachedUntil: { $gt: new Date() },
   };
-  // Always filter by source to prevent cross-tab cache collisions
-  // (e.g. "All" tab picking up a "Global"-only cached entry)
   if (source) {
     filter.source = source;
   }
@@ -255,11 +123,9 @@ const getCachedSearch = async (query, userId, source) => {
 /**
  * Save search results to DB
  */
-const saveSearch = async (userId, query, results, sourceCV, source) => {
+const saveSearch = async (query, results, source) => {
   return JobSearch.create({
-    userId,
     query,
-    sourceCV: sourceCV || undefined,
     source,
     results,
     resultCount: results.length,
@@ -299,17 +165,14 @@ const TRENDING_CATEGORIES = [
 const searchTrending = async (sourceFilter = "mixed") => {
   const cacheKey = `trending_${sourceFilter}`;
 
-  // Check in-memory cache
   const cached = queryCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     return cached.data;
   }
 
-  // Pick 4 random categories
   const shuffled = [...TRENDING_CATEGORIES].sort(() => Math.random() - 0.5);
   const picks = shuffled.slice(0, 4);
 
-  // Fire parallel searches for each category
   const searches = picks.map((keyword) =>
     search(
       { keywords: keyword, location: "", country: "ng", jobType: "", remote: false },
@@ -319,7 +182,6 @@ const searchTrending = async (sourceFilter = "mixed") => {
 
   const results = await Promise.all(searches);
 
-  // Merge all results and deduplicate
   const allResults = results.flatMap((r) => r.results || []);
   const seen = new Set();
   const deduplicated = allResults.filter((r) => {
@@ -329,7 +191,6 @@ const searchTrending = async (sourceFilter = "mixed") => {
     return true;
   });
 
-  // Shuffle so it's not grouped by category
   deduplicated.sort(() => Math.random() - 0.5);
 
   const data = {
@@ -338,13 +199,11 @@ const searchTrending = async (sourceFilter = "mixed") => {
     categories: picks,
   };
 
-  // Cache for 30 min
   queryCache.set(cacheKey, { data, timestamp: Date.now() });
 
   return data;
 };
 
-// Clean up expired in-memory cache entries periodically
 setInterval(() => {
   const now = Date.now();
   for (const [key, value] of queryCache.entries()) {
@@ -358,7 +217,6 @@ module.exports = {
   buildSearchQuery,
   search,
   searchTrending,
-  scoreResults,
   getJobDetails,
   getCachedSearch,
   saveSearch,

@@ -441,10 +441,15 @@ const resetPassword = async (req, res) => {
 const getConfig = async (req, res) => {
   try {
     const settings = await SettingsService.getSettings();
+    // Surface AI availability so the frontend can warn users before they
+    // attempt a generation (instead of getting 503 mid-click). Reads the
+    // current activeProvider from the AI service module — "mock" means no
+    // API key is configured.
+    const { activeProvider } = require("../services/ai.service");
     res.status(200).json({
       features: {
         maintenanceMode: settings.features.maintenanceMode,
-        // Don't expose internal flags unless needed
+        aiAvailable: activeProvider !== "mock",
       },
       credits: settings.credits,
       announcement: settings.announcement,

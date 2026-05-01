@@ -42,6 +42,9 @@ exports.updateProfile = async (req, res) => {
       if (settings.autoGenerateAnalysis !== undefined) {
         updateFields["settings.autoGenerateAnalysis"] = settings.autoGenerateAnalysis;
       }
+      if (settings.hideSkillsAiPrompt !== undefined) {
+        updateFields["settings.hideSkillsAiPrompt"] = settings.hideSkillsAiPrompt;
+      }
     }
 
     const user = await User.findByIdAndUpdate(

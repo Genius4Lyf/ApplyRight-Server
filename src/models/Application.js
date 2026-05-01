@@ -22,6 +22,65 @@ const applicationSchema = new mongoose.Schema(
       min: 0,
       max: 100,
     },
+    // Re-scored fit after CV optimization runs. Stored alongside the original
+    // fitScore so the UI can surface a before → after delta as the "magic
+    // moment" of CV generation.
+    optimizedFitScore: {
+      type: Number,
+      min: 0,
+      max: 100,
+    },
+    // User-facing application status. Auto-bumps from "analyzed" to
+    // "assets_generated" when the user generates a CV. All later transitions
+    // (submitted, interviewing, offer, rejected, withdrawn) are user-driven
+    // via the JobHistory status menu.
+    status: {
+      type: String,
+      enum: [
+        "analyzed",
+        "assets_generated",
+        "submitted",
+        "interviewing",
+        "offer",
+        "rejected",
+        "withdrawn",
+      ],
+      default: "analyzed",
+    },
+    statusUpdatedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    // CV-generation progress. The pipeline runs asynchronously after the user
+    // clicks "Generate CV" — the controller returns 202 immediately and writes
+    // stage updates here as it advances. Frontend polls /applications/:id and
+    // renders these as a determinate progress bar.
+    //
+    // stage: 'idle' until generation starts; transitions through extracting →
+    // scoring → enhancing → categorizing → assembling; ends in 'completed' or
+    // 'failed'. Only transition into a non-terminal state if the prior state
+    // was terminal (idle | completed | failed) — guards against double-clicks.
+    generationStatus: {
+      stage: {
+        type: String,
+        enum: [
+          "idle",
+          "extracting",
+          "scoring",
+          "enhancing",
+          "categorizing",
+          "assembling",
+          "completed",
+          "failed",
+        ],
+        default: "idle",
+      },
+      stageMessage: { type: String },
+      progress: { type: Number, min: 0, max: 100, default: 0 },
+      startedAt: { type: Date },
+      completedAt: { type: Date },
+      error: { type: String },
+    },
     fitAnalysis: {
       overallFeedback: String,
       recommendation: String,
@@ -69,6 +128,12 @@ const applicationSchema = new mongoose.Schema(
     jobCompany: String,
     coverLetter: {
       type: String, // Markdown or HTML content
+    },
+    // Fact-check warnings flagged by a post-generation LLM pass — claims in the
+    // letter not directly supported by the resume. Empty array = clean letter.
+    coverLetterWarnings: {
+      type: [String],
+      default: [],
     },
     exportCount: {
       type: Number,

@@ -1,45 +1,22 @@
 const express = require("express");
 const router = express.Router();
-const { protect } = require("../middleware/auth.middleware");
 const {
   searchJobs,
   getSearchResults,
   getTrendingJobs,
   browseJobs,
-  getRecommendations,
   getJobDetails,
   trackClick,
-  toggleSave,
-  getSavedJobs,
-  tailorCV,
-  tailorBundle,
-  updateJobProfile,
-  quickScore,
 } = require("../controllers/jobSearch.controller");
 
-// Job profile / onboarding
-router.put("/profile", protect, updateJobProfile);
+// All job listing routes are public (no authentication required)
+router.get("/trending", getTrendingJobs);
+router.get("/browse", browseJobs);
 
-// Trending & browse (no profile needed)
-router.get("/trending", protect, getTrendingJobs);
-router.get("/browse", protect, browseJobs);
+router.post("/search", searchJobs);
+router.get("/search/:searchId", getSearchResults);
 
-// Search
-router.post("/search", protect, searchJobs);
-router.get("/search/:searchId", protect, getSearchResults);
-
-// Recommendations (personalized — needs profile/CV)
-router.get("/recommendations", protect, getRecommendations);
-
-// Saved jobs
-router.get("/saved", protect, getSavedJobs);
-
-// Job details + actions (must come after named routes)
-router.post("/:searchId/details/:resultId", protect, getJobDetails);
-router.post("/:searchId/click/:resultId", protect, trackClick);
-router.post("/:searchId/save/:resultId", protect, toggleSave);
-router.post("/:searchId/quick-score/:resultId", protect, quickScore);
-router.post("/:searchId/tailor/:resultId", protect, tailorCV);
-router.post("/:searchId/tailor-bundle/:resultId", protect, tailorBundle);
+router.post("/:searchId/details/:resultId", getJobDetails);
+router.post("/:searchId/click/:resultId", trackClick);
 
 module.exports = router;

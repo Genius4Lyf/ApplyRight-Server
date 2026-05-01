@@ -86,45 +86,95 @@ const scoreSkills = (candidateSkills, requiredSkills) => {
 };
 
 /**
- * Score experience match (0-100)
- * Considers years of experience relative to requirement
+ * Compute "effective" years of experience with a recency decay so a 5-year-
+ * old role doesn't count the same as recent work.
+ *
+ * decay(yearsAgo) = 0.9^yearsAgo, capped at 1.0 for current/recent roles.
+ * So a role ending this year contributes 100%, a role ending 5 years ago
+ * contributes ~59%, and 10 years ago ~35%.
+ *
+ * Returns the input candidateYears unchanged if per-role data is missing,
+ * so older extractions (no endYear) keep prior behaviour.
  */
-const scoreExperience = (candidateYears, requiredYears) => {
+const computeEffectiveYears = (candidateYears, experienceList) => {
+  if (!Array.isArray(experienceList) || experienceList.length === 0) return candidateYears;
+  const currentYear = new Date().getFullYear();
+  let effective = 0;
+  let anyDated = false;
+  for (const exp of experienceList) {
+    const years = Number(exp?.years) || 0;
+    if (years <= 0) continue;
+    const endYear = exp?.isCurrent ? currentYear : Number(exp?.endYear);
+    if (!endYear || isNaN(endYear)) {
+      // No date — assume recent (no decay) so we don't underweight a role
+      // we just can't place in time. Caller can still fall back to raw years.
+      effective += years;
+      continue;
+    }
+    anyDated = true;
+    const yearsAgo = Math.max(0, currentYear - endYear);
+    const decay = Math.pow(0.9, yearsAgo);
+    effective += years * decay;
+  }
+  // If NO role had a parseable endYear, trust the legacy total instead of
+  // collapsing recency-decay logic onto blank input.
+  if (!anyDated) return candidateYears;
+  return effective;
+};
+
+/**
+ * Score experience match (0-100).
+ * Optionally accepts per-role experience list to apply recency-weighting:
+ * older roles count less than recent ones.
+ */
+const scoreExperience = (candidateYears, requiredYears, experienceList = null) => {
+  const effectiveYears = computeEffectiveYears(candidateYears, experienceList);
+
   // No requirement stated → neutral default
   if (!requiredYears || requiredYears <= 0) {
     return {
-      score: candidateYears > 0 ? 60 : 40,
+      score: effectiveYears > 0 ? 60 : 40,
       match: true,
       feedback: "No specific experience requirement stated.",
+      candidateYears,
+      effectiveYears: Math.round(effectiveYears * 10) / 10,
     };
   }
 
-  const ratio = candidateYears / requiredYears;
+  const ratio = effectiveYears / requiredYears;
 
   let score;
   let match;
   let feedback;
 
+  // Round effective years to one decimal for human-friendly feedback.
+  const effShown = Math.round(effectiveYears * 10) / 10;
+  // If recency-decay is active, append a hint to feedback so the user knows
+  // why a 6-year resume only counted as ~4 effective years.
+  const decayNote = experienceList && Array.isArray(experienceList) && effectiveYears < candidateYears
+    ? ` (recency-weighted from ${candidateYears} total)`
+    : "";
+
   if (ratio >= 1.5) {
     score = 100;
     match = true;
-    feedback = `Exceeds requirement: ${candidateYears} years vs ${requiredYears} required.`;
+    feedback = `Exceeds requirement: ${effShown} years vs ${requiredYears} required${decayNote}.`;
   } else if (ratio >= 1.0) {
     score = 90 + Math.round((ratio - 1.0) * 20);
     match = true;
-    feedback = `Meets requirement: ${candidateYears} years vs ${requiredYears} required.`;
+    feedback = `Meets requirement: ${effShown} years vs ${requiredYears} required${decayNote}.`;
   } else if (ratio >= 0.75) {
     score = 70 + Math.round((ratio - 0.75) * 80);
     match = true;
-    feedback = `Slightly below requirement: ${candidateYears} years vs ${requiredYears} required, but close enough to be competitive.`;
+    feedback = `Slightly below requirement: ${effShown} years vs ${requiredYears} required${decayNote}, but close enough to be competitive.`;
   } else if (ratio >= 0.5) {
     score = 40 + Math.round((ratio - 0.5) * 120);
     match = false;
-    feedback = `Below requirement: ${candidateYears} years vs ${requiredYears} required. Candidate may need to highlight transferable experience.`;
+    feedback = `Below requirement: ${effShown} years vs ${requiredYears} required${decayNote}. Candidate may need to highlight transferable experience.`;
   } else {
     score = Math.max(10, Math.round(ratio * 80));
     match = false;
-    feedback = `Significantly below requirement: ${candidateYears} years vs ${requiredYears} required.`;
+    feedback = `Significantly below requirement: ${effShown} years vs ${requiredYears} required${decayNote}.`;
   }
 
   return {
@@ -132,6 +182,7 @@ const scoreExperience = (candidateYears, requiredYears) => {
     match,
     feedback,
     candidateYears,
+    effectiveYears: effShown,
     requiredYears,
   };
 };
@@ -342,10 +393,11 @@ const computeFitScore = ({ candidateData, jobData }) => {
 
   const skillsResult = scoreSkills(candidateSkillNames, allRequiredSkills);
 
-  // 2. Experience score
+  // 2. Experience score (recency-weighted when per-role endYear is available)
   const experienceResult = scoreExperience(
     candidateData.totalYearsExperience || 0,
-    jobData.requiredYearsExperience || 0
+    jobData.requiredYearsExperience || 0,
+    candidateData.experience
   );
 
   // 3. Education score
