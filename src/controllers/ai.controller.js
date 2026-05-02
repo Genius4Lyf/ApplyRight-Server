@@ -50,7 +50,7 @@ const generateApplication = async (req, res) => {
     // Generate Interview Questions (NEW)
     // We use extracted skills + job description
     const { questionsToAnswer: interviewQuestions, questionsToAsk } =
-      await generateInterviewQuestions(job.description, []);
+      await generateInterviewQuestions(job.description, null);
 
     if (application) {
       // Update existing

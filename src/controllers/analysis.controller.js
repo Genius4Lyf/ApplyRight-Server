@@ -774,9 +774,9 @@ const generateApplicationInterview = async (req, res) => {
     // Pre-flight balance check
     checkCredits(user, COSTS.GENERATE_INTERVIEW);
 
-    // Build candidate context so the prompt can anchor behavioral questions
-    // to real roles. Source from the linked DraftCV if present (already
-    // structured), else fall back to the analysis's stored fitAnalysis hints.
+    // Build the FULL candidate context so the AI can ground both questions and
+    // suggested answers in real entries (no fabrication). Pass entire arrays —
+    // the prompt indexes them so the AI can cite specific items via refIndex.
     let candidateContext = null;
     try {
       const draft =
@@ -784,11 +784,21 @@ const generateApplicationInterview = async (req, res) => {
       if (draft) {
         candidateContext = {
           summary: draft.professionalSummary,
-          experience: (draft.experience || []).slice(0, 3).map((e) => ({
+          experience: (draft.experience || []).map((e) => ({
             role: e.title,
             company: e.company,
+            description: e.description,
           })),
-          topSkills: (draft.skills || []).map((s) => s.name).slice(0, 8),
+          education: (draft.education || []).map((e) => ({
+            degree: e.degree,
+            school: e.school,
+            description: e.description,
+          })),
+          projects: (draft.projects || []).map((p) => ({
+            title: p.title,
+            description: p.description,
+          })),
+          skills: (application.skills || draft.skills || []).map((s) => s.name).filter(Boolean),
         };
       }
     } catch (e) {
@@ -796,22 +806,27 @@ const generateApplicationInterview = async (req, res) => {
       console.error("[Interview] Failed to build candidate context:", e.message);
     }
 
-    const { questionsToAnswer: interviewQuestions, questionsToAsk } =
-      await aiService.generateInterviewQuestions(jobData.description, candidateContext, {
-        userId,
-        applicationId: application._id,
-      });
+    const aiResult = await aiService.generateInterviewQuestions(
+      jobData.description,
+      candidateContext,
+      { userId, applicationId: application._id }
+    );
 
     // AI succeeded — now charge the user
     const remainingCredits = await deductCredits(user, COSTS.GENERATE_INTERVIEW);
 
-    application.interviewQuestions = interviewQuestions;
-    application.questionsToAsk = questionsToAsk;
+    // Persist to the unified interviewPrep schema. Legacy fields
+    // (interviewQuestions / questionsToAsk) remain on the model for
+    // backward compatibility with old applications but are no longer written.
+    application.interviewPrep = application.interviewPrep || {};
+    application.interviewPrep.jobQuestions = aiResult.jobQuestions || [];
+    application.interviewPrep.questionsToAsk = aiResult.questionsToAsk || [];
     await application.save();
 
     res.status(200).json({
-      interviewQuestions,
-      questionsToAsk,
+      interviewQuestions: aiResult.questionsToAnswer || [],
+      questionsToAsk: aiResult.questionsToAsk || [],
+      jobQuestions: aiResult.jobQuestions || [],
       remainingCredits,
     });
   } catch (error) {
@@ -919,29 +934,43 @@ const generateApplicationBundle = async (req, res) => {
           { userId, applicationId: application._id }
         );
 
-        // Stage 3: Interview prep (with candidate context from the new CV draft)
+        // Stage 3: Interview prep — pass full candidate context so AI can ground
+        // suggested answers in real entries (no fabrication).
         let candidateContext = null;
         try {
           const draft = await DraftCV.findById(cvResult.draftId);
           if (draft) {
             candidateContext = {
               summary: draft.professionalSummary,
-              experience: (draft.experience || []).slice(0, 3).map((e) => ({
+              experience: (draft.experience || []).map((e) => ({
                 role: e.title,
                 company: e.company,
+                description: e.description,
               })),
-              topSkills: (draft.skills || []).map((s) => s.name).slice(0, 8),
+              education: (draft.education || []).map((e) => ({
+                degree: e.degree,
+                school: e.school,
+                description: e.description,
+              })),
+              projects: (draft.projects || []).map((p) => ({
+                title: p.title,
+                description: p.description,
+              })),
+              skills: (draft.skills || []).map((s) => s.name).filter(Boolean),
             };
           }
         } catch (e) {
           console.error("[Bundle] Failed to build candidate context:", e.message);
         }
 
-        const { questionsToAnswer: interviewQuestions, questionsToAsk } =
-          await aiService.generateInterviewQuestions(job.description, candidateContext, {
-            userId,
-            applicationId: application._id,
-          });
+        const interviewResult = await aiService.generateInterviewQuestions(
+          job.description,
+          candidateContext,
+          { userId, applicationId: application._id }
+        );
+        const interviewQuestions = interviewResult.questionsToAnswer || [];
+        const questionsToAsk = interviewResult.questionsToAsk || [];
+        const jobQuestionsRich = interviewResult.jobQuestions || [];
 
         // All three succeeded — charge once at bundle rate.
         await deductCredits(user, COSTS.GENERATE_BUNDLE);
@@ -952,8 +981,9 @@ const generateApplicationBundle = async (req, res) => {
         if (finalApp) {
           finalApp.coverLetter = coverLetter;
           finalApp.coverLetterWarnings = coverLetterWarnings;
-          finalApp.interviewQuestions = interviewQuestions;
-          finalApp.questionsToAsk = questionsToAsk;
+          finalApp.interviewPrep = finalApp.interviewPrep || {};
+          finalApp.interviewPrep.jobQuestions = jobQuestionsRich;
+          finalApp.interviewPrep.questionsToAsk = questionsToAsk;
           await finalApp.save();
         }
 

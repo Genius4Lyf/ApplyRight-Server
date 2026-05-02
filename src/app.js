@@ -13,10 +13,10 @@ require("./config/env"); // This will validate env vars on startup
 const app = express();
 
 const allowedOrigins = [
-  process.env.FRONTEND_URL,        // Netlify production (set on Render)
-  "https://localhost",             // Capacitor Android default
-  "capacitor://localhost",         // Capacitor iOS default
-  "http://localhost:5173",         // Vite dev server
+  process.env.FRONTEND_URL, // Netlify production (set on Render)
+  "https://localhost", // Capacitor Android default
+  "capacitor://localhost", // Capacitor iOS default
+  "http://localhost:5173", // Vite dev server
 ].filter(Boolean);
 
 const corsOptions = {
@@ -97,6 +97,7 @@ app.use("/api/pdf", require("./routes/pdf.routes"));
 app.use("/api/billing", require("./routes/billing.routes"));
 app.use("/api/feedback", require("./routes/feedback.routes"));
 app.use("/api/ai-feedback", require("./routes/aiFeedback.routes"));
+app.use("/api/interview-prep", require("./routes/interviewPrep.routes"));
 app.use("/api/admin", require("./routes/admin.routes"));
 app.use("/api/system", require("./routes/system.routes"));
 

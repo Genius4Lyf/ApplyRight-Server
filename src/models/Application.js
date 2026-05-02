@@ -158,13 +158,59 @@ const applicationSchema = new mongoose.Schema(
         category: String,
       },
     ],
+    // DEPRECATED — superseded by `interviewPrep.jobQuestions` and
+    // `interviewPrep.questionsToAsk`. Kept for backward compatibility with
+    // applications generated before the unified Interview Prep schema landed.
+    // New analyses no longer write to these fields.
     interviewQuestions: [
       {
-        type: { type: String }, // 'technical', 'behavioral'
+        type: { type: String },
         question: String,
       },
     ],
     questionsToAsk: [String],
+
+    // Unified Interview Prep — combines two sources:
+    //   - Skill-based prep: per-skill evidence + STAR-shaped talking point.
+    //     Populated when the user clicks "Save to Interview Prep" on the CV
+    //     builder Skills page.
+    //   - Job-based prep: AI-generated questions WITH suggested answers, all
+    //     grounded in the user's full profile (work history + education +
+    //     projects + skills) and the JD. Populated automatically during the
+    //     analysis flow.
+    interviewPrep: {
+      isSaved: { type: Boolean, default: false },
+      savedAt: { type: Date },
+      skillsWithEvidence: [
+        {
+          name: String,
+          category: String,
+          evidence: [
+            {
+              type: { type: String }, // 'experience' | 'education' | 'project'
+              refIndex: Number,
+              snippet: String,
+            },
+          ],
+          talkingPoint: String,
+        },
+      ],
+      jobQuestions: [
+        {
+          type: { type: String }, // 'technical' | 'behavioral' | 'situational'
+          question: String,
+          suggestedAnswer: String,
+          sourcedFrom: [
+            {
+              type: { type: String },
+              refIndex: Number,
+            },
+          ],
+        },
+      ],
+      questionsToAsk: [String],
+      userNotes: String,
+    },
   },
   {
     timestamps: true,
