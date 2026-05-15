@@ -39,6 +39,9 @@ const globalLimiter = rateLimit({
   max: 100, // Limit each IP to 100 requests per windowMs
   standardHeaders: true,
   legacyHeaders: false,
+  // AdMob SSV callbacks come from Google and can burst. Skip them; the
+  // route itself is protected by ECDSA signature verification.
+  skip: (req) => req.path === "/api/billing/admob-ssv",
   message: {
     message: "Too many requests from this IP, please try again after 15 minutes",
   },

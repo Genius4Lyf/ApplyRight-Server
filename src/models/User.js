@@ -42,6 +42,16 @@ const userSchema = new mongoose.Schema(
       longest: { type: Number, default: 0 },
       lastWatchDate: { type: Date, default: null },
     },
+    // Per-watch anti-abuse counters. UTC midnight resets todayCount.
+    adWatch: {
+      lastAt: { type: Date, default: null },
+      todayCount: { type: Number, default: 0 },
+      todayDate: { type: Date, default: null },
+    },
+    hasEverPurchased: {
+      type: Boolean,
+      default: false,
+    },
     unlockedTemplates: [String],
     referralCode: {
       type: String,

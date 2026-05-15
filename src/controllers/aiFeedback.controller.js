@@ -1,5 +1,6 @@
 const AICallLog = require("../models/AICallLog");
 const Application = require("../models/Application");
+const mongoose = require("mongoose");
 
 const ALLOWED_FEEDBACK = ["up", "down"];
 
@@ -58,5 +59,93 @@ exports.submitFeedback = async (req, res) => {
   } catch (error) {
     console.error("Submit feedback error:", error.message);
     res.status(500).json({ message: "Failed to submit feedback" });
+  }
+};
+
+/**
+ * Admin: aggregate counts of 👍/👎 by operation, plus a small recent-window
+ * snapshot. Used by the AdminAIFeedback dashboard's KPI cards. Bounded by
+ * the AICallLog 90-day TTL so totals naturally roll forward.
+ */
+exports.stats = async (req, res) => {
+  try {
+    const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const [byOperation, last30] = await Promise.all([
+      AICallLog.aggregate([
+        { $match: { feedback: { $ne: null } } },
+        {
+          $group: {
+            _id: "$operation",
+            up: { $sum: { $cond: [{ $eq: ["$feedback", "up"] }, 1, 0] } },
+            down: { $sum: { $cond: [{ $eq: ["$feedback", "down"] }, 1, 0] } },
+            total: { $sum: 1 },
+          },
+        },
+        { $sort: { total: -1 } },
+      ]),
+      AICallLog.aggregate([
+        { $match: { feedback: { $ne: null }, feedbackAt: { $gte: since30 } } },
+        {
+          $group: {
+            _id: null,
+            up: { $sum: { $cond: [{ $eq: ["$feedback", "up"] }, 1, 0] } },
+            down: { $sum: { $cond: [{ $eq: ["$feedback", "down"] }, 1, 0] } },
+            total: { $sum: 1 },
+          },
+        },
+      ]),
+    ]);
+
+    res.json({
+      byOperation,
+      last30Days: last30[0] || { up: 0, down: 0, total: 0 },
+    });
+  } catch (error) {
+    console.error("AI feedback stats error:", error.message);
+    res.status(500).json({ message: "Failed to fetch feedback stats" });
+  }
+};
+
+/**
+ * Admin: recent feedback entries with light context. Paginated by ?page= +
+ * filtered by ?feedback= (up|down) or ?operation= for triage.
+ */
+exports.list = async (req, res) => {
+  try {
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const limit = Math.min(parseInt(req.query.limit) || 25, 100);
+    const filter = { feedback: { $ne: null } };
+    if (req.query.feedback === "up" || req.query.feedback === "down") {
+      filter.feedback = req.query.feedback;
+    }
+    if (req.query.operation) {
+      filter.operation = req.query.operation;
+    }
+
+    const [items, total] = await Promise.all([
+      AICallLog.find(filter)
+        .sort({ feedbackAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .select(
+          "operation feedback feedbackComment feedbackAt provider model latencyMs userId applicationId errorMessage createdAt"
+        )
+        .populate("userId", "email firstName lastName")
+        .populate("applicationId", "jobTitle jobCompany")
+        .lean(),
+      AICallLog.countDocuments(filter),
+    ]);
+
+    res.json({
+      items,
+      page,
+      limit,
+      total,
+      totalPages: Math.max(Math.ceil(total / limit), 1),
+    });
+  } catch (error) {
+    console.error("AI feedback list error:", error.message);
+    res.status(500).json({ message: "Failed to fetch feedback list" });
   }
 };

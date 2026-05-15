@@ -108,9 +108,16 @@ const draftCVSchema = new mongoose.Schema(
             },
           ],
           talkingPoint: String,
+          confidence: {
+            type: String,
+            enum: ["needs_work", "almost", "ready"],
+          },
         },
       ],
-      userNotes: String,
+      // Mixed to support both the legacy single-string format and the new
+      // multi-note array. The controller normalizes legacy string values into
+      // a single saved note on read so the frontend only ever sees the array.
+      userNotes: mongoose.Schema.Types.Mixed,
     },
     tailoredFrom: {
       type: mongoose.Schema.Types.ObjectId,

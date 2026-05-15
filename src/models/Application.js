@@ -193,6 +193,12 @@ const applicationSchema = new mongoose.Schema(
             },
           ],
           talkingPoint: String,
+          // Per-skill self-rated readiness from practice mode. Same enum as
+          // question-level confidence so the UI can reuse the chips.
+          confidence: {
+            type: String,
+            enum: ["needs_work", "almost", "ready"],
+          },
         },
       ],
       jobQuestions: [
@@ -209,7 +215,11 @@ const applicationSchema = new mongoose.Schema(
         },
       ],
       questionsToAsk: [String],
-      userNotes: String,
+      // Multi-note model. Legacy single-string notes are folded into a single
+      // saved note on read (see interviewPrep.controller.js) so reads stay
+      // backward-compatible without a destructive migration. Use Mixed so
+      // either shape persists on save.
+      userNotes: mongoose.Schema.Types.Mixed,
     },
   },
   {

@@ -65,7 +65,8 @@ const handleAIError = (res, err) => {
   }
   if (err && err.code === "AI_UNAVAILABLE") {
     res.status(503).json({
-      message: "AI service is temporarily unavailable. You have not been charged. Please try again later.",
+      message:
+        "AI service is temporarily unavailable. You have not been charged. Please try again later.",
       code: "AI_UNAVAILABLE",
     });
     return true;
@@ -88,9 +89,10 @@ const resolveJobDescription = async (application) => {
   const search = await JobSearch.findById(application.jobId);
   if (search) {
     // Find the result that matches this application's job title/company
-    const result = search.results.find(
-      (r) => r.title === application.jobTitle && r.company === application.jobCompany
-    ) || search.results[0]; // fallback to first result if no match
+    const result =
+      search.results.find(
+        (r) => r.title === application.jobTitle && r.company === application.jobCompany
+      ) || search.results[0]; // fallback to first result if no match
 
     if (result) {
       return {
@@ -103,6 +105,99 @@ const resolveJobDescription = async (application) => {
   }
 
   return null;
+};
+
+const stringifyDescription = (description) => {
+  if (Array.isArray(description)) return description.filter(Boolean).join("\n");
+  return description || "";
+};
+
+const hasInterviewContext = (context) =>
+  !!(
+    context &&
+    (context.summary ||
+      context.experience?.length ||
+      context.education?.length ||
+      context.projects?.length ||
+      context.skills?.length)
+  );
+
+/**
+ * Build the profile block used for interview prep. Prefer the edited/generated
+ * DraftCV because it reflects the user's latest ApplyRight version, but fall
+ * back to the uploaded resume so prep is still candidate-grounded when the user
+ * generates interview prep before generating a CV.
+ */
+const buildInterviewCandidateContext = async (application, meta = {}) => {
+  if (application.draftCVId) {
+    const draft = await DraftCV.findById(application.draftCVId);
+    if (draft) {
+      const context = {
+        summary: draft.professionalSummary,
+        experience: (draft.experience || []).map((e) => ({
+          role: e.title,
+          company: e.company,
+          description: stringifyDescription(e.description),
+        })),
+        education: (draft.education || []).map((e) => ({
+          degree: e.degree,
+          school: e.school,
+          field: e.field,
+          description: stringifyDescription(e.description),
+        })),
+        projects: (draft.projects || []).map((p) => ({
+          title: p.title,
+          description: stringifyDescription(p.description),
+        })),
+        skills: (draft.skills || []).map((s) => s.name).filter(Boolean),
+      };
+      if (hasInterviewContext(context)) return context;
+    }
+  }
+
+  if (!application.resumeId) return null;
+
+  const resume = await Resume.findById(application.resumeId);
+  if (!resume?.rawText) return null;
+
+  const extracted = await aiService.extractCandidateData(resume.rawText, meta);
+  const context = {
+    summary: extracted.summary,
+    experience: (extracted.experience || []).map((e) => ({
+      role: e.role,
+      company: e.company,
+      description: stringifyDescription(e.description),
+    })),
+    education: (extracted.education || []).map((e) => ({
+      degree: e.degree,
+      school: e.school,
+      field: e.field,
+      description: stringifyDescription(e.description),
+    })),
+    projects: (extracted.projects || []).map((p) => ({
+      title: p.title,
+      description: stringifyDescription(p.description),
+    })),
+    skills: (extracted.skills || [])
+      .map((s) => (typeof s === "string" ? s : s.name))
+      .filter(Boolean),
+  };
+
+  return hasInterviewContext(context) ? context : null;
+};
+
+const serializeInterviewPrep = (application) => {
+  const prep = application.interviewPrep?.toObject
+    ? application.interviewPrep.toObject()
+    : application.interviewPrep || {};
+  return {
+    isSaved: !!prep.isSaved,
+    savedAt: prep.savedAt,
+    skillsWithEvidence: prep.skillsWithEvidence || [],
+    jobQuestions: prep.jobQuestions || [],
+    questionsToAsk: prep.questionsToAsk || [],
+    userNotes: prep.userNotes || "",
+  };
 };
 
 /**
@@ -130,12 +225,15 @@ const analyzeFit = async (req, res) => {
       const meta = { userId };
       const extractedData = await aiService.extractResumeProfile(resume.rawText, meta);
 
-      const structuredSkills = await aiService.generateStructuredSkills({
-        education: extractedData.education,
-        experience: extractedData.experience,
-        projects: extractedData.projects,
-        targetJob: null,
-      }, meta);
+      const structuredSkills = await aiService.generateStructuredSkills(
+        {
+          education: extractedData.education,
+          experience: extractedData.experience,
+          projects: extractedData.projects,
+          targetJob: null,
+        },
+        meta
+      );
 
       // AI work succeeded — now charge the user
       const remainingCredits = await deductCredits(user, COSTS.CREATE_FROM_UPLOAD);
@@ -350,7 +448,15 @@ const setGenerationStage = async (applicationId, stage, extra = {}) => {
  *
  * Returns `{ draftId, beforeScore, afterScore }` on success.
  */
-const runCVGenerationPipeline = async ({ application, resume, job, user, templateId, chargeOnSuccess = true, providedMetrics = {} }) => {
+const runCVGenerationPipeline = async ({
+  application,
+  resume,
+  job,
+  user,
+  templateId,
+  chargeOnSuccess = true,
+  providedMetrics = {},
+}) => {
   const userId = user._id;
   const applicationId = application._id;
   const meta = { userId, applicationId };
@@ -545,10 +651,7 @@ const generateApplicationCV = async (req, res) => {
       "categorizing",
       "assembling",
     ]);
-    if (
-      application.generationStatus &&
-      inFlightStages.has(application.generationStatus.stage)
-    ) {
+    if (application.generationStatus && inFlightStages.has(application.generationStatus.stage)) {
       return res.status(409).json({
         message: "A CV generation is already in progress for this application.",
         code: "GENERATION_IN_PROGRESS",
@@ -586,9 +689,11 @@ const generateApplicationCV = async (req, res) => {
 
     // Fire-and-forget: pipeline runs after the response is sent. Errors are
     // caught inside runCVGenerationPipeline and persisted to generationStatus.
-    runCVGenerationPipeline({ application, resume, job, user, templateId, providedMetrics }).catch((e) => {
-      console.error("[CV Pipeline] Unhandled top-level error:", e);
-    });
+    runCVGenerationPipeline({ application, resume, job, user, templateId, providedMetrics }).catch(
+      (e) => {
+        console.error("[CV Pipeline] Unhandled top-level error:", e);
+      }
+    );
   } catch (error) {
     if (handleAIError(res, error)) return;
     console.error("CV Generation Error:", error.message, error.stack);
@@ -724,11 +829,10 @@ const generateApplicationCoverLetter = async (req, res) => {
 
     // Best-effort post-generation fact check. The function never throws —
     // failures return [] so the user always sees their letter.
-    const coverLetterWarnings = await aiService.factCheckCoverLetter(
-      resumeText,
-      coverLetter,
-      { userId, applicationId: application._id }
-    );
+    const coverLetterWarnings = await aiService.factCheckCoverLetter(resumeText, coverLetter, {
+      userId,
+      applicationId: application._id,
+    });
 
     application.coverLetter = coverLetter;
     application.coverLetterWarnings = coverLetterWarnings;
@@ -779,30 +883,12 @@ const generateApplicationInterview = async (req, res) => {
     // the prompt indexes them so the AI can cite specific items via refIndex.
     let candidateContext = null;
     try {
-      const draft =
-        application.draftCVId && (await DraftCV.findById(application.draftCVId));
-      if (draft) {
-        candidateContext = {
-          summary: draft.professionalSummary,
-          experience: (draft.experience || []).map((e) => ({
-            role: e.title,
-            company: e.company,
-            description: e.description,
-          })),
-          education: (draft.education || []).map((e) => ({
-            degree: e.degree,
-            school: e.school,
-            description: e.description,
-          })),
-          projects: (draft.projects || []).map((p) => ({
-            title: p.title,
-            description: p.description,
-          })),
-          skills: (application.skills || draft.skills || []).map((s) => s.name).filter(Boolean),
-        };
-      }
+      candidateContext = await buildInterviewCandidateContext(application, {
+        userId,
+        applicationId: application._id,
+      });
     } catch (e) {
-      // Non-critical — fall back to JD-only prompt
+      // Non-critical - fall back to JD-only prompt.
       console.error("[Interview] Failed to build candidate context:", e.message);
     }
 
@@ -823,10 +909,13 @@ const generateApplicationInterview = async (req, res) => {
     application.interviewPrep.questionsToAsk = aiResult.questionsToAsk || [];
     await application.save();
 
+    const interviewPrep = serializeInterviewPrep(application);
+
     res.status(200).json({
       interviewQuestions: aiResult.questionsToAnswer || [],
-      questionsToAsk: aiResult.questionsToAsk || [],
-      jobQuestions: aiResult.jobQuestions || [],
+      questionsToAsk: interviewPrep.questionsToAsk,
+      jobQuestions: interviewPrep.jobQuestions,
+      interviewPrep,
       remainingCredits,
     });
   } catch (error) {
@@ -834,6 +923,100 @@ const generateApplicationInterview = async (req, res) => {
     console.error("Interview Generation Error:", error.message);
     res.status(500).json({
       message: "Failed to generate interview prep. You have not been charged.",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * POST /analysis/:id/generate-more-interview
+ *
+ * Generate ADDITIONAL interview questions for an existing application,
+ * avoiding duplicates of the questions already on `interviewPrep.jobQuestions`.
+ * Costs 5 credits (same as initial generation).
+ *
+ * Returns the full updated jobQuestions list plus a `newQuestionIndices`
+ * array marking which entries are new so the frontend can badge them.
+ */
+const generateMoreApplicationInterview = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+    const user = req.user;
+
+    const application = await Application.findOne({ _id: id, userId });
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    const jobData = await resolveJobDescription(application);
+    if (!jobData) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    checkCredits(user, COSTS.GENERATE_INTERVIEW);
+
+    let candidateContext = null;
+    try {
+      candidateContext = await buildInterviewCandidateContext(application, {
+        userId,
+        applicationId: application._id,
+      });
+    } catch (e) {
+      console.error("[Interview-More] Failed to build candidate context:", e.message);
+    }
+
+    const existing = application.interviewPrep?.jobQuestions || [];
+    const existingTexts = existing
+      .map((q) => (typeof q === "string" ? q : q?.question))
+      .filter(Boolean);
+
+    const aiResult = await aiService.generateInterviewQuestions(
+      jobData.description,
+      candidateContext,
+      { userId, applicationId: application._id, operation: "generateMoreInterviewQuestions" },
+      { existingQuestions: existingTexts }
+    );
+
+    const remainingCredits = await deductCredits(user, COSTS.GENERATE_INTERVIEW);
+
+    const newJobQuestions = Array.isArray(aiResult.jobQuestions) ? aiResult.jobQuestions : [];
+    const newQuestionsToAsk = Array.isArray(aiResult.questionsToAsk) ? aiResult.questionsToAsk : [];
+
+    application.interviewPrep = application.interviewPrep || {};
+    const startIdx = existing.length;
+    application.interviewPrep.jobQuestions = [...existing, ...newJobQuestions];
+
+    // Merge questionsToAsk too, de-duped by case-insensitive match
+    const askExisting = Array.isArray(application.interviewPrep.questionsToAsk)
+      ? application.interviewPrep.questionsToAsk
+      : [];
+    const askSeen = new Set(askExisting.map((q) => String(q).trim().toLowerCase()));
+    const askAdditions = newQuestionsToAsk.filter(
+      (q) => !askSeen.has(String(q).trim().toLowerCase())
+    );
+    application.interviewPrep.questionsToAsk = [...askExisting, ...askAdditions];
+
+    application.markModified("interviewPrep.jobQuestions");
+    application.markModified("interviewPrep.questionsToAsk");
+    await application.save();
+
+    const interviewPrep = serializeInterviewPrep(application);
+    const newIndices = newJobQuestions.map((_, i) => startIdx + i);
+
+    res.status(200).json({
+      jobQuestions: interviewPrep.jobQuestions,
+      questionsToAsk: interviewPrep.questionsToAsk,
+      newQuestionIndices: newIndices,
+      addedCount: newJobQuestions.length,
+      interviewPrep,
+      remainingCredits,
+    });
+  } catch (error) {
+    if (handleAIError(res, error)) return;
+    console.error("Interview-More Generation Error:", error.message);
+    res.status(500).json({
+      message: "Failed to generate additional interview questions. You have not been charged.",
       error: error.message,
     });
   }
@@ -868,12 +1051,13 @@ const generateApplicationBundle = async (req, res) => {
     }
 
     const inFlightStages = new Set([
-      "extracting", "scoring", "enhancing", "categorizing", "assembling",
+      "extracting",
+      "scoring",
+      "enhancing",
+      "categorizing",
+      "assembling",
     ]);
-    if (
-      application.generationStatus &&
-      inFlightStages.has(application.generationStatus.stage)
-    ) {
+    if (application.generationStatus && inFlightStages.has(application.generationStatus.stage)) {
       return res.status(409).json({
         message: "A generation is already in progress for this application.",
         code: "GENERATION_IN_PROGRESS",
@@ -923,11 +1107,10 @@ const generateApplicationBundle = async (req, res) => {
         });
 
         // Stage 2: Cover letter (resume text from raw resume)
-        const coverLetter = await aiService.generateCoverLetter(
-          resume.rawText,
-          job.description,
-          { userId, applicationId: application._id }
-        );
+        const coverLetter = await aiService.generateCoverLetter(resume.rawText, job.description, {
+          userId,
+          applicationId: application._id,
+        });
         const coverLetterWarnings = await aiService.factCheckCoverLetter(
           resume.rawText,
           coverLetter,
@@ -938,27 +1121,10 @@ const generateApplicationBundle = async (req, res) => {
         // suggested answers in real entries (no fabrication).
         let candidateContext = null;
         try {
-          const draft = await DraftCV.findById(cvResult.draftId);
-          if (draft) {
-            candidateContext = {
-              summary: draft.professionalSummary,
-              experience: (draft.experience || []).map((e) => ({
-                role: e.title,
-                company: e.company,
-                description: e.description,
-              })),
-              education: (draft.education || []).map((e) => ({
-                degree: e.degree,
-                school: e.school,
-                description: e.description,
-              })),
-              projects: (draft.projects || []).map((p) => ({
-                title: p.title,
-                description: p.description,
-              })),
-              skills: (draft.skills || []).map((s) => s.name).filter(Boolean),
-            };
-          }
+          candidateContext = await buildInterviewCandidateContext(
+            { ...application.toObject(), draftCVId: cvResult.draftId },
+            { userId, applicationId: application._id }
+          );
         } catch (e) {
           console.error("[Bundle] Failed to build candidate context:", e.message);
         }
@@ -968,7 +1134,6 @@ const generateApplicationBundle = async (req, res) => {
           candidateContext,
           { userId, applicationId: application._id }
         );
-        const interviewQuestions = interviewResult.questionsToAnswer || [];
         const questionsToAsk = interviewResult.questionsToAsk || [];
         const jobQuestionsRich = interviewResult.jobQuestions || [];
 
@@ -1050,10 +1215,7 @@ const preflightMetrics = async (req, res) => {
     if (!jobData.detectedJobTitle) jobData.detectedJobTitle = job.title;
     if (!jobData.detectedCompany) jobData.detectedCompany = job.company;
 
-    const rankedExperiences = cvOptimizer.rankExperiences(
-      candidateData.experience || [],
-      jobData
-    );
+    const rankedExperiences = cvOptimizer.rankExperiences(candidateData.experience || [], jobData);
     const vagueBullets = metricCapture.detectVagueBullets(rankedExperiences);
 
     return res.json({ vagueBullets });
@@ -1182,6 +1344,7 @@ module.exports = {
   generateApplicationCV,
   generateApplicationCoverLetter,
   generateApplicationInterview,
+  generateMoreApplicationInterview,
   generateApplicationBundle,
   preflightMetrics,
   editApplication,

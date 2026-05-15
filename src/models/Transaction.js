@@ -34,6 +34,17 @@ const transactionSchema = new mongoose.Schema(
       enum: ["pending", "completed", "failed"],
       default: "completed",
     },
+    // AdMob SSV transaction_id (or other external idempotency key).
+    // Unique sparse index prevents double-credit on Google retries.
+    externalTxId: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
+    rejectedReason: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true,

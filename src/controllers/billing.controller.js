@@ -1,5 +1,9 @@
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
+const adReward = require("../services/adReward.service");
+const admobSsv = require("../services/admobSsv.service");
+const env = require("../config/env");
+const logger = require("../utils/logger");
 
 // @desc    Get current user credit balance
 // @route   GET /api/billing/balance
@@ -93,122 +97,130 @@ exports.getTransactions = async (req, res) => {
   }
 };
 
-// @desc    Watch Ad Reward
+// @desc    Watch Ad Reward (Monetag link-out on web)
 // @route   POST /api/billing/watch-ad
 // @access  Private
 exports.watchAd = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
-    const { type } = req.body; // 'video' (default) or 'banner'
+    if (!user) return res.status(404).json({ message: "User not found" });
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-
-    // Get watch count for tracking (no limit enforced)
     const watchCount = await Transaction.countDocuments({
       userId: user._id,
       type: "ad_reward",
+      status: "completed",
       createdAt: { $gte: today },
     });
 
-    // Determine Reward & Streak Eligibility
-    // Default is now 'offer' (5 credits) since Monetag is link-based
-    let REWARD_AMOUNT = 5;
-    let eligibleForStreak = false;
-
-    // Pending Update: If we integrate a REAL video player later, we can enable this
-    if (type === "video_real") {
-      REWARD_AMOUNT = 10;
-      eligibleForStreak = true;
-    }
-
-    // --- Streak Logic (Only for Videos) ---
-    let streakBonus = 0;
-    let streakMessage = "";
-
-    if (eligibleForStreak) {
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-
-      if (!user.adStreak) {
-        user.adStreak = { current: 0, longest: 0, lastWatchDate: null };
-      }
-
-      const lastWatchDate = user.adStreak.lastWatchDate
-        ? new Date(user.adStreak.lastWatchDate)
-        : null;
-      const lastWatchMidnight = lastWatchDate ? new Date(lastWatchDate.setHours(0, 0, 0, 0)) : null;
-
-      if (lastWatchMidnight && lastWatchMidnight.getTime() === today.getTime()) {
-        // Already watched today, streak continues
-      } else if (lastWatchMidnight && lastWatchMidnight.getTime() === yesterday.getTime()) {
-        // Watched yesterday, increment streak
-        user.adStreak.current += 1;
-      } else {
-        // Missed a day or first time, reset/start streak
-        user.adStreak.current = 1;
-      }
-
-      // Update Longest
-      if (user.adStreak.current > user.adStreak.longest) {
-        user.adStreak.longest = user.adStreak.current;
-      }
-      user.adStreak.lastWatchDate = new Date();
-
-      // Check for Bonuses
-      const isStreakIncremented =
-        !lastWatchMidnight || lastWatchMidnight.getTime() !== today.getTime();
-
-      if (isStreakIncremented) {
-        if (user.adStreak.current === 3) {
-          streakBonus = 5;
-          streakMessage = "🔥 3-Day Streak Bonus!";
-        } else if (user.adStreak.current === 7) {
-          streakBonus = 15;
-          streakMessage = "🔥 7-Day Streak Bonus!";
-        }
-      }
-    }
-
-    const TOTAL_REWARD = REWARD_AMOUNT + streakBonus;
-
-    user.credits += TOTAL_REWARD;
-    await user.save({ validateBeforeSave: false });
-
-    // Record Transaction
-    await Transaction.create({
-      userId: user._id,
-      amount: REWARD_AMOUNT,
-      type: "ad_reward",
-      description: type === "banner" ? "Clicked Sponsored Banner" : "Watched Video Ad",
-      status: "completed",
+    const result = await adReward.awardAdCredits(user, {
+      source: "monetag",
+      amount: 5,
     });
 
-    if (streakBonus > 0) {
-      await Transaction.create({
-        userId: user._id,
-        amount: streakBonus,
-        type: "streak_bonus",
-        description: streakMessage,
-        status: "completed",
-      });
+    if (!result.ok) {
+      if (result.code === "COOLDOWN") {
+        const retryAfter = Math.ceil(result.retryAfterMs / 1000);
+        res.set("Retry-After", String(retryAfter));
+        return res.status(429).json({
+          code: "COOLDOWN",
+          message: `Please wait ${retryAfter}s before watching another ad.`,
+          retryAfterMs: result.retryAfterMs,
+        });
+      }
+      if (result.code === "DAILY_CAP") {
+        return res.status(429).json({
+          code: "DAILY_CAP",
+          message: "Daily ad limit reached. Come back tomorrow!",
+        });
+      }
+      return res.status(400).json({ message: "Reward rejected" });
     }
 
     res.json({
       success: true,
-      credits: user.credits,
-      added: TOTAL_REWARD,
+      credits: result.credits,
+      added: result.added,
       watchCount: watchCount + 1,
-      maxDaily: 999, // Unlimited
-      streak: user.adStreak ? user.adStreak.current : 0,
-      streakBonus,
-      streakMessage,
-      type: type || "video",
+      maxDaily: env.ADMOB_DAILY_CAP,
+      streak: result.streak,
+      streakBonus: result.streakBonus,
+      streakMessage: result.streakMessage,
+      type: "monetag",
     });
   } catch (error) {
-    console.error("watchAd error:", error.message);
-    console.error("watchAd stack:", error.stack);
-    console.error("watchAd user:", req.user?.id);
+    logger.error(`watchAd error: ${error.message}\n${error.stack}`);
     res.status(500).json({ message: "Server Error", detail: error.message });
+  }
+};
+
+// @desc    AdMob Server-Side Verification callback
+// @route   GET /api/billing/admob-ssv
+// @access  Public (called by Google)
+//
+// Always returns 200 for business-logic rejections (cooldown, cap, unknown
+// user, duplicate transaction) so Google does not retry. 403 only on a
+// signature failure — those should never be real Google traffic.
+exports.admobSsv = async (req, res) => {
+  try {
+    const rawQs = (req.originalUrl.split("?")[1] || "").trim();
+    const verification = await admobSsv.verifySignature(rawQs);
+    if (!verification.valid) {
+      logger.warn(`AdMob SSV signature rejected: ${verification.reason} qs=${rawQs}`);
+      return res.status(403).send("invalid signature");
+    }
+
+    const params = verification.params;
+    const userId = params.get("user_id");
+    const txId = params.get("transaction_id");
+    const adUnit = params.get("ad_unit");
+
+    if (!userId || !txId) {
+      logger.warn(`AdMob SSV missing user_id or transaction_id: qs=${rawQs}`);
+      return res.status(200).send("ok");
+    }
+
+    // Optional ad-unit allowlist
+    if (env.ADMOB_REWARDED_UNIT_ID_ALLOWLIST) {
+      const allowed = env.ADMOB_REWARDED_UNIT_ID_ALLOWLIST.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (allowed.length > 0 && adUnit && !allowed.includes(adUnit)) {
+        logger.warn(`AdMob SSV ad_unit not in allowlist: ${adUnit}`);
+        return res.status(200).send("ok");
+      }
+    }
+
+    // Idempotency: short-circuit if we already recorded this transaction
+    const existing = await Transaction.findOne({ externalTxId: txId });
+    if (existing) {
+      return res.status(200).send("ok");
+    }
+
+    const user = await User.findById(userId).catch(() => null);
+    if (!user) {
+      logger.warn(`AdMob SSV user not found: ${userId}`);
+      return res.status(200).send("ok");
+    }
+
+    const result = await adReward.awardAdCredits(user, {
+      source: "admob",
+      amount: env.ADMOB_REWARD_AMOUNT_ANDROID,
+      externalTxId: txId,
+    });
+
+    if (!result.ok) {
+      logger.info(`AdMob SSV rejected ${userId}: ${result.code}`);
+    } else {
+      logger.info(`AdMob SSV awarded ${result.added} credits to ${userId} (tx=${txId})`);
+    }
+
+    return res.status(200).send("ok");
+  } catch (error) {
+    logger.error(`admobSsv error: ${error.message}\n${error.stack}`);
+    // Return 200 to avoid Google retries on transient internal errors
+    return res.status(200).send("ok");
   }
 };
 
@@ -302,6 +314,7 @@ exports.verifyPayment = async (req, res) => {
 
     // 4. Update User Balance
     user.credits += creditsToAdd;
+    user.hasEverPurchased = true;
     await user.save({ validateBeforeSave: false });
 
     // 5. Record Transaction

@@ -5,6 +5,7 @@ const {
   generateApplicationCV,
   generateApplicationCoverLetter,
   generateApplicationInterview,
+  generateMoreApplicationInterview,
   generateApplicationBundle,
   preflightMetrics,
   editApplication,
@@ -22,6 +23,8 @@ router.post("/:id/preflight-metrics", protect, preflightMetrics);
 router.post("/:id/generate-cv", protect, generateApplicationCV);
 router.post("/:id/generate-cover-letter", protect, generateApplicationCoverLetter);
 router.post("/:id/generate-interview", protect, generateApplicationInterview);
+// Append more questions (avoids duplicates of existing ones). Same 5-credit cost.
+router.post("/:id/generate-more-interview", protect, generateMoreApplicationInterview);
 // Bundle: CV + cover letter + interview prep at a discount (18 vs 20 credits)
 router.post("/:id/generate-bundle", protect, generateApplicationBundle);
 

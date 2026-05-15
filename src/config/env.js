@@ -14,6 +14,14 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   AI_PROVIDER: z.enum(["openai", "gemini"]).default("gemini"),
+  ADMOB_SSV_KEYS_URL: z
+    .string()
+    .url()
+    .default("https://www.gstatic.com/admob/reward/verifier-keys.json"),
+  ADMOB_REWARD_AMOUNT_ANDROID: z.coerce.number().int().positive().default(10),
+  ADMOB_COOLDOWN_SECONDS: z.coerce.number().int().nonnegative().default(60),
+  ADMOB_DAILY_CAP: z.coerce.number().int().positive().default(10),
+  ADMOB_REWARDED_UNIT_ID_ALLOWLIST: z.string().optional(),
 });
 
 const result = envSchema.safeParse(process.env);

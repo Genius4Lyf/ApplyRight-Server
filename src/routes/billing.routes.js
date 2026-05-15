@@ -3,6 +3,10 @@ const router = express.Router();
 const { protect } = require("../middleware/auth.middleware");
 const billingController = require("../controllers/billing.controller");
 
+// Public AdMob SSV callback (signature-verified). Must be mounted before
+// any auth middleware. Rate-limiter exemption handled in src/app.js.
+router.get("/admob-ssv", billingController.admobSsv);
+
 router.get("/balance", protect, billingController.getBalance);
 router.post("/add", protect, billingController.addCredits);
 router.post("/usage", protect, billingController.deductCredits);

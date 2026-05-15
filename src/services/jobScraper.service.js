@@ -113,34 +113,65 @@ const scrapeJob = async (url) => {
       }
     });
 
-    // Fall back to common containers
+    // Fall back to common containers — ordered most specific first
     if (!description) {
       const descriptionSelectors = [
         "#job-details",
         ".job-description",
         '[data-testid="job-description"]',
+        '[data-cy="job-description"]',
         ".description__text",
+        ".show-more-less-html__markup", // LinkedIn
+        ".posting-page", // Lever
         ".job-details",
         ".posting-requirements",
         "article",
-        "main",
       ];
 
       for (const selector of descriptionSelectors) {
         if ($(selector).length > 0) {
           description = $(selector).text().trim();
-          break;
+          if (description.length > 200) break;
         }
       }
     }
 
-    // Last resort: body text (limited)
-    if (!description) {
-      description = $("body").text().trim().substring(0, 4000);
+    // Meta-description fallback (og:description / <meta name="description">)
+    // Many ATS pages expose a clean summary here even when JS-rendered.
+    if (!description || description.length < 200) {
+      const metaDesc =
+        $('meta[property="og:description"]').attr("content") ||
+        $('meta[name="description"]').attr("content") ||
+        $('meta[name="twitter:description"]').attr("content") ||
+        "";
+      if (metaDesc && metaDesc.length > description.length) {
+        description = metaDesc.trim();
+      }
     }
 
     // Clean up whitespace
     description = description.replace(/\s+/g, " ").trim();
+
+    // ── Quality Validation ──
+    // Refuse thin or bot-walled responses rather than passing garbage to the AI.
+    // The frontend has a "paste description" fallback for this case.
+    const BOT_WALL_PATTERNS = [
+      /please verify you('?| a)re? human/i,
+      /are you a robot/i,
+      /just a moment\.\.\./i, // Cloudflare interstitial
+      /please enable javascript/i,
+      /enable cookies to continue/i,
+      /access denied/i,
+      /captcha/i,
+      /unusual traffic from your/i,
+    ];
+    const looksLikeBotWall = BOT_WALL_PATTERNS.some((re) => re.test(description));
+    if (description.length < 200 || looksLikeBotWall) {
+      console.error(
+        `Scraping returned thin/blocked content for ${url} (len=${description.length}, botWall=${looksLikeBotWall})`
+      );
+      throw new Error("ACCESS_DENIED");
+    }
 
     return {
       title,

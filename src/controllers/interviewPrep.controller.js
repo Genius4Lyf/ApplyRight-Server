@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const Application = require("../models/Application");
 const DraftCV = require("../models/DraftCV");
 
@@ -7,13 +8,61 @@ const LIST_PROJECTION = {
   jobTitle: 1,
   jobCompany: 1,
   jobId: 1,
+  draftCVId: 1,
   status: 1,
   "interviewPrep.isSaved": 1,
   "interviewPrep.savedAt": 1,
   "interviewPrep.skillsWithEvidence": 1,
   "interviewPrep.jobQuestions": 1,
   "interviewPrep.questionsToAsk": 1,
+  interviewQuestions: 1,
+  questionsToAsk: 1,
   updatedAt: 1,
+};
+
+// Coerce whatever's stored on `interviewPrep.userNotes` (legacy string, null,
+// or the new array) into the canonical array shape the frontend consumes.
+// Legacy strings become a single "saved" note titled "Notes" so no content is
+// lost. Returns a fresh array — does not mutate input.
+const normalizeNotes = (raw) => {
+  if (Array.isArray(raw)) {
+    return raw.map((n) => ({
+      id: n.id || crypto.randomUUID(),
+      title: typeof n.title === "string" ? n.title : "",
+      body: typeof n.body === "string" ? n.body : "",
+      status: n.status === "draft" ? "draft" : "saved",
+      createdAt: n.createdAt || null,
+      updatedAt: n.updatedAt || null,
+    }));
+  }
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    return [
+      {
+        id: crypto.randomUUID(),
+        title: "Notes",
+        body: raw,
+        status: "saved",
+        createdAt: null,
+        updatedAt: null,
+      },
+    ];
+  }
+  return [];
+};
+
+// Loads either an Application or DraftCV by id, with ownership check. Used by
+// every endpoint that operates on a single prep regardless of which collection
+// it lives in. Returns { doc, kind } where kind is 'application' or 'draft'.
+const loadPrepDoc = async (id, userId, selectFields) => {
+  const app = await Application.findById(id).select(selectFields);
+  if (app) {
+    if (app.userId.toString() !== userId) return { unauthorized: true };
+    return { doc: app, kind: "application" };
+  }
+  const draft = await DraftCV.findById(id).select(selectFields);
+  if (!draft) return { notFound: true };
+  if (draft.userId.toString() !== userId) return { unauthorized: true };
+  return { doc: draft, kind: "draft" };
 };
 
 /**
@@ -41,12 +90,10 @@ exports.saveSkills = async (req, res) => {
         return res.status(401).json({ message: "User not authorized" });
       }
 
-      // Prefer caller-supplied skills (Skills.jsx may have unsaved changes
-      // since the user generated them in this session). Fall back to the
-      // persisted draft's skills.
-      const sourceSkills = Array.isArray(skillsWithEvidence) && skillsWithEvidence.length
-        ? skillsWithEvidence
-        : draft.skills || [];
+      const sourceSkills =
+        Array.isArray(skillsWithEvidence) && skillsWithEvidence.length
+          ? skillsWithEvidence
+          : draft.skills || [];
 
       const resolved = sourceSkills
         .filter((s) => Array.isArray(s.evidence) && s.evidence.length > 0)
@@ -71,9 +118,6 @@ exports.saveSkills = async (req, res) => {
 
       const now = new Date();
 
-      // Always save the prep to the draft itself so it persists even before
-      // any job analysis is run. Linked applications (if any) get the same
-      // prep so it surfaces when the user opens that role's prep page.
       draft.interviewPrep = draft.interviewPrep || {};
       draft.interviewPrep.isSaved = true;
       draft.interviewPrep.savedAt = now;
@@ -91,8 +135,6 @@ exports.saveSkills = async (req, res) => {
           })
         );
 
-        // Return the most recently updated application so the frontend can
-        // navigate the user there (richer view — job questions + skills).
         const sorted = [...apps].sort(
           (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
         );
@@ -101,15 +143,12 @@ exports.saveSkills = async (req, res) => {
           savedAt: now,
           skillCount: resolved.length,
           applicationCount: apps.length,
-          // Convention: clients use this `id` for navigation regardless of source.
           id: sorted[0]?._id,
           source: "application",
           applicationId: sorted[0]?._id,
         });
       }
 
-      // CV-only path — no applications linked. Direct user to the draft-prep
-      // detail view (skills section only, no job context).
       return res.json({
         status: "ok",
         savedAt: now,
@@ -187,6 +226,7 @@ exports.list = async (req, res) => {
       $or: [
         { "interviewPrep.isSaved": true },
         { "interviewPrep.jobQuestions.0": { $exists: true } },
+        { "interviewQuestions.0": { $exists: true } },
       ],
     })
       .select(LIST_PROJECTION)
@@ -194,11 +234,7 @@ exports.list = async (req, res) => {
       .sort({ "interviewPrep.savedAt": -1, updatedAt: -1 })
       .lean();
 
-    // Application IDs that already have prep — used to avoid double-listing
-    // a draft whose prep is already represented through its application.
-    const appDraftIds = new Set(
-      apps.filter((a) => a.draftCVId).map((a) => String(a.draftCVId))
-    );
+    const appDraftIds = new Set(apps.filter((a) => a.draftCVId).map((a) => String(a.draftCVId)));
 
     const drafts = await DraftCV.find({
       userId: req.user.id,
@@ -219,8 +255,6 @@ exports.list = async (req, res) => {
       .map((d) => ({
         _id: d._id,
         source: "draft",
-        // Mirror the Application shape so the frontend card renderer needs no
-        // branching: title comes from the draft's name, no company.
         jobTitle: d.title || "CV draft",
         jobCompany: "",
         jobId: null,
@@ -228,10 +262,8 @@ exports.list = async (req, res) => {
         updatedAt: d.updatedAt,
       }));
 
-    // Tag application items so the frontend can identify both sources.
     const appItems = apps.map((a) => ({ ...a, source: "application" }));
 
-    // Merge + sort by most recently saved.
     const merged = [...appItems, ...draftItems].sort((a, b) => {
       const aDate = new Date(a.interviewPrep?.savedAt || a.updatedAt || 0).getTime();
       const bDate = new Date(b.interviewPrep?.savedAt || b.updatedAt || 0).getTime();
@@ -249,6 +281,7 @@ exports.list = async (req, res) => {
  * Detail view for a single prep. The id can refer to either an Application or
  * a DraftCV (CV-only prep). Tries Application first; falls back to DraftCV.
  * Returns a unified shape that the frontend detail page consumes uniformly.
+ * Legacy single-string userNotes are folded into the array shape on read.
  */
 exports.getOne = async (req, res) => {
   try {
@@ -261,19 +294,23 @@ exports.getOne = async (req, res) => {
       if (application.userId.toString() !== req.user.id) {
         return res.status(401).json({ message: "User not authorized" });
       }
-      return res.json({ application: { ...application, source: "application" } });
+      const prep = application.interviewPrep || {};
+      return res.json({
+        application: {
+          ...application,
+          source: "application",
+          interviewPrep: { ...prep, userNotes: normalizeNotes(prep.userNotes) },
+        },
+      });
     }
 
-    // No matching application — try draft. Lets users open prep saved against
-    // a CV that has no linked job analysis yet.
     const draft = await DraftCV.findById(id).lean();
     if (!draft) return res.status(404).json({ message: "Interview prep not found" });
     if (draft.userId.toString() !== req.user.id) {
       return res.status(401).json({ message: "User not authorized" });
     }
 
-    // Shape it to match the Application schema the frontend expects, with
-    // null job context to signal "CV-only" prep.
+    const prep = draft.interviewPrep || {};
     const draftAsApplication = {
       _id: draft._id,
       source: "draft",
@@ -281,7 +318,7 @@ exports.getOne = async (req, res) => {
       jobTitle: draft.title || "CV draft",
       jobCompany: "",
       draftCVId: draft._id,
-      interviewPrep: draft.interviewPrep,
+      interviewPrep: { ...prep, userNotes: normalizeNotes(prep.userNotes) },
     };
     return res.json({ application: draftAsApplication });
   } catch (error) {
@@ -291,8 +328,8 @@ exports.getOne = async (req, res) => {
 };
 
 /**
- * Update the user's free-text notes on a prep. Works for both Application-tied
- * prep and CV-only prep (Draft). Frontend autosaves on blur.
+ * Legacy single-textarea endpoint. Kept as a compat shim — folds the incoming
+ * string into a single saved note rather than rejecting old clients.
  */
 exports.updateNotes = async (req, res) => {
   try {
@@ -302,30 +339,265 @@ exports.updateNotes = async (req, res) => {
       return res.status(400).json({ message: "notes must be a string" });
     }
 
-    const application = await Application.findById(id).select("userId interviewPrep");
-    if (application) {
-      if (application.userId.toString() !== req.user.id) {
-        return res.status(401).json({ message: "User not authorized" });
-      }
-      application.interviewPrep = application.interviewPrep || {};
-      application.interviewPrep.userNotes = notes;
-      await application.save();
-      return res.json({ status: "ok" });
-    }
+    const { doc, kind, unauthorized, notFound } = await loadPrepDoc(
+      id,
+      req.user.id,
+      "userId interviewPrep"
+    );
+    if (unauthorized) return res.status(401).json({ message: "User not authorized" });
+    if (notFound) return res.status(404).json({ message: "Interview prep not found" });
 
-    const draft = await DraftCV.findById(id).select("userId interviewPrep");
-    if (!draft) return res.status(404).json({ message: "Interview prep not found" });
-    if (draft.userId.toString() !== req.user.id) {
-      return res.status(401).json({ message: "User not authorized" });
+    doc.interviewPrep = doc.interviewPrep || {};
+    const now = new Date();
+    const existing = normalizeNotes(doc.interviewPrep.userNotes);
+    if (existing.length === 0) {
+      existing.push({
+        id: crypto.randomUUID(),
+        title: "Notes",
+        body: notes,
+        status: "saved",
+        createdAt: now,
+        updatedAt: now,
+      });
+    } else {
+      existing[0] = {
+        ...existing[0],
+        body: notes,
+        status: "saved",
+        updatedAt: now,
+      };
     }
-    draft.interviewPrep = draft.interviewPrep || {};
-    draft.interviewPrep.userNotes = notes;
-    await draft.save();
+    doc.interviewPrep.userNotes = existing;
+    doc.markModified("interviewPrep.userNotes");
+    await doc.save();
 
-    res.json({ status: "ok" });
+    res.json({ status: "ok", kind });
   } catch (error) {
     console.error("[InterviewPrep] updateNotes failed:", error.message);
     res.status(500).json({ message: "Failed to update notes" });
+  }
+};
+
+/**
+ * Create a new note on a prep (Application or Draft). Returns the full note
+ * including server-assigned id and timestamps so the client can switch the
+ * editor from a local draft into the persisted one.
+ */
+exports.createNote = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const { title = "", body = "", status = "draft" } = req.body || {};
+    if (typeof title !== "string" || typeof body !== "string") {
+      return res.status(400).json({ message: "title and body must be strings" });
+    }
+
+    const { doc, unauthorized, notFound } = await loadPrepDoc(
+      id,
+      req.user.id,
+      "userId interviewPrep"
+    );
+    if (unauthorized) return res.status(401).json({ message: "User not authorized" });
+    if (notFound) return res.status(404).json({ message: "Interview prep not found" });
+
+    doc.interviewPrep = doc.interviewPrep || {};
+    const notes = normalizeNotes(doc.interviewPrep.userNotes);
+    const now = new Date();
+    const note = {
+      id: crypto.randomUUID(),
+      title,
+      body,
+      status: status === "saved" ? "saved" : "draft",
+      createdAt: now,
+      updatedAt: now,
+    };
+    notes.unshift(note);
+    doc.interviewPrep.userNotes = notes;
+    doc.markModified("interviewPrep.userNotes");
+    await doc.save();
+
+    res.json({ note });
+  } catch (error) {
+    console.error("[InterviewPrep] createNote failed:", error.message);
+    res.status(500).json({ message: "Failed to create note" });
+  }
+};
+
+/**
+ * Update title/body/status on an existing note. The frontend debounces
+ * autosave calls into here every ~3s while a draft is being edited.
+ */
+exports.updateNote = async (req, res) => {
+  try {
+    const { applicationId: id, noteId } = req.params;
+    const { title, body, status } = req.body || {};
+
+    const { doc, unauthorized, notFound } = await loadPrepDoc(
+      id,
+      req.user.id,
+      "userId interviewPrep"
+    );
+    if (unauthorized) return res.status(401).json({ message: "User not authorized" });
+    if (notFound) return res.status(404).json({ message: "Interview prep not found" });
+
+    doc.interviewPrep = doc.interviewPrep || {};
+    const notes = normalizeNotes(doc.interviewPrep.userNotes);
+    const target = notes.find((n) => n.id === noteId);
+    if (!target) return res.status(404).json({ message: "Note not found" });
+
+    if (typeof title === "string") target.title = title;
+    if (typeof body === "string") target.body = body;
+    if (status === "draft" || status === "saved") target.status = status;
+    target.updatedAt = new Date();
+
+    doc.interviewPrep.userNotes = notes;
+    doc.markModified("interviewPrep.userNotes");
+    await doc.save();
+
+    res.json({ note: target });
+  } catch (error) {
+    console.error("[InterviewPrep] updateNote failed:", error.message);
+    res.status(500).json({ message: "Failed to update note" });
+  }
+};
+
+/**
+ * Delete a note by id.
+ */
+exports.deleteNote = async (req, res) => {
+  try {
+    const { applicationId: id, noteId } = req.params;
+
+    const { doc, unauthorized, notFound } = await loadPrepDoc(
+      id,
+      req.user.id,
+      "userId interviewPrep"
+    );
+    if (unauthorized) return res.status(401).json({ message: "User not authorized" });
+    if (notFound) return res.status(404).json({ message: "Interview prep not found" });
+
+    doc.interviewPrep = doc.interviewPrep || {};
+    const notes = normalizeNotes(doc.interviewPrep.userNotes);
+    const next = notes.filter((n) => n.id !== noteId);
+    if (next.length === notes.length) {
+      return res.status(404).json({ message: "Note not found" });
+    }
+    doc.interviewPrep.userNotes = next;
+    doc.markModified("interviewPrep.userNotes");
+    await doc.save();
+
+    res.json({ status: "ok" });
+  } catch (error) {
+    console.error("[InterviewPrep] deleteNote failed:", error.message);
+    res.status(500).json({ message: "Failed to delete note" });
+  }
+};
+
+/**
+ * Set per-skill confidence (needs_work | almost | ready | null). Passing null
+ * clears the marker. Skill is identified by its name (skills don't have stable
+ * ids — they're re-derived from CV skills every time saveSkills runs).
+ */
+exports.updateSkillConfidence = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const { skillName, confidence } = req.body || {};
+    if (typeof skillName !== "string" || !skillName.trim()) {
+      return res.status(400).json({ message: "skillName is required" });
+    }
+    const allowed = ["needs_work", "almost", "ready", null];
+    if (!allowed.includes(confidence)) {
+      return res.status(400).json({ message: "invalid confidence value" });
+    }
+
+    const { doc, unauthorized, notFound } = await loadPrepDoc(
+      id,
+      req.user.id,
+      "userId interviewPrep"
+    );
+    if (unauthorized) return res.status(401).json({ message: "User not authorized" });
+    if (notFound) return res.status(404).json({ message: "Interview prep not found" });
+
+    doc.interviewPrep = doc.interviewPrep || {};
+    const skills = Array.isArray(doc.interviewPrep.skillsWithEvidence)
+      ? doc.interviewPrep.skillsWithEvidence
+      : [];
+    const target = skills.find((s) => s.name === skillName);
+    if (!target) return res.status(404).json({ message: "Skill not found on this prep" });
+
+    target.confidence = confidence || undefined;
+    doc.markModified("interviewPrep.skillsWithEvidence");
+    await doc.save();
+
+    res.json({ status: "ok", skillName, confidence: target.confidence || null });
+  } catch (error) {
+    console.error("[InterviewPrep] updateSkillConfidence failed:", error.message);
+    res.status(500).json({ message: "Failed to update skill confidence" });
+  }
+};
+
+/**
+ * Detect whether the application's linked DraftCV has skills with evidence
+ * that haven't yet been pulled into the prep. Drives the "Pull from CV" banner
+ * on the prep detail page.
+ *
+ * `alreadySynced` is true when the prep's saved skill names match the draft's
+ * skill names (with-evidence) AND the draft has not been updated since the
+ * last save. If the draft is newer, we want the user to re-pull.
+ */
+exports.getLinkedCV = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+
+    const application = await Application.findById(id).select(
+      "userId draftCVId interviewPrep updatedAt"
+    );
+    if (!application) {
+      return res.json({ exists: false });
+    }
+    if (application.userId.toString() !== req.user.id) {
+      return res.status(401).json({ message: "User not authorized" });
+    }
+    if (!application.draftCVId) {
+      return res.json({ exists: false });
+    }
+
+    const draft = await DraftCV.findById(application.draftCVId).select(
+      "skills updatedAt interviewPrep"
+    );
+    if (!draft) {
+      return res.json({ exists: false });
+    }
+
+    const draftSkillsWithEvidence = (draft.skills || []).filter(
+      (s) => Array.isArray(s.evidence) && s.evidence.length > 0
+    );
+
+    if (draftSkillsWithEvidence.length === 0) {
+      return res.json({ exists: false });
+    }
+
+    const savedSkills = (application.interviewPrep?.skillsWithEvidence || []).map((s) => s.name);
+    const draftNames = draftSkillsWithEvidence.map((s) => s.name);
+
+    const sameNames =
+      savedSkills.length === draftNames.length &&
+      savedSkills.every((n) => draftNames.includes(n));
+    const savedAt = application.interviewPrep?.savedAt
+      ? new Date(application.interviewPrep.savedAt).getTime()
+      : 0;
+    const draftUpdated = draft.updatedAt ? new Date(draft.updatedAt).getTime() : 0;
+    const alreadySynced = sameNames && savedAt >= draftUpdated;
+
+    res.json({
+      exists: true,
+      draftCVId: draft._id,
+      generatedAt: draft.updatedAt,
+      skillCount: draftSkillsWithEvidence.length,
+      alreadySynced,
+    });
+  } catch (error) {
+    console.error("[InterviewPrep] getLinkedCV failed:", error.message);
+    res.status(500).json({ message: "Failed to detect linked CV" });
   }
 };
 

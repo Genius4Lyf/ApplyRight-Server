@@ -291,7 +291,12 @@ const loginUser = async (req, res, next) => {
 // @route   GET /api/auth/me
 // @access  Private
 const getMe = async (req, res) => {
-  res.status(200).json(req.user);
+  // Free / low-credit users are the audience for AdMob interstitials.
+  const FREE_FOR_ADS_THRESHOLD = 30;
+  const userObj = typeof req.user.toObject === "function" ? req.user.toObject() : { ...req.user };
+  userObj.isFreeForAds =
+    !req.user.hasEverPurchased && (req.user.credits ?? 0) < FREE_FOR_ADS_THRESHOLD;
+  res.status(200).json(userObj);
 };
 
 // @desc    Update user profile
@@ -450,6 +455,7 @@ const getConfig = async (req, res) => {
       features: {
         maintenanceMode: settings.features.maintenanceMode,
         aiAvailable: activeProvider !== "mock",
+        admobEnabled: settings.features.admobEnabled === true,
       },
       credits: settings.credits,
       announcement: settings.announcement,
