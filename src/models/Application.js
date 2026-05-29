@@ -215,11 +215,30 @@ const applicationSchema = new mongoose.Schema(
         },
       ],
       questionsToAsk: [String],
+      // Per-question fact-check flags from factCheckInterviewQuestions. Indexed
+      // by jobQuestions[].index, with the unsupported claims the checker
+      // found. Empty/absent = the suggestedAnswers are clean. Advisory only —
+      // never deletes or blocks content, just lets the UI render a warning.
+      fabricationWarnings: [
+        {
+          index: Number,
+          unsupportedClaims: [String],
+        },
+      ],
       // Multi-note model. Legacy single-string notes are folded into a single
       // saved note on read (see interviewPrep.controller.js) so reads stay
       // backward-compatible without a destructive migration. Use Mixed so
       // either shape persists on save.
       userNotes: mongoose.Schema.Types.Mixed,
+    },
+    // Bundle-level warnings surfaced when one stage of the all-in-one
+    // generation pipeline was skipped for a non-error reason (e.g. interview
+    // prep skipped because the CV had no work-history to ground answers in).
+    // The bundle still succeeds; the UI can render the warning so the user
+    // knows what to do next.
+    bundleWarnings: {
+      type: [String],
+      default: [],
     },
   },
   {

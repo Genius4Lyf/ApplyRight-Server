@@ -16,15 +16,6 @@ const transactionSchema = new mongoose.Schema(
       enum: ["purchase", "usage", "ad_reward", "streak_bonus", "daily_login", "referral_bonus", "cv_tailor", "tailor_bundle"],
       required: true,
     },
-    reference: {
-      type: String, // Paystack Reference
-      unique: true,
-      sparse: true,
-    },
-    paymentGateway: {
-      type: String, // 'paystack'
-      default: null,
-    },
     description: {
       type: String,
       required: true,

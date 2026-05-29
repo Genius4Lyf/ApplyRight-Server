@@ -112,21 +112,27 @@ const stringifyDescription = (description) => {
   return description || "";
 };
 
-const hasInterviewContext = (context) =>
-  !!(
-    context &&
-    (context.summary ||
-      context.experience?.length ||
-      context.education?.length ||
-      context.projects?.length ||
-      context.skills?.length)
+// The AI can only ground STAR-shaped answers when there is at least one real
+// work-history entry with a role AND company. A bare summary or a skills list
+// is not enough — without a concrete past role the AI invents one (often by
+// reciting the role from the job description as if it were the candidate's
+// previous role). Gate generation on this.
+const hasGroundableExperience = (context) => {
+  if (!context || !Array.isArray(context.experience)) return false;
+  return context.experience.some(
+    (e) =>
+      typeof e?.role === "string" &&
+      e.role.trim().length > 0 &&
+      typeof e?.company === "string" &&
+      e.company.trim().length > 0
   );
+};
 
 /**
  * Build the profile block used for interview prep. Prefer the edited/generated
- * DraftCV because it reflects the user's latest ApplyRight version, but fall
- * back to the uploaded resume so prep is still candidate-grounded when the user
- * generates interview prep before generating a CV.
+ * DraftCV because it reflects the user's latest ApplyRight version, but only
+ * if it has groundable experience — otherwise fall through to the uploaded
+ * resume so a half-empty draft doesn't starve the AI of real work history.
  */
 const buildInterviewCandidateContext = async (application, meta = {}) => {
   if (application.draftCVId) {
@@ -151,7 +157,7 @@ const buildInterviewCandidateContext = async (application, meta = {}) => {
         })),
         skills: (draft.skills || []).map((s) => s.name).filter(Boolean),
       };
-      if (hasInterviewContext(context)) return context;
+      if (hasGroundableExperience(context)) return context;
     }
   }
 
@@ -183,7 +189,7 @@ const buildInterviewCandidateContext = async (application, meta = {}) => {
       .filter(Boolean),
   };
 
-  return hasInterviewContext(context) ? context : null;
+  return hasGroundableExperience(context) ? context : null;
 };
 
 const serializeInterviewPrep = (application) => {
@@ -196,6 +202,7 @@ const serializeInterviewPrep = (application) => {
     skillsWithEvidence: prep.skillsWithEvidence || [],
     jobQuestions: prep.jobQuestions || [],
     questionsToAsk: prep.questionsToAsk || [],
+    fabricationWarnings: prep.fabricationWarnings || [],
     userNotes: prep.userNotes || "",
   };
 };
@@ -888,8 +895,18 @@ const generateApplicationInterview = async (req, res) => {
         applicationId: application._id,
       });
     } catch (e) {
-      // Non-critical - fall back to JD-only prompt.
       console.error("[Interview] Failed to build candidate context:", e.message);
+    }
+
+    // Hard gate: without at least one real work-history entry to anchor STAR
+    // answers in, the AI fabricates roles (e.g. recites the JD's role as if
+    // it were the candidate's). Block and nudge to add a CV — no credits spent.
+    if (!hasGroundableExperience(candidateContext)) {
+      return res.status(422).json({
+        code: "NO_CV_GROUNDING",
+        message:
+          "Add or generate a CV with at least one work experience entry before generating interview prep — this prevents the AI from inventing roles.",
+      });
     }
 
     const aiResult = await aiService.generateInterviewQuestions(
@@ -901,12 +918,22 @@ const generateApplicationInterview = async (req, res) => {
     // AI succeeded — now charge the user
     const remainingCredits = await deductCredits(user, COSTS.GENERATE_INTERVIEW);
 
+    // Post-generation fact-check: scan suggestedAnswers for companies/roles/
+    // metrics not in the candidate profile. Advisory only — failures return []
+    // and never block the user from seeing their prep.
+    const fabricationWarnings = await aiService.factCheckInterviewQuestions(
+      candidateContext,
+      aiResult.jobQuestions || [],
+      { userId, applicationId: application._id }
+    );
+
     // Persist to the unified interviewPrep schema. Legacy fields
     // (interviewQuestions / questionsToAsk) remain on the model for
     // backward compatibility with old applications but are no longer written.
     application.interviewPrep = application.interviewPrep || {};
     application.interviewPrep.jobQuestions = aiResult.jobQuestions || [];
     application.interviewPrep.questionsToAsk = aiResult.questionsToAsk || [];
+    application.interviewPrep.fabricationWarnings = fabricationWarnings;
     await application.save();
 
     const interviewPrep = serializeInterviewPrep(application);
@@ -966,6 +993,14 @@ const generateMoreApplicationInterview = async (req, res) => {
       console.error("[Interview-More] Failed to build candidate context:", e.message);
     }
 
+    if (!hasGroundableExperience(candidateContext)) {
+      return res.status(422).json({
+        code: "NO_CV_GROUNDING",
+        message:
+          "Add or generate a CV with at least one work experience entry before generating more interview questions.",
+      });
+    }
+
     const existing = application.interviewPrep?.jobQuestions || [];
     const existingTexts = existing
       .map((q) => (typeof q === "string" ? q : q?.question))
@@ -985,7 +1020,8 @@ const generateMoreApplicationInterview = async (req, res) => {
 
     application.interviewPrep = application.interviewPrep || {};
     const startIdx = existing.length;
-    application.interviewPrep.jobQuestions = [...existing, ...newJobQuestions];
+    const mergedJobQuestions = [...existing, ...newJobQuestions];
+    application.interviewPrep.jobQuestions = mergedJobQuestions;
 
     // Merge questionsToAsk too, de-duped by case-insensitive match
     const askExisting = Array.isArray(application.interviewPrep.questionsToAsk)
@@ -997,8 +1033,26 @@ const generateMoreApplicationInterview = async (req, res) => {
     );
     application.interviewPrep.questionsToAsk = [...askExisting, ...askAdditions];
 
+    // Fact-check the new questions only (existing ones were already checked
+    // when they were originally generated) and merge into the warnings list.
+    const newWarnings = await aiService.factCheckInterviewQuestions(
+      candidateContext,
+      newJobQuestions,
+      { userId, applicationId: application._id }
+    );
+    // Re-index new warnings to match their final position in the merged list.
+    const shiftedNewWarnings = newWarnings.map((w) => ({
+      index: w.index + startIdx,
+      unsupportedClaims: w.unsupportedClaims,
+    }));
+    const existingWarnings = Array.isArray(application.interviewPrep.fabricationWarnings)
+      ? application.interviewPrep.fabricationWarnings
+      : [];
+    application.interviewPrep.fabricationWarnings = [...existingWarnings, ...shiftedNewWarnings];
+
     application.markModified("interviewPrep.jobQuestions");
     application.markModified("interviewPrep.questionsToAsk");
+    application.markModified("interviewPrep.fabricationWarnings");
     await application.save();
 
     const interviewPrep = serializeInterviewPrep(application);
@@ -1129,13 +1183,31 @@ const generateApplicationBundle = async (req, res) => {
           console.error("[Bundle] Failed to build candidate context:", e.message);
         }
 
-        const interviewResult = await aiService.generateInterviewQuestions(
-          job.description,
-          candidateContext,
-          { userId, applicationId: application._id }
-        );
-        const questionsToAsk = interviewResult.questionsToAsk || [];
-        const jobQuestionsRich = interviewResult.jobQuestions || [];
+        // Soft gate in the bundle: if grounding is missing, skip the interview
+        // stage rather than break the whole bundle. CV + cover letter still
+        // ship; the user can re-run interview prep alone after filling out the
+        // CV. Surface a warning the frontend can render.
+        const groundable = hasGroundableExperience(candidateContext);
+        let interviewResult = null;
+        let interviewWarnings = [];
+        if (groundable) {
+          interviewResult = await aiService.generateInterviewQuestions(
+            job.description,
+            candidateContext,
+            { userId, applicationId: application._id }
+          );
+          interviewWarnings = await aiService.factCheckInterviewQuestions(
+            candidateContext,
+            interviewResult?.jobQuestions || [],
+            { userId, applicationId: application._id }
+          );
+        } else {
+          console.log(
+            `[Bundle] Skipping interview prep for ${application._id} — no groundable CV experience.`
+          );
+        }
+        const questionsToAsk = interviewResult?.questionsToAsk || [];
+        const jobQuestionsRich = interviewResult?.jobQuestions || [];
 
         // All three succeeded — charge once at bundle rate.
         await deductCredits(user, COSTS.GENERATE_BUNDLE);
@@ -1146,9 +1218,19 @@ const generateApplicationBundle = async (req, res) => {
         if (finalApp) {
           finalApp.coverLetter = coverLetter;
           finalApp.coverLetterWarnings = coverLetterWarnings;
-          finalApp.interviewPrep = finalApp.interviewPrep || {};
-          finalApp.interviewPrep.jobQuestions = jobQuestionsRich;
-          finalApp.interviewPrep.questionsToAsk = questionsToAsk;
+          if (groundable) {
+            finalApp.interviewPrep = finalApp.interviewPrep || {};
+            finalApp.interviewPrep.jobQuestions = jobQuestionsRich;
+            finalApp.interviewPrep.questionsToAsk = questionsToAsk;
+            finalApp.interviewPrep.fabricationWarnings = interviewWarnings;
+          } else {
+            const warnings = Array.isArray(finalApp.bundleWarnings)
+              ? finalApp.bundleWarnings
+              : [];
+            if (!warnings.includes("interview_skipped_no_cv")) {
+              finalApp.bundleWarnings = [...warnings, "interview_skipped_no_cv"];
+            }
+          }
           await finalApp.save();
         }
 

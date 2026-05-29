@@ -114,6 +114,15 @@ const draftCVSchema = new mongoose.Schema(
           },
         },
       ],
+      // Parity with Application.interviewPrep.fabricationWarnings — populated
+      // if a draft ever gets job-based prep saved against it (currently only
+      // through the application path, but reserved for symmetry).
+      fabricationWarnings: [
+        {
+          index: Number,
+          unsupportedClaims: [String],
+        },
+      ],
       // Mixed to support both the legacy single-string format and the new
       // multi-note array. The controller normalizes legacy string values into
       // a single saved note on read so the frontend only ever sees the array.
