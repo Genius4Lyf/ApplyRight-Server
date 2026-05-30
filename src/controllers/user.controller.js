@@ -1,4 +1,13 @@
 const User = require("../models/User");
+const Resume = require("../models/Resume");
+const Application = require("../models/Application");
+const DraftCV = require("../models/DraftCV");
+const Transaction = require("../models/Transaction");
+const AICallLog = require("../models/AICallLog");
+const DownloadLog = require("../models/DownloadLog");
+const Feedback = require("../models/Feedback");
+const Notification = require("../models/Notification");
+const logger = require("../utils/logger");
 
 exports.updateProfile = async (req, res) => {
   try {
@@ -66,6 +75,39 @@ exports.getProfile = async (req, res) => {
     res.json(user);
   } catch (err) {
     console.error(err.message);
+    res.status(500).send("Server Error");
+  }
+};
+
+exports.deleteProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    logger.info(`Starting account deletion for user: ${userId}`);
+
+    // Cascade delete all associated data
+    const resumeResult = await Resume.deleteMany({ userId });
+    const appResult = await Application.deleteMany({ userId });
+    const cvResult = await DraftCV.deleteMany({ userId });
+    const txResult = await Transaction.deleteMany({ userId });
+    const aiLogResult = await AICallLog.deleteMany({ userId });
+    const downloadLogResult = await DownloadLog.deleteMany({ userId });
+    const feedbackResult = await Feedback.deleteMany({ user: userId });
+    const notificationResult = await Notification.deleteMany({ userId });
+
+    logger.info(
+      `Purged user data for ${userId}: resumes=${resumeResult.deletedCount}, applications=${appResult.deletedCount}, cvs=${cvResult.deletedCount}, transactions=${txResult.deletedCount}, aiLogs=${aiLogResult.deletedCount}, downloadLogs=${downloadLogResult.deletedCount}, feedback=${feedbackResult.deletedCount}, notifications=${notificationResult.deletedCount}`
+    );
+
+    // Delete the user itself
+    const deletedUser = await User.findByIdAndDelete(userId);
+    if (!deletedUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json({ message: "Account and all associated data deleted successfully." });
+  } catch (err) {
+    logger.error(`Account deletion error for ${userId}: ${err.message}\n${err.stack}`);
     res.status(500).send("Server Error");
   }
 };

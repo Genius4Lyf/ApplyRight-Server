@@ -125,12 +125,43 @@ exports.awardAdCredits = async (user, { source, amount, externalTxId = null }) =
 
   const totalReward = amount + streakBonus;
 
-  user.credits += totalReward;
-  user.adWatch.lastAt = now;
-  user.adWatch.todayCount += 1;
-  user.adWatch.todayDate = todayUtc;
+  const query = {
+    _id: user._id,
+    "adWatch.lastAt": user.adWatch ? user.adWatch.lastAt : null,
+    "adWatch.todayCount": user.adWatch ? user.adWatch.todayCount : 0,
+  };
 
-  await user.save({ validateBeforeSave: false });
+  const update = {
+    $inc: { credits: totalReward, "adWatch.todayCount": 1 },
+    $set: {
+      "adWatch.lastAt": now,
+      "adWatch.todayDate": todayUtc,
+    },
+  };
+
+  if (source === "admob" && user.adStreak) {
+    update.$set = {
+      ...update.$set,
+      "adStreak.current": user.adStreak.current,
+      "adStreak.longest": user.adStreak.longest,
+      "adStreak.lastWatchDate": user.adStreak.lastWatchDate,
+    };
+  }
+
+  const updatedUser = await User.findOneAndUpdate(query, update, { new: true });
+  if (!updatedUser) {
+    logger.warn(
+      `Race condition or concurrent ad watch detected for user ${user._id}. Rejecting credit award.`
+    );
+    return { ok: false, code: "COOLDOWN", retryAfterMs: cooldownMs };
+  }
+
+  // Sync passed in user object with new database values
+  user.credits = updatedUser.credits;
+  user.adWatch = updatedUser.adWatch;
+  if (source === "admob") {
+    user.adStreak = updatedUser.adStreak;
+  }
 
   await Transaction.create({
     userId: user._id,

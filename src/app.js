@@ -66,6 +66,17 @@ const aiLimiter = rateLimit({
   },
 });
 
+// Ad Watch-Specific Rate Limiting (prevent bots spamming Monetag ad rewards)
+const adWatchLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 15, // Limit each IP to 15 ad watches per 15 minutes
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    message: "Too many ad requests from this IP. Please wait before watching more ads.",
+  },
+});
+
 // Logger configuration for HTTP requests
 app.use(
   morgan("combined", {
@@ -104,6 +115,7 @@ app.use("/api/applications", applicationRoutes);
 app.use("/api/analysis", require("./routes/analysis.routes"));
 app.use("/api/cv", require("./routes/cv.routes"));
 app.use("/api/pdf", require("./routes/pdf.routes"));
+app.use("/api/billing/watch-ad", adWatchLimiter);
 app.use("/api/billing", require("./routes/billing.routes"));
 app.use("/api/feedback", require("./routes/feedback.routes"));
 app.use("/api/ai-feedback", require("./routes/aiFeedback.routes"));
