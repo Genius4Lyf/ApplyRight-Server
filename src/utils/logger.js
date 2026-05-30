@@ -28,13 +28,16 @@ const logger = winston.createLogger({
   ],
 });
 
-// If we're not in production, also log to the console with colors
-if (process.env.NODE_ENV !== "production") {
-  logger.add(
-    new winston.transports.Console({
-      format: combine(colorize(), logFormat),
-    })
-  );
-}
+// Always log to the console. On Render/PaaS the dashboard only surfaces
+// stdout/stderr — without this, every logger.* line (including the AdMob SSV
+// audit trail) is written to a file we can't see. Colorize only off-prod.
+logger.add(
+  new winston.transports.Console({
+    format:
+      process.env.NODE_ENV !== "production"
+        ? combine(colorize(), logFormat)
+        : logFormat,
+  })
+);
 
 module.exports = logger;

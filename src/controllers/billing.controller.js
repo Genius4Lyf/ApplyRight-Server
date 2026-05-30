@@ -165,6 +165,7 @@ exports.watchAd = async (req, res) => {
 exports.admobSsv = async (req, res) => {
   try {
     const rawQs = (req.originalUrl.split("?")[1] || "").trim();
+    logger.info(`AdMob SSV callback received: ip=${req.ip} qs=${rawQs}`);
     const verification = await admobSsv.verifySignature(rawQs);
     if (!verification.valid) {
       logger.warn(`AdMob SSV signature rejected: ${verification.reason} qs=${rawQs}`);

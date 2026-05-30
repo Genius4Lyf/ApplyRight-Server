@@ -12,6 +12,13 @@ require("./config/env"); // This will validate env vars on startup
 
 const app = express();
 
+// Render (and most PaaS) put the app behind a reverse proxy that sets
+// X-Forwarded-For. Without this, req.ip is the proxy's IP and
+// express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR. `1` = trust
+// the single Render proxy hop (do NOT use `true`, which trusts any client-
+// supplied XFF and lets attackers spoof their IP to dodge rate limits).
+app.set("trust proxy", 1);
+
 const allowedOrigins = [
   process.env.FRONTEND_URL, // Netlify production (set on Render)
   "https://localhost", // Capacitor Android default
