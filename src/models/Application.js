@@ -212,6 +212,10 @@ const applicationSchema = new mongoose.Schema(
               refIndex: Number,
             },
           ],
+          confidence: {
+            type: String,
+            enum: ["needs_work", "almost", "ready"],
+          },
         },
       ],
       questionsToAsk: [String],

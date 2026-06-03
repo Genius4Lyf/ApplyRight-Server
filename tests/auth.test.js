@@ -5,6 +5,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 // Mock Dependencies
+jest.mock("express-rate-limit", () => jest.fn(() => (req, res, next) => next()));
 jest.mock("../src/models/User");
 jest.mock("bcryptjs");
 jest.mock("jsonwebtoken");
@@ -23,6 +24,7 @@ const mockUser = {
   phone: "1234567890",
   firstName: "Test",
   lastName: "User",
+  referralCode: "MOCKREF1",
   save: jest.fn().mockResolvedValue(true),
 };
 
@@ -47,10 +49,9 @@ describe("Auth API (Mocked DB)", () => {
   describe("POST /api/auth/register", () => {
     it("should register a new user successfully", async () => {
       const res = await request(app).post("/api/auth/register").send({
-        name: "Test User",
         email: "new@example.com",
-        password: "password123",
-        phoneNumber: "0987654321",
+        password: "Password123",
+        phone: "+12025550199",
       });
 
       expect(res.statusCode).toEqual(201);
@@ -63,10 +64,9 @@ describe("Auth API (Mocked DB)", () => {
       User.findOne.mockResolvedValue(mockUser);
 
       const res = await request(app).post("/api/auth/register").send({
-        name: "Test User",
         email: "test@example.com",
-        password: "password123",
-        phoneNumber: "1234567890",
+        password: "Password123",
+        phone: "+12025550199",
       });
 
       expect(res.statusCode).toEqual(400);

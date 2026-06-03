@@ -602,6 +602,191 @@ exports.getLinkedCV = async (req, res) => {
 };
 
 /**
+ * Set per-question confidence (needs_work | almost | ready | null) for job-based questions.
+ */
+exports.updateQuestionConfidence = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const { questionText, questionIndex, confidence } = req.body || {};
+    if (typeof questionText !== "string" || !questionText.trim()) {
+      return res.status(400).json({ message: "questionText is required" });
+    }
+    const allowed = ["needs_work", "almost", "ready", null];
+    if (!allowed.includes(confidence)) {
+      return res.status(400).json({ message: "invalid confidence value" });
+    }
+
+    const { doc, unauthorized, notFound } = await loadPrepDoc(
+      id,
+      req.user.id,
+      "userId interviewPrep"
+    );
+    if (unauthorized) return res.status(401).json({ message: "User not authorized" });
+    if (notFound) return res.status(404).json({ message: "Interview prep not found" });
+
+    doc.interviewPrep = doc.interviewPrep || {};
+    const questions = Array.isArray(doc.interviewPrep.jobQuestions)
+      ? doc.interviewPrep.jobQuestions
+      : [];
+
+    let target = null;
+    if (typeof questionIndex === "number" && questionIndex >= 0 && questionIndex < questions.length) {
+      const candidate = questions[questionIndex];
+      if (candidate && candidate.question === questionText) {
+        target = candidate;
+      }
+    }
+
+    if (!target) {
+      target = questions.find((q) => q.question === questionText);
+    }
+
+    if (!target) return res.status(404).json({ message: "Question not found on this prep" });
+
+    target.confidence = confidence || undefined;
+    doc.markModified("interviewPrep.jobQuestions");
+    await doc.save();
+
+    res.json({ status: "ok", questionText, confidence: target.confidence || null });
+  } catch (error) {
+    console.error("[InterviewPrep] updateQuestionConfidence failed:", error.message);
+    res.status(500).json({ message: "Failed to update question confidence" });
+  }
+};
+
+/**
+ * Grade a user's mock interview response using Google Gemini, charge 1 credit,
+ * log the transaction, and save the rating based on score.
+ */
+exports.gradeAnswer = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const { questionText, questionIndex, answerText } = req.body || {};
+
+    if (!questionText || typeof questionText !== "string") {
+      return res.status(400).json({ message: "questionText is required" });
+    }
+    if (!answerText || typeof answerText !== "string" || !answerText.trim()) {
+      return res.status(400).json({ message: "answerText is required" });
+    }
+
+    const application = await Application.findById(id).populate("jobId");
+    if (!application) return res.status(404).json({ message: "Application not found" });
+    if (application.userId.toString() !== req.user.id) {
+      return res.status(401).json({ message: "User not authorized" });
+    }
+
+    const User = require("../models/User");
+    const Transaction = require("../models/Transaction");
+    const aiService = require("../services/ai.service");
+    const { buildInterviewCandidateContext } = require("./analysis.controller");
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const GRADE_COST = 1;
+    if (user.credits < GRADE_COST) {
+      return res.status(403).json({
+        message: "Insufficient credits to grade response. Watch an ad to earn credits.",
+        code: "INSUFFICIENT_CREDITS",
+      });
+    }
+
+    const questions = Array.isArray(application.interviewPrep?.jobQuestions)
+      ? application.interviewPrep.jobQuestions
+      : [];
+
+    let suggestedAnswer = "";
+    let questionObj = null;
+
+    if (typeof questionIndex === "number" && questionIndex >= 0 && questionIndex < questions.length) {
+      const candidate = questions[questionIndex];
+      if (candidate && candidate.question === questionText) {
+        suggestedAnswer = candidate.suggestedAnswer || "";
+        questionObj = candidate;
+      }
+    }
+
+    if (!questionObj) {
+      questionObj = questions.find((q) => q.question === questionText);
+      if (questionObj) {
+        suggestedAnswer = questionObj.suggestedAnswer || "";
+      }
+    }
+
+    const jobDescription = application.jobId?.description || application.jobTitle || "";
+    const candidateContext = await buildInterviewCandidateContext(application, {
+      userId: req.user.id,
+      applicationId: application._id,
+    });
+
+    const aiResult = await aiService.gradeInterviewAnswer(
+      questionText,
+      answerText,
+      suggestedAnswer,
+      jobDescription,
+      candidateContext,
+      { userId: req.user.id, applicationId: application._id }
+    );
+
+    // Deduct credit atomically — guard on the balance inside the update so two
+    // concurrent AI actions can't both read the old balance and overspend (or
+    // drive credits negative). modifiedCount === 0 means the balance dropped
+    // below the cost between the pre-check and here.
+    const decResult = await User.updateOne(
+      { _id: user._id, credits: { $gte: GRADE_COST } },
+      { $inc: { credits: -GRADE_COST } }
+    );
+    if (decResult.modifiedCount === 0) {
+      return res.status(403).json({
+        message: "Insufficient credits to grade response. Watch an ad to earn credits.",
+        code: "INSUFFICIENT_CREDITS",
+      });
+    }
+    user.credits -= GRADE_COST;
+
+    // Record Transaction
+    await Transaction.create({
+      userId: user._id,
+      amount: -GRADE_COST,
+      type: "usage",
+      description: `AI grade mock answer: "${questionText.substring(0, 40)}..."`,
+      status: "completed",
+    });
+
+    // Normalize the AI score to a clamped integer before it drives the dial,
+    // the readiness thresholds, and the response.
+    const score = Math.max(0, Math.min(100, Math.round(Number(aiResult.score) || 0)));
+
+    // Save auto-determined confidence based on score
+    let autoConfidence = "needs_work";
+    if (score > 75) {
+      autoConfidence = "ready";
+    } else if (score > 45) {
+      autoConfidence = "almost";
+    }
+
+    if (questionObj) {
+      questionObj.confidence = autoConfidence;
+      application.markModified("interviewPrep.jobQuestions");
+      await application.save();
+    }
+
+    res.json({
+      score,
+      overallFeedback: aiResult.overallFeedback,
+      starBreakdown: aiResult.starBreakdown,
+      refinedAnswer: aiResult.refinedAnswer,
+      confidence: autoConfidence,
+      remainingCredits: user.credits,
+    });
+  } catch (error) {
+    console.error("[InterviewPrep] gradeAnswer failed:", error.message);
+    res.status(500).json({ message: "Failed to grade mock interview response" });
+  }
+};
+
+/**
  * "Unsave" — drop user-saved skill prep but preserve auto-generated job
  * questions (those re-emerge if user runs analysis again).
  */

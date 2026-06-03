@@ -11,6 +11,7 @@ const Feedback = require("../src/models/Feedback");
 const Notification = require("../src/models/Notification");
 
 // Mock protect middleware
+jest.mock("express-rate-limit", () => jest.fn(() => (req, res, next) => next()));
 jest.mock("../src/middleware/auth.middleware", () => ({
   protect: (req, res, next) => {
     req.user = { id: "mock-user-id" };

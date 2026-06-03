@@ -23,6 +23,18 @@ router.patch(
   interviewPrepController.updateSkillConfidence
 );
 
+router.patch(
+  "/:applicationId/question-confidence",
+  protect,
+  interviewPrepController.updateQuestionConfidence
+);
+
+router.post(
+  "/:applicationId/grade-answer",
+  protect,
+  interviewPrepController.gradeAnswer
+);
+
 router.delete("/:applicationId", protect, interviewPrepController.remove);
 
 module.exports = router;
