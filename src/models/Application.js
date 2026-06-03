@@ -229,6 +229,55 @@ const applicationSchema = new mongoose.Schema(
           unsupportedClaims: [String],
         },
       ],
+      // Story Bank — reusable STAR stories drawn from the candidate's real
+      // history, each mapping to multiple interview questions. Unlike
+      // skillsWithEvidence / jobQuestions (re-derived and matched by name/text),
+      // stories are AI-authored once then rated/edited over time, so they carry
+      // a stable `id`. Generated on demand via /analysis/:id/generate-stories.
+      stories: [
+        {
+          id: { type: String },
+          title: String,
+          theme: {
+            type: String,
+            enum: [
+              "leadership",
+              "problem_solving",
+              "conflict",
+              "technical_achievement",
+              "failure_learning",
+              "teamwork",
+              "impact",
+            ],
+          },
+          situation: String,
+          task: String,
+          action: String,
+          result: String,
+          skillsProven: [String],
+          // Question themes/phrasings this story can answer — the explicit
+          // backref that replaces the old substring skill→question matching.
+          answersQuestions: [String],
+          sourcedFrom: [
+            {
+              type: { type: String },
+              refIndex: Number,
+            },
+          ],
+          confidence: {
+            type: String,
+            enum: ["needs_work", "almost", "ready"],
+          },
+        },
+      ],
+      // Mirror of fabricationWarnings, indexed by stories[].index. Cleared for a
+      // story once the user edits its STAR text (their own words don't need it).
+      storyFabricationWarnings: [
+        {
+          index: Number,
+          unsupportedClaims: [String],
+        },
+      ],
       // Multi-note model. Legacy single-string notes are folded into a single
       // saved note on read (see interviewPrep.controller.js) so reads stay
       // backward-compatible without a destructive migration. Use Mixed so

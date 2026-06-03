@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const Job = require("../models/Job");
 const JobSearch = require("../models/JobSearch");
 const DraftCV = require("../models/DraftCV");
@@ -14,6 +15,10 @@ const COSTS = {
   GENERATE_CV: 10,
   GENERATE_COVER_LETTER: 5,
   GENERATE_INTERVIEW: 5,
+  // Story Bank generation. Deducted internally for accounting, but the user
+  // reaches it through the ad-reward flow (the ad grants more than this costs),
+  // so it nets out free — same pattern as "Get more questions".
+  GENERATE_STORIES: 5,
   CREATE_FROM_UPLOAD: 15,
   // Bundle: CV (10) + Cover letter (5) + Interview prep (5) = 20 individually,
   // 18 as a bundle (10% discount, save 2 credits). All-or-nothing in v1: if
@@ -203,6 +208,8 @@ const serializeInterviewPrep = (application) => {
     jobQuestions: prep.jobQuestions || [],
     questionsToAsk: prep.questionsToAsk || [],
     fabricationWarnings: prep.fabricationWarnings || [],
+    stories: prep.stories || [],
+    storyFabricationWarnings: prep.storyFabricationWarnings || [],
     userNotes: prep.userNotes || "",
   };
 };
@@ -1077,6 +1084,109 @@ const generateMoreApplicationInterview = async (req, res) => {
 };
 
 /**
+ * POST /analysis/:id/generate-stories
+ *
+ * Generate a Story Bank for an existing application — reusable STAR stories
+ * grounded in the candidate's real history. Mirrors generateApplicationInterview:
+ * same grounding gate, fact-check, and charge-only-on-success contract.
+ * Reached through the ad-reward flow on the frontend (nets out free).
+ */
+const generateApplicationStories = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+    const user = req.user;
+
+    const application = await Application.findOne({ _id: id, userId });
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    const jobData = await resolveJobDescription(application);
+    if (!jobData) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    checkCredits(user, COSTS.GENERATE_STORIES);
+
+    let candidateContext = null;
+    try {
+      candidateContext = await buildInterviewCandidateContext(application, {
+        userId,
+        applicationId: application._id,
+      });
+    } catch (e) {
+      console.error("[Stories] Failed to build candidate context:", e.message);
+    }
+
+    // Same hard gate as interview questions: without a real work-history entry
+    // to anchor STAR stories in, the AI fabricates roles. Block, no charge.
+    if (!hasGroundableExperience(candidateContext)) {
+      return res.status(422).json({
+        code: "NO_CV_GROUNDING",
+        message:
+          "Add or generate a CV with at least one work experience entry before generating a story bank — this prevents the AI from inventing roles.",
+      });
+    }
+
+    const aiResult = await aiService.generateInterviewStories(jobData.description, candidateContext, {
+      userId,
+      applicationId: application._id,
+    });
+
+    const remainingCredits = await deductCredits(user, COSTS.GENERATE_STORIES);
+
+    // Normalize + stamp a stable id on every story so confidence/edits can
+    // address them after the array is re-sorted or edited.
+    const rawStories = Array.isArray(aiResult.stories) ? aiResult.stories : [];
+    const stories = rawStories.map((s) => ({
+      id: crypto.randomUUID(),
+      title: typeof s.title === "string" ? s.title : "",
+      theme: typeof s.theme === "string" ? s.theme : undefined,
+      situation: typeof s.situation === "string" ? s.situation : "",
+      task: typeof s.task === "string" ? s.task : "",
+      action: typeof s.action === "string" ? s.action : "",
+      result: typeof s.result === "string" ? s.result : "",
+      skillsProven: Array.isArray(s.skillsProven)
+        ? s.skillsProven.filter((x) => typeof x === "string")
+        : [],
+      answersQuestions: Array.isArray(s.answersQuestions)
+        ? s.answersQuestions.filter((x) => typeof x === "string")
+        : [],
+      sourcedFrom: Array.isArray(s.sourcedFrom) ? s.sourcedFrom : [],
+    }));
+
+    const storyFabricationWarnings = await aiService.factCheckStories(candidateContext, stories, {
+      userId,
+      applicationId: application._id,
+    });
+
+    application.interviewPrep = application.interviewPrep || {};
+    application.interviewPrep.stories = stories;
+    application.interviewPrep.storyFabricationWarnings = storyFabricationWarnings;
+    application.markModified("interviewPrep.stories");
+    application.markModified("interviewPrep.storyFabricationWarnings");
+    await application.save();
+
+    const interviewPrep = serializeInterviewPrep(application);
+
+    res.status(200).json({
+      stories: interviewPrep.stories,
+      storyFabricationWarnings: interviewPrep.storyFabricationWarnings,
+      interviewPrep,
+      remainingCredits,
+    });
+  } catch (error) {
+    if (handleAIError(res, error)) return;
+    console.error("Story Bank Generation Error:", error.message);
+    res.status(500).json({
+      message: "Failed to generate story bank. You have not been charged.",
+      error: error.message,
+    });
+  }
+};
+
+/**
  * POST /analysis/:id/generate-bundle
  *
  * Generate the full application kit (CV + cover letter + interview prep) in
@@ -1427,6 +1537,7 @@ module.exports = {
   generateApplicationCoverLetter,
   generateApplicationInterview,
   generateMoreApplicationInterview,
+  generateApplicationStories,
   generateApplicationBundle,
   preflightMetrics,
   editApplication,

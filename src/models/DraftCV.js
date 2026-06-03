@@ -123,6 +123,49 @@ const draftCVSchema = new mongoose.Schema(
           unsupportedClaims: [String],
         },
       ],
+      // Story Bank — parity with Application.interviewPrep.stories so CV-only
+      // prep supports the same reusable STAR stories. See Application.js for the
+      // field rationale.
+      stories: [
+        {
+          id: { type: String },
+          title: String,
+          theme: {
+            type: String,
+            enum: [
+              "leadership",
+              "problem_solving",
+              "conflict",
+              "technical_achievement",
+              "failure_learning",
+              "teamwork",
+              "impact",
+            ],
+          },
+          situation: String,
+          task: String,
+          action: String,
+          result: String,
+          skillsProven: [String],
+          answersQuestions: [String],
+          sourcedFrom: [
+            {
+              type: { type: String },
+              refIndex: Number,
+            },
+          ],
+          confidence: {
+            type: String,
+            enum: ["needs_work", "almost", "ready"],
+          },
+        },
+      ],
+      storyFabricationWarnings: [
+        {
+          index: Number,
+          unsupportedClaims: [String],
+        },
+      ],
       // Mixed to support both the legacy single-string format and the new
       // multi-note array. The controller normalizes legacy string values into
       // a single saved note on read so the frontend only ever sees the array.

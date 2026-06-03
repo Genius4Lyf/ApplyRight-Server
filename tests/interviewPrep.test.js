@@ -185,4 +185,124 @@ describe("Interview Prep API", () => {
       expect(res.body.code).toBe("INSUFFICIENT_CREDITS");
     });
   });
+
+  describe("Story Bank — confidence + CRUD", () => {
+    describe("PATCH /api/interview-prep/:applicationId/story-confidence", () => {
+      it("should set story confidence by id", async () => {
+        mockApplication.interviewPrep.stories = [{ id: "s1", title: "Led a migration" }];
+
+        const res = await request(app)
+          .patch(`/api/interview-prep/${mockAppId}/story-confidence`)
+          .set("Authorization", "Bearer mock-token")
+          .send({ storyId: "s1", confidence: "ready" });
+
+        expect(res.statusCode).toEqual(200);
+        expect(res.body.confidence).toEqual("ready");
+        expect(mockApplication.interviewPrep.stories[0].confidence).toEqual("ready");
+        expect(mockApplication.save).toHaveBeenCalled();
+      });
+
+      it("should reject an invalid confidence value", async () => {
+        mockApplication.interviewPrep.stories = [{ id: "s1", title: "Led a migration" }];
+
+        const res = await request(app)
+          .patch(`/api/interview-prep/${mockAppId}/story-confidence`)
+          .set("Authorization", "Bearer mock-token")
+          .send({ storyId: "s1", confidence: "super-ready" });
+
+        expect(res.statusCode).toEqual(400);
+      });
+
+      it("should 404 when the story id is unknown", async () => {
+        mockApplication.interviewPrep.stories = [{ id: "s1" }];
+
+        const res = await request(app)
+          .patch(`/api/interview-prep/${mockAppId}/story-confidence`)
+          .set("Authorization", "Bearer mock-token")
+          .send({ storyId: "missing", confidence: "ready" });
+
+        expect(res.statusCode).toEqual(404);
+      });
+    });
+
+    describe("POST /api/interview-prep/:applicationId/stories", () => {
+      it("should create a story with a server-assigned id", async () => {
+        mockApplication.interviewPrep.stories = [];
+
+        const res = await request(app)
+          .post(`/api/interview-prep/${mockAppId}/stories`)
+          .set("Authorization", "Bearer mock-token")
+          .send({ title: "My new story", theme: "leadership" });
+
+        expect(res.statusCode).toEqual(200);
+        expect(res.body.story.id).toBeTruthy();
+        expect(res.body.story.title).toEqual("My new story");
+        expect(res.body.story.theme).toEqual("leadership");
+        expect(mockApplication.save).toHaveBeenCalled();
+      });
+    });
+
+    describe("PATCH /api/interview-prep/:applicationId/stories/:storyId", () => {
+      it("should update editable fields and clear that story's warning", async () => {
+        mockApplication.interviewPrep.stories = [{ id: "s2", title: "Old", situation: "before" }];
+        mockApplication.interviewPrep.storyFabricationWarnings = [
+          { index: 0, unsupportedClaims: ["made-up metric"] },
+        ];
+
+        const res = await request(app)
+          .patch(`/api/interview-prep/${mockAppId}/stories/s2`)
+          .set("Authorization", "Bearer mock-token")
+          .send({ title: "New title", situation: "after" });
+
+        expect(res.statusCode).toEqual(200);
+        expect(res.body.story.title).toEqual("New title");
+        expect(res.body.story.situation).toEqual("after");
+        // Edit invalidates the AI fact-check for that story.
+        expect(mockApplication.interviewPrep.storyFabricationWarnings).toHaveLength(0);
+      });
+
+      it("should 404 for an unknown story id", async () => {
+        mockApplication.interviewPrep.stories = [{ id: "s2" }];
+
+        const res = await request(app)
+          .patch(`/api/interview-prep/${mockAppId}/stories/nope`)
+          .set("Authorization", "Bearer mock-token")
+          .send({ title: "x" });
+
+        expect(res.statusCode).toEqual(404);
+      });
+    });
+
+    describe("DELETE /api/interview-prep/:applicationId/stories/:storyId", () => {
+      it("should remove the story and reindex remaining warnings", async () => {
+        mockApplication.interviewPrep.stories = [{ id: "a" }, { id: "b" }];
+        mockApplication.interviewPrep.storyFabricationWarnings = [
+          { index: 0, unsupportedClaims: ["x"] },
+          { index: 1, unsupportedClaims: ["y"] },
+        ];
+
+        const res = await request(app)
+          .delete(`/api/interview-prep/${mockAppId}/stories/a`)
+          .set("Authorization", "Bearer mock-token");
+
+        expect(res.statusCode).toEqual(200);
+        expect(mockApplication.interviewPrep.stories).toHaveLength(1);
+        expect(mockApplication.interviewPrep.stories[0].id).toEqual("b");
+        // Warning for deleted index 0 dropped; index 1 shifted down to 0.
+        expect(mockApplication.interviewPrep.storyFabricationWarnings).toEqual([
+          { index: 0, unsupportedClaims: ["y"] },
+        ]);
+      });
+
+      it("should 404 when deleting an unknown story id", async () => {
+        mockApplication.interviewPrep.stories = [{ id: "a" }];
+
+        const res = await request(app)
+          .delete(`/api/interview-prep/${mockAppId}/stories/missing`)
+          .set("Authorization", "Bearer mock-token");
+
+        expect(res.statusCode).toEqual(404);
+      });
+    });
+  });
 });

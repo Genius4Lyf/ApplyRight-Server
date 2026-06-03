@@ -2,6 +2,18 @@ const crypto = require("crypto");
 const Application = require("../models/Application");
 const DraftCV = require("../models/DraftCV");
 
+// Allowed Story Bank themes — kept in sync with the enum on
+// Application/DraftCV interviewPrep.stories[].theme.
+const STORY_THEMES = [
+  "leadership",
+  "problem_solving",
+  "conflict",
+  "technical_achievement",
+  "failure_learning",
+  "teamwork",
+  "impact",
+];
+
 // Project shape that the list page renders. Picks just what the card needs so
 // the response stays small.
 const LIST_PROJECTION = {
@@ -15,6 +27,7 @@ const LIST_PROJECTION = {
   "interviewPrep.skillsWithEvidence": 1,
   "interviewPrep.jobQuestions": 1,
   "interviewPrep.questionsToAsk": 1,
+  "interviewPrep.stories": 1,
   interviewQuestions: 1,
   questionsToAsk: 1,
   updatedAt: 1,
@@ -226,6 +239,7 @@ exports.list = async (req, res) => {
       $or: [
         { "interviewPrep.isSaved": true },
         { "interviewPrep.jobQuestions.0": { $exists: true } },
+        { "interviewPrep.stories.0": { $exists: true } },
         { "interviewQuestions.0": { $exists: true } },
       ],
     })
@@ -651,6 +665,185 @@ exports.updateQuestionConfidence = async (req, res) => {
   } catch (error) {
     console.error("[InterviewPrep] updateQuestionConfidence failed:", error.message);
     res.status(500).json({ message: "Failed to update question confidence" });
+  }
+};
+
+/**
+ * Set per-story confidence (needs_work | almost | ready | null). Stories carry
+ * a stable `id`, so unlike skills/questions this matches by id, not text.
+ */
+exports.updateStoryConfidence = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const { storyId, confidence } = req.body || {};
+    if (typeof storyId !== "string" || !storyId.trim()) {
+      return res.status(400).json({ message: "storyId is required" });
+    }
+    const allowed = ["needs_work", "almost", "ready", null];
+    if (!allowed.includes(confidence)) {
+      return res.status(400).json({ message: "invalid confidence value" });
+    }
+
+    const { doc, unauthorized, notFound } = await loadPrepDoc(
+      id,
+      req.user.id,
+      "userId interviewPrep"
+    );
+    if (unauthorized) return res.status(401).json({ message: "User not authorized" });
+    if (notFound) return res.status(404).json({ message: "Interview prep not found" });
+
+    doc.interviewPrep = doc.interviewPrep || {};
+    const stories = Array.isArray(doc.interviewPrep.stories) ? doc.interviewPrep.stories : [];
+    const target = stories.find((s) => s.id === storyId);
+    if (!target) return res.status(404).json({ message: "Story not found on this prep" });
+
+    target.confidence = confidence || undefined;
+    doc.markModified("interviewPrep.stories");
+    await doc.save();
+
+    res.json({ status: "ok", storyId, confidence: target.confidence || null });
+  } catch (error) {
+    console.error("[InterviewPrep] updateStoryConfidence failed:", error.message);
+    res.status(500).json({ message: "Failed to update story confidence" });
+  }
+};
+
+/**
+ * Create a story (manual "Add story"). Server assigns the id; appends to the end
+ * so existing fabrication-warning indices stay valid. Returns the full story so
+ * the client can switch its editor from a local draft to the persisted one.
+ */
+exports.createStory = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const body = req.body || {};
+
+    const { doc, unauthorized, notFound } = await loadPrepDoc(
+      id,
+      req.user.id,
+      "userId interviewPrep"
+    );
+    if (unauthorized) return res.status(401).json({ message: "User not authorized" });
+    if (notFound) return res.status(404).json({ message: "Interview prep not found" });
+
+    doc.interviewPrep = doc.interviewPrep || {};
+    const stories = Array.isArray(doc.interviewPrep.stories) ? doc.interviewPrep.stories : [];
+    const story = {
+      id: crypto.randomUUID(),
+      title: typeof body.title === "string" ? body.title : "",
+      theme: STORY_THEMES.includes(body.theme) ? body.theme : undefined,
+      situation: typeof body.situation === "string" ? body.situation : "",
+      task: typeof body.task === "string" ? body.task : "",
+      action: typeof body.action === "string" ? body.action : "",
+      result: typeof body.result === "string" ? body.result : "",
+      skillsProven: Array.isArray(body.skillsProven)
+        ? body.skillsProven.filter((x) => typeof x === "string")
+        : [],
+      answersQuestions: Array.isArray(body.answersQuestions)
+        ? body.answersQuestions.filter((x) => typeof x === "string")
+        : [],
+      sourcedFrom: [],
+    };
+    stories.push(story);
+    doc.interviewPrep.stories = stories;
+    doc.markModified("interviewPrep.stories");
+    await doc.save();
+
+    res.json({ story });
+  } catch (error) {
+    console.error("[InterviewPrep] createStory failed:", error.message);
+    res.status(500).json({ message: "Failed to create story" });
+  }
+};
+
+/**
+ * Update a story's editable fields. The frontend debounces autosave into here.
+ * Editing the STAR content invalidates the AI fact-check for that story, so its
+ * warning is dropped (the user's own words don't need grounding flags).
+ */
+exports.updateStory = async (req, res) => {
+  try {
+    const { applicationId: id, storyId } = req.params;
+    const body = req.body || {};
+
+    const { doc, unauthorized, notFound } = await loadPrepDoc(
+      id,
+      req.user.id,
+      "userId interviewPrep"
+    );
+    if (unauthorized) return res.status(401).json({ message: "User not authorized" });
+    if (notFound) return res.status(404).json({ message: "Interview prep not found" });
+
+    doc.interviewPrep = doc.interviewPrep || {};
+    const stories = Array.isArray(doc.interviewPrep.stories) ? doc.interviewPrep.stories : [];
+    const idx = stories.findIndex((s) => s.id === storyId);
+    if (idx === -1) return res.status(404).json({ message: "Story not found" });
+    const target = stories[idx];
+
+    ["title", "situation", "task", "action", "result"].forEach((f) => {
+      if (typeof body[f] === "string") target[f] = body[f];
+    });
+    if (STORY_THEMES.includes(body.theme)) target.theme = body.theme;
+    if (Array.isArray(body.skillsProven)) {
+      target.skillsProven = body.skillsProven.filter((x) => typeof x === "string");
+    }
+    if (Array.isArray(body.answersQuestions)) {
+      target.answersQuestions = body.answersQuestions.filter((x) => typeof x === "string");
+    }
+
+    const warnings = doc.interviewPrep.storyFabricationWarnings;
+    if (Array.isArray(warnings) && warnings.some((w) => w.index === idx)) {
+      doc.interviewPrep.storyFabricationWarnings = warnings.filter((w) => w.index !== idx);
+      doc.markModified("interviewPrep.storyFabricationWarnings");
+    }
+    doc.markModified("interviewPrep.stories");
+    await doc.save();
+
+    res.json({ story: target });
+  } catch (error) {
+    console.error("[InterviewPrep] updateStory failed:", error.message);
+    res.status(500).json({ message: "Failed to update story" });
+  }
+};
+
+/**
+ * Delete a story by id. Drops its fabrication warning and shifts higher indices
+ * down by one so the index-keyed warnings stay aligned with the array.
+ */
+exports.deleteStory = async (req, res) => {
+  try {
+    const { applicationId: id, storyId } = req.params;
+
+    const { doc, unauthorized, notFound } = await loadPrepDoc(
+      id,
+      req.user.id,
+      "userId interviewPrep"
+    );
+    if (unauthorized) return res.status(401).json({ message: "User not authorized" });
+    if (notFound) return res.status(404).json({ message: "Interview prep not found" });
+
+    doc.interviewPrep = doc.interviewPrep || {};
+    const stories = Array.isArray(doc.interviewPrep.stories) ? doc.interviewPrep.stories : [];
+    const idx = stories.findIndex((s) => s.id === storyId);
+    if (idx === -1) return res.status(404).json({ message: "Story not found" });
+
+    stories.splice(idx, 1);
+    doc.interviewPrep.stories = stories;
+
+    const warnings = doc.interviewPrep.storyFabricationWarnings;
+    if (Array.isArray(warnings)) {
+      doc.interviewPrep.storyFabricationWarnings = warnings
+        .filter((w) => w.index !== idx)
+        .map((w) => (w.index > idx ? { ...w, index: w.index - 1 } : w));
+      doc.markModified("interviewPrep.storyFabricationWarnings");
+    }
+    doc.markModified("interviewPrep.stories");
+    await doc.save();
+
+    res.json({ status: "ok" });
+  } catch (error) {
+    console.error("[InterviewPrep] deleteStory failed:", error.message);
+    res.status(500).json({ message: "Failed to delete story" });
   }
 };
 

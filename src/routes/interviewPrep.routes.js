@@ -29,6 +29,16 @@ router.patch(
   interviewPrepController.updateQuestionConfidence
 );
 
+// Story Bank: confidence + CRUD (manual add / edit-autosave / delete).
+router.patch(
+  "/:applicationId/story-confidence",
+  protect,
+  interviewPrepController.updateStoryConfidence
+);
+router.post("/:applicationId/stories", protect, interviewPrepController.createStory);
+router.patch("/:applicationId/stories/:storyId", protect, interviewPrepController.updateStory);
+router.delete("/:applicationId/stories/:storyId", protect, interviewPrepController.deleteStory);
+
 router.post(
   "/:applicationId/grade-answer",
   protect,

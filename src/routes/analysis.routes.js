@@ -6,6 +6,7 @@ const {
   generateApplicationCoverLetter,
   generateApplicationInterview,
   generateMoreApplicationInterview,
+  generateApplicationStories,
   generateApplicationBundle,
   preflightMetrics,
   editApplication,
@@ -25,6 +26,8 @@ router.post("/:id/generate-cover-letter", protect, generateApplicationCoverLette
 router.post("/:id/generate-interview", protect, generateApplicationInterview);
 // Append more questions (avoids duplicates of existing ones). Same 5-credit cost.
 router.post("/:id/generate-more-interview", protect, generateMoreApplicationInterview);
+// Story Bank: reusable STAR stories grounded in the candidate's history.
+router.post("/:id/generate-stories", protect, generateApplicationStories);
 // Bundle: CV + cover letter + interview prep at a discount (18 vs 20 credits)
 router.post("/:id/generate-bundle", protect, generateApplicationBundle);
 
