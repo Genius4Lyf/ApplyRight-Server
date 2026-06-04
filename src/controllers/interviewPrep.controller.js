@@ -1123,6 +1123,73 @@ exports.gradeStoryAnswer = async (req, res) => {
 };
 
 /**
+ * Synthesize speech for Interview Mode (the AI interviewer's voice). Returns an
+ * mp3 stream from the configured premium provider; 503 TTS_UNAVAILABLE when no
+ * provider key is set, so the client falls back to the browser's built-in voice.
+ */
+exports.synthesizeTts = async (req, res) => {
+  try {
+    const { text } = req.body || {};
+    if (typeof text !== "string" || !text.trim()) {
+      return res.status(400).json({ message: "text is required" });
+    }
+    const tts = require("../services/tts.service");
+    if (!tts.isConfigured()) {
+      return res.status(503).json({ message: "Voice is not configured", code: "TTS_UNAVAILABLE" });
+    }
+    const audio = await tts.synthesize(text);
+    res.set("Content-Type", "audio/mpeg");
+    res.set("Cache-Control", "private, max-age=86400");
+    return res.send(audio);
+  } catch (error) {
+    console.error("[InterviewPrep] synthesizeTts failed:", error.message);
+    return res.status(503).json({ message: "Failed to synthesize speech", code: "TTS_UNAVAILABLE" });
+  }
+};
+
+/**
+ * Save the result of an Interview Mode session (self-assessed). Overwrites any
+ * previous one. `flaggedIndices` are jobQuestions the user wants to work on.
+ */
+exports.saveInterviewSession = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const { confidence, durationSec, plannedSec, flaggedIndices } = req.body || {};
+
+    const { doc, unauthorized, notFound } = await loadPrepDoc(
+      id,
+      req.user.id,
+      "userId interviewPrep"
+    );
+    if (unauthorized) return res.status(401).json({ message: "User not authorized" });
+    if (notFound) return res.status(404).json({ message: "Interview prep not found" });
+
+    doc.interviewPrep = doc.interviewPrep || {};
+    const questions = Array.isArray(doc.interviewPrep.jobQuestions)
+      ? doc.interviewPrep.jobQuestions
+      : [];
+    const flagged = (Array.isArray(flaggedIndices) ? flaggedIndices : [])
+      .filter((i) => Number.isInteger(i) && i >= 0 && i < questions.length)
+      .map((i) => ({ index: i, question: questions[i].question }));
+
+    doc.interviewPrep.lastInterviewSession = {
+      completedAt: new Date(),
+      confidence: ["needs_work", "almost", "ready"].includes(confidence) ? confidence : undefined,
+      durationSec: Number.isFinite(durationSec) ? Math.round(durationSec) : undefined,
+      plannedSec: Number.isFinite(plannedSec) ? Math.round(plannedSec) : undefined,
+      flagged,
+    };
+    doc.markModified("interviewPrep.lastInterviewSession");
+    await doc.save();
+
+    res.json({ lastInterviewSession: doc.interviewPrep.lastInterviewSession });
+  } catch (error) {
+    console.error("[InterviewPrep] saveInterviewSession failed:", error.message);
+    res.status(500).json({ message: "Failed to save interview session" });
+  }
+};
+
+/**
  * "Unsave" — drop user-saved skill prep but preserve auto-generated job
  * questions (those re-emerge if user runs analysis again).
  */

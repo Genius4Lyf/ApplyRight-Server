@@ -288,6 +288,15 @@ const applicationSchema = new mongoose.Schema(
           unsupportedClaims: [String],
         },
       ],
+      // Result of the most recent Interview Mode session (timed simulation +
+      // self-assessment). Overwritten each run; drives the "Last interview" review.
+      lastInterviewSession: {
+        completedAt: { type: Date },
+        confidence: { type: String, enum: ["needs_work", "almost", "ready"] },
+        durationSec: Number,
+        plannedSec: Number,
+        flagged: [{ index: Number, question: String }],
+      },
       // Multi-note model. Legacy single-string notes are folded into a single
       // saved note on read (see interviewPrep.controller.js) so reads stay
       // backward-compatible without a destructive migration. Use Mixed so

@@ -217,6 +217,7 @@ const serializeInterviewPrep = (application) => {
     fabricationWarnings: prep.fabricationWarnings || [],
     stories: prep.stories || [],
     storyFabricationWarnings: prep.storyFabricationWarnings || [],
+    lastInterviewSession: prep.lastInterviewSession || null,
     userNotes: prep.userNotes || "",
   };
 };

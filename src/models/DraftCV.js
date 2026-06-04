@@ -166,6 +166,14 @@ const draftCVSchema = new mongoose.Schema(
           unsupportedClaims: [String],
         },
       ],
+      // Parity with Application.interviewPrep.lastInterviewSession.
+      lastInterviewSession: {
+        completedAt: { type: Date },
+        confidence: { type: String, enum: ["needs_work", "almost", "ready"] },
+        durationSec: Number,
+        plannedSec: Number,
+        flagged: [{ index: Number, question: String }],
+      },
       // Mixed to support both the legacy single-string format and the new
       // multi-note array. The controller normalizes legacy string values into
       // a single saved note on read so the frontend only ever sees the array.

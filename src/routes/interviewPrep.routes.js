@@ -4,6 +4,8 @@ const { protect } = require("../middleware/auth.middleware");
 const interviewPrepController = require("../controllers/interviewPrep.controller");
 
 router.post("/save-skills", protect, interviewPrepController.saveSkills);
+// Interview Mode: AI-interviewer voice (premium TTS). Generic — not per-prep.
+router.post("/tts", protect, interviewPrepController.synthesizeTts);
 router.get("/", protect, interviewPrepController.list);
 router.get("/:applicationId", protect, interviewPrepController.getOne);
 router.get("/:applicationId/linked-cv", protect, interviewPrepController.getLinkedCV);
@@ -49,6 +51,12 @@ router.post(
   "/:applicationId/grade-story",
   protect,
   interviewPrepController.gradeStoryAnswer
+);
+
+router.post(
+  "/:applicationId/interview-session",
+  protect,
+  interviewPrepController.saveInterviewSession
 );
 
 router.delete("/:applicationId", protect, interviewPrepController.remove);

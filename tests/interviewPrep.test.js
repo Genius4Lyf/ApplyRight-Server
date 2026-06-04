@@ -357,5 +357,25 @@ describe("Interview Prep API", () => {
         expect(res.statusCode).toEqual(404);
       });
     });
+
+    describe("POST /api/interview-prep/:applicationId/interview-session", () => {
+      it("should save the self-assessed interview session result", async () => {
+        mockApplication.interviewPrep.jobQuestions = [
+          { question: "Tell me about React hooks.", suggestedAnswer: "...", type: "technical" },
+        ];
+
+        const res = await request(app)
+          .post(`/api/interview-prep/${mockAppId}/interview-session`)
+          .set("Authorization", "Bearer mock-token")
+          .send({ confidence: "almost", durationSec: 600, plannedSec: 720, flaggedIndices: [0] });
+
+        expect(res.statusCode).toEqual(200);
+        expect(res.body.lastInterviewSession.confidence).toEqual("almost");
+        expect(res.body.lastInterviewSession.flagged).toEqual([
+          { index: 0, question: "Tell me about React hooks." },
+        ]);
+        expect(mockApplication.save).toHaveBeenCalled();
+      });
+    });
   });
 });
