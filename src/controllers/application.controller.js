@@ -6,7 +6,10 @@ const Application = require("../models/Application");
 const getApplications = async (req, res) => {
   try {
     const applications = await Application.find({ userId: req.user.id })
-      .populate("jobId", "title company")
+      // description/jobUrl/keywords power the "View job posting" drawer in the
+      // detail panel. The panel reads straight from the list item (no separate
+      // fetch on select), so these must ride along on the list payload.
+      .populate("jobId", "title company description jobUrl keywords")
       .populate("resumeId", "createdAt")
       .sort({ createdAt: -1 });
 
@@ -26,7 +29,7 @@ const getApplicationById = async (req, res) => {
     // (by upload date) drove this analysis — useful when a user has multiple
     // versions of their CV uploaded.
     const application = await Application.findById(req.params.id)
-      .populate("jobId", "title company")
+      .populate("jobId", "title company description jobUrl keywords")
       .populate("resumeId", "createdAt");
     if (!application) return res.status(404).json({ message: "Application not found" });
     if (application.userId.toString() !== req.user.id) {
