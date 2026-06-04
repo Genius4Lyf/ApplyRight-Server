@@ -23,6 +23,9 @@ const COSTS = {
   // Story Bank generation. On web this charges credits; on the Android app it's
   // reached through an AdMob rewarded video (which grants credits) so it nets free.
   GENERATE_STORIES: 5,
+  // Personalized "essential" answer (Tell me about yourself / Why this company) —
+  // a single grounded answer. Web charges; Android ad-rewarded.
+  GENERATE_ESSENTIAL: 2,
   CREATE_FROM_UPLOAD: 15,
   // Bundle: CV (10) + Cover letter (5) + Interview prep (10) = 25 individually,
   // 18 as a bundle. Flat price — charged once, all-or-nothing: if any stage
@@ -1191,6 +1194,120 @@ const generateApplicationStories = async (req, res) => {
 };
 
 /**
+ * POST /analysis/:id/generate-essential   body: { kind: 'intro' | 'motivation' }
+ *
+ * Generate a personalized answer to a universal "essential" question (Tell me
+ * about yourself / Why this company), grounded in the CV (+ job for motivation),
+ * and slot it into interviewPrep.jobQuestions as a first-class question of that
+ * type — so it groups under its category and is practiceable/gradeable. Costs 2
+ * credits (web) / ad-rewarded (Android). Re-generating replaces the existing one.
+ */
+const generateApplicationEssential = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { kind } = req.body || {};
+    const userId = req.user._id;
+    const user = req.user;
+
+    if (kind !== "intro" && kind !== "motivation") {
+      return res.status(400).json({ message: "kind must be 'intro' or 'motivation'" });
+    }
+
+    const application = await Application.findOne({ _id: id, userId });
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    const jobData = await resolveJobDescription(application);
+    if (!jobData) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    checkCredits(user, COSTS.GENERATE_ESSENTIAL);
+
+    let candidateContext = null;
+    try {
+      candidateContext = await buildInterviewCandidateContext(application, {
+        userId,
+        applicationId: application._id,
+      });
+    } catch (e) {
+      console.error("[Essential] Failed to build candidate context:", e.message);
+    }
+
+    if (!hasGroundableExperience(candidateContext)) {
+      return res.status(422).json({
+        code: "NO_CV_GROUNDING",
+        message:
+          "Add or generate a CV with at least one work experience entry before generating this answer.",
+      });
+    }
+
+    const newQuestion = await aiService.generateEssentialAnswer(
+      kind,
+      jobData.description,
+      candidateContext,
+      { userId, applicationId: application._id }
+    );
+
+    const remainingCredits = await deductCredits(user, COSTS.GENERATE_ESSENTIAL);
+
+    const warns = await aiService.factCheckInterviewQuestions(candidateContext, [newQuestion], {
+      userId,
+      applicationId: application._id,
+    });
+
+    application.interviewPrep = application.interviewPrep || {};
+    const jq = Array.isArray(application.interviewPrep.jobQuestions)
+      ? application.interviewPrep.jobQuestions
+      : [];
+
+    // Replace the existing essential of this kind in place (keeps indices and
+    // their fabrication warnings aligned); otherwise append.
+    const existingIdx = jq.findIndex((q) => q.type === kind);
+    let idx;
+    if (existingIdx >= 0) {
+      jq[existingIdx] = { ...newQuestion };
+      idx = existingIdx;
+    } else {
+      jq.push({ ...newQuestion });
+      idx = jq.length - 1;
+    }
+    application.interviewPrep.jobQuestions = jq;
+
+    const fw = Array.isArray(application.interviewPrep.fabricationWarnings)
+      ? application.interviewPrep.fabricationWarnings.filter((w) => w.index !== idx)
+      : [];
+    if (warns.length && warns[0].unsupportedClaims?.length) {
+      fw.push({ index: idx, unsupportedClaims: warns[0].unsupportedClaims });
+    }
+    application.interviewPrep.fabricationWarnings = fw;
+
+    application.markModified("interviewPrep.jobQuestions");
+    application.markModified("interviewPrep.fabricationWarnings");
+    await application.save();
+
+    const interviewPrep = serializeInterviewPrep(application);
+
+    res.status(200).json({
+      kind,
+      index: idx,
+      jobQuestions: interviewPrep.jobQuestions,
+      fabricationWarnings: interviewPrep.fabricationWarnings,
+      interviewPrep,
+      remainingCredits,
+    });
+  } catch (error) {
+    if (handleAIError(res, error)) return;
+    console.error("Essential Generation Error:", error.message);
+    res.status(500).json({
+      message: "Failed to generate the answer. You have not been charged.",
+      error: error.message,
+    });
+  }
+};
+
+/**
  * POST /analysis/:id/generate-bundle
  *
  * Generate the full application kit (CV + cover letter + interview prep) in
@@ -1542,6 +1659,7 @@ module.exports = {
   generateApplicationInterview,
   generateMoreApplicationInterview,
   generateApplicationStories,
+  generateApplicationEssential,
   generateApplicationBundle,
   preflightMetrics,
   editApplication,

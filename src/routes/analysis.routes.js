@@ -7,6 +7,7 @@ const {
   generateApplicationInterview,
   generateMoreApplicationInterview,
   generateApplicationStories,
+  generateApplicationEssential,
   generateApplicationBundle,
   preflightMetrics,
   editApplication,
@@ -28,6 +29,8 @@ router.post("/:id/generate-interview", protect, generateApplicationInterview);
 router.post("/:id/generate-more-interview", protect, generateMoreApplicationInterview);
 // Story Bank: reusable STAR stories grounded in the candidate's history.
 router.post("/:id/generate-stories", protect, generateApplicationStories);
+// Essential answer: personalized "tell me about yourself" / "why this company".
+router.post("/:id/generate-essential", protect, generateApplicationEssential);
 // Bundle: CV + cover letter + interview prep at a discount (18 vs 20 credits)
 router.post("/:id/generate-bundle", protect, generateApplicationBundle);
 
