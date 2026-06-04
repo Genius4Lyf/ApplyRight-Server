@@ -216,6 +216,16 @@ const applicationSchema = new mongoose.Schema(
             type: String,
             enum: ["needs_work", "almost", "ready"],
           },
+          // Mock-answer grading history. Bounded to the last 10 attempts; the
+          // stored answer is truncated (see gradeAnswer) so the doc — and the
+          // prep list payload — can't balloon. Drives "Best X% · N attempts".
+          attempts: [
+            {
+              score: Number,
+              answer: String,
+              createdAt: { type: Date, default: Date.now },
+            },
+          ],
         },
       ],
       questionsToAsk: [String],

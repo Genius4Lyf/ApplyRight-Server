@@ -45,6 +45,12 @@ router.post(
   interviewPrepController.gradeAnswer
 );
 
+router.post(
+  "/:applicationId/grade-story",
+  protect,
+  interviewPrepController.gradeStoryAnswer
+);
+
 router.delete("/:applicationId", protect, interviewPrepController.remove);
 
 module.exports = router;

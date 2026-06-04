@@ -14,15 +14,19 @@ const COSTS = {
   ANALYSIS: 10,
   GENERATE_CV: 10,
   GENERATE_COVER_LETTER: 5,
-  GENERATE_INTERVIEW: 5,
-  // Story Bank generation. Deducted internally for accounting, but the user
-  // reaches it through the ad-reward flow (the ad grants more than this costs),
-  // so it nets out free — same pattern as "Get more questions".
+  // Initial interview-prep generation — a distinctive, high-value unlock that
+  // produces the grounded question set + STAR answers (3 questions).
+  GENERATE_INTERVIEW: 10,
+  // Appending more questions to an existing prep (3 more per call) — cheaper
+  // than the initial unlock.
+  GENERATE_INTERVIEW_MORE: 5,
+  // Story Bank generation. On web this charges credits; on the Android app it's
+  // reached through an AdMob rewarded video (which grants credits) so it nets free.
   GENERATE_STORIES: 5,
   CREATE_FROM_UPLOAD: 15,
-  // Bundle: CV (10) + Cover letter (5) + Interview prep (5) = 20 individually,
-  // 18 as a bundle (10% discount, save 2 credits). All-or-nothing in v1: if
-  // any stage fails, the user is not charged at all.
+  // Bundle: CV (10) + Cover letter (5) + Interview prep (10) = 25 individually,
+  // 18 as a bundle. Flat price — charged once, all-or-nothing: if any stage
+  // fails, the user is not charged at all.
   GENERATE_BUNDLE: 18,
 };
 
@@ -988,7 +992,7 @@ const generateMoreApplicationInterview = async (req, res) => {
       return res.status(404).json({ message: "Job not found" });
     }
 
-    checkCredits(user, COSTS.GENERATE_INTERVIEW);
+    checkCredits(user, COSTS.GENERATE_INTERVIEW_MORE);
 
     let candidateContext = null;
     try {
@@ -1020,7 +1024,7 @@ const generateMoreApplicationInterview = async (req, res) => {
       { existingQuestions: existingTexts }
     );
 
-    const remainingCredits = await deductCredits(user, COSTS.GENERATE_INTERVIEW);
+    const remainingCredits = await deductCredits(user, COSTS.GENERATE_INTERVIEW_MORE);
 
     const newJobQuestions = Array.isArray(aiResult.jobQuestions) ? aiResult.jobQuestions : [];
     const newQuestionsToAsk = Array.isArray(aiResult.questionsToAsk) ? aiResult.questionsToAsk : [];

@@ -291,11 +291,27 @@ exports.list = async (req, res) => {
   }
 };
 
+// Skills are a reference layer that auto-surfaces from the linked CV. Map the
+// draft's skills-with-evidence into the prep shape (no confidence — reference,
+// not a rated/practiced item).
+const deriveSkillsFromDraft = (draftSkills) =>
+  (Array.isArray(draftSkills) ? draftSkills : [])
+    .filter((s) => Array.isArray(s.evidence) && s.evidence.length > 0)
+    .map((s) => ({
+      name: s.name,
+      category: s.category,
+      evidence: s.evidence,
+      talkingPoint: s.talkingPoint || "",
+    }));
+
 /**
  * Detail view for a single prep. The id can refer to either an Application or
  * a DraftCV (CV-only prep). Tries Application first; falls back to DraftCV.
  * Returns a unified shape that the frontend detail page consumes uniformly.
  * Legacy single-string userNotes are folded into the array shape on read.
+ *
+ * Skill soundbites auto-surface: when none are saved on the prep, they're read
+ * through from the linked CV so the user never has to "pull" them manually.
  */
 exports.getOne = async (req, res) => {
   try {
@@ -309,11 +325,22 @@ exports.getOne = async (req, res) => {
         return res.status(401).json({ message: "User not authorized" });
       }
       const prep = application.interviewPrep || {};
+      let skillsWithEvidence = Array.isArray(prep.skillsWithEvidence)
+        ? prep.skillsWithEvidence
+        : [];
+      if (skillsWithEvidence.length === 0 && application.draftCVId) {
+        const draft = await DraftCV.findById(application.draftCVId).select("skills").lean();
+        if (draft) skillsWithEvidence = deriveSkillsFromDraft(draft.skills);
+      }
       return res.json({
         application: {
           ...application,
           source: "application",
-          interviewPrep: { ...prep, userNotes: normalizeNotes(prep.userNotes) },
+          interviewPrep: {
+            ...prep,
+            skillsWithEvidence,
+            userNotes: normalizeNotes(prep.userNotes),
+          },
         },
       });
     }
@@ -325,6 +352,8 @@ exports.getOne = async (req, res) => {
     }
 
     const prep = draft.interviewPrep || {};
+    const savedSkills = Array.isArray(prep.skillsWithEvidence) ? prep.skillsWithEvidence : [];
+    const skillsWithEvidence = savedSkills.length ? savedSkills : deriveSkillsFromDraft(draft.skills);
     const draftAsApplication = {
       _id: draft._id,
       source: "draft",
@@ -332,7 +361,7 @@ exports.getOne = async (req, res) => {
       jobTitle: draft.title || "CV draft",
       jobCompany: "",
       draftCVId: draft._id,
-      interviewPrep: { ...prep, userNotes: normalizeNotes(prep.userNotes) },
+      interviewPrep: { ...prep, skillsWithEvidence, userNotes: normalizeNotes(prep.userNotes) },
     };
     return res.json({ application: draftAsApplication });
   } catch (error) {
@@ -959,8 +988,18 @@ exports.gradeAnswer = async (req, res) => {
       autoConfidence = "almost";
     }
 
+    let attempts = [];
     if (questionObj) {
       questionObj.confidence = autoConfidence;
+      // Record this attempt. Truncate the answer and cap to the last 10 so the
+      // document (and the prep-list payload) stays bounded.
+      const prior = Array.isArray(questionObj.attempts) ? questionObj.attempts : [];
+      const next = [
+        ...prior,
+        { score, answer: answerText.slice(0, 600), createdAt: new Date() },
+      ].slice(-10);
+      questionObj.attempts = next;
+      attempts = next;
       application.markModified("interviewPrep.jobQuestions");
       await application.save();
     }
@@ -971,11 +1010,115 @@ exports.gradeAnswer = async (req, res) => {
       starBreakdown: aiResult.starBreakdown,
       refinedAnswer: aiResult.refinedAnswer,
       confidence: autoConfidence,
+      attempts,
       remainingCredits: user.credits,
     });
   } catch (error) {
     console.error("[InterviewPrep] gradeAnswer failed:", error.message);
     res.status(500).json({ message: "Failed to grade mock interview response" });
+  }
+};
+
+/**
+ * Grade a user's delivery of one of their Story Bank stories. The story's own
+ * STAR text is the reference ("ideal") answer — we're scoring how well the user
+ * delivered their prepared story, not inventing a new ideal. Charges 1 credit,
+ * logs a transaction, and auto-sets the story's confidence from the score.
+ * Works for both Application and CV-only Draft prep (via loadPrepDoc), so it
+ * doesn't need job/candidate context.
+ */
+exports.gradeStoryAnswer = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const { storyId, questionText, answerText } = req.body || {};
+    if (typeof storyId !== "string" || !storyId.trim()) {
+      return res.status(400).json({ message: "storyId is required" });
+    }
+    if (!answerText || typeof answerText !== "string" || !answerText.trim()) {
+      return res.status(400).json({ message: "answerText is required" });
+    }
+
+    const { doc, unauthorized, notFound } = await loadPrepDoc(
+      id,
+      req.user.id,
+      "userId interviewPrep"
+    );
+    if (unauthorized) return res.status(401).json({ message: "User not authorized" });
+    if (notFound) return res.status(404).json({ message: "Interview prep not found" });
+
+    const stories = Array.isArray(doc.interviewPrep?.stories) ? doc.interviewPrep.stories : [];
+    const story = stories.find((s) => s.id === storyId);
+    if (!story) return res.status(404).json({ message: "Story not found on this prep" });
+
+    const User = require("../models/User");
+    const Transaction = require("../models/Transaction");
+    const aiService = require("../services/ai.service");
+
+    const GRADE_COST = 1;
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (user.credits < GRADE_COST) {
+      return res.status(403).json({
+        message: "Insufficient credits to grade response. Watch an ad to earn credits.",
+        code: "INSUFFICIENT_CREDITS",
+      });
+    }
+
+    const starText = [story.situation, story.task, story.action, story.result]
+      .filter((p) => typeof p === "string" && p.trim().length > 0)
+      .join("\n\n");
+    const prompt =
+      (typeof questionText === "string" && questionText.trim()) ||
+      story.title ||
+      "Tell me about this experience.";
+
+    // Grade the delivery against the story's own STAR. No job/candidate context
+    // needed — the story was already grounded + fact-checked at generation.
+    const aiResult = await aiService.gradeInterviewAnswer(prompt, answerText, starText, "", null, {
+      userId: req.user.id,
+    });
+
+    // Charge only after the AI call succeeds; guard the balance atomically.
+    const decResult = await User.updateOne(
+      { _id: user._id, credits: { $gte: GRADE_COST } },
+      { $inc: { credits: -GRADE_COST } }
+    );
+    if (decResult.modifiedCount === 0) {
+      return res.status(403).json({
+        message: "Insufficient credits to grade response. Watch an ad to earn credits.",
+        code: "INSUFFICIENT_CREDITS",
+      });
+    }
+    user.credits -= GRADE_COST;
+
+    await Transaction.create({
+      userId: user._id,
+      amount: -GRADE_COST,
+      type: "usage",
+      description: `AI grade story: "${(story.title || prompt).substring(0, 40)}..."`,
+      status: "completed",
+    });
+
+    const score = Math.max(0, Math.min(100, Math.round(Number(aiResult.score) || 0)));
+    let autoConfidence = "needs_work";
+    if (score > 75) autoConfidence = "ready";
+    else if (score > 45) autoConfidence = "almost";
+
+    story.confidence = autoConfidence;
+    doc.markModified("interviewPrep.stories");
+    await doc.save();
+
+    res.json({
+      score,
+      overallFeedback: aiResult.overallFeedback,
+      starBreakdown: aiResult.starBreakdown,
+      refinedAnswer: aiResult.refinedAnswer,
+      confidence: autoConfidence,
+      remainingCredits: user.credits,
+    });
+  } catch (error) {
+    console.error("[InterviewPrep] gradeStoryAnswer failed:", error.message);
+    res.status(500).json({ message: "Failed to grade story response" });
   }
 };
 

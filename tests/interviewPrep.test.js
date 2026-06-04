@@ -151,6 +151,11 @@ describe("Interview Prep API", () => {
       expect(res.statusCode).toEqual(200);
       expect(res.body.score).toEqual(85);
       expect(res.body.confidence).toEqual("ready"); // Auto confidence based on score > 75
+      // Attempt history: the graded answer is recorded on the question and
+      // returned so the UI can show the trend without a reload.
+      expect(Array.isArray(res.body.attempts)).toBe(true);
+      expect(res.body.attempts[res.body.attempts.length - 1].score).toEqual(85);
+      expect(mockApplication.interviewPrep.jobQuestions[0].attempts.length).toBeGreaterThan(0);
       // Credit deducted atomically via a balance-guarded $inc, not a
       // read-modify-write on the loaded user document.
       expect(User.updateOne).toHaveBeenCalledWith(
@@ -300,6 +305,54 @@ describe("Interview Prep API", () => {
         const res = await request(app)
           .delete(`/api/interview-prep/${mockAppId}/stories/missing`)
           .set("Authorization", "Bearer mock-token");
+
+        expect(res.statusCode).toEqual(404);
+      });
+    });
+
+    describe("POST /api/interview-prep/:applicationId/grade-story", () => {
+      it("should grade a story, charge 1 credit, and set confidence", async () => {
+        mockApplication.interviewPrep.stories = [
+          { id: "st1", title: "Led migration", situation: "s", task: "t", action: "a", result: "r" },
+        ];
+        aiService.gradeInterviewAnswer.mockResolvedValue({
+          score: 80,
+          overallFeedback: "Solid delivery.",
+          starBreakdown: {
+            situation: { covered: true },
+            task: { covered: true },
+            action: { covered: true },
+            result: { covered: false },
+          },
+          refinedAnswer: "Polished version...",
+        });
+
+        const res = await request(app)
+          .post(`/api/interview-prep/${mockAppId}/grade-story`)
+          .set("Authorization", "Bearer mock-token")
+          .send({
+            storyId: "st1",
+            questionText: "Tell me about a time you led",
+            answerText: "I led a migration under a tight deadline...",
+          });
+
+        expect(res.statusCode).toEqual(200);
+        expect(res.body.score).toEqual(80);
+        expect(res.body.confidence).toEqual("ready"); // score > 75
+        expect(User.updateOne).toHaveBeenCalledWith(
+          { _id: mockUserId, credits: { $gte: 1 } },
+          { $inc: { credits: -1 } }
+        );
+        expect(mockApplication.interviewPrep.stories[0].confidence).toEqual("ready");
+      });
+
+      it("should 404 when the story id is unknown", async () => {
+        mockApplication.interviewPrep.stories = [{ id: "st1" }];
+
+        const res = await request(app)
+          .post(`/api/interview-prep/${mockAppId}/grade-story`)
+          .set("Authorization", "Bearer mock-token")
+          .send({ storyId: "missing", answerText: "an answer" });
 
         expect(res.statusCode).toEqual(404);
       });
