@@ -248,11 +248,22 @@ exports.getWatchStats = async (req, res) => {
 
     const user = await User.findById(req.user.id);
 
+    // Remaining per-user ad cooldown (matches the check in awardAdCredits) so the
+    // client can block a watch the grant would reject, instead of letting the
+    // user watch an ad for nothing.
+    const cooldownSeconds = env.ADMOB_COOLDOWN_SECONDS || 60;
+    const lastAt = user?.adWatch?.lastAt ? new Date(user.adWatch.lastAt).getTime() : 0;
+    const cooldownRemainingMs = lastAt
+      ? Math.max(0, cooldownSeconds * 1000 - (Date.now() - lastAt))
+      : 0;
+
     res.json({
       watchCount,
       maxDaily: 999, // Unlimited
       lastWatch: lastWatch ? lastWatch.createdAt : null,
       streak: user.adStreak ? user.adStreak.current : 0,
+      cooldownSeconds,
+      cooldownRemainingMs,
     });
   } catch (error) {
     console.error(error);

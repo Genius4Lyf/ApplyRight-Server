@@ -66,14 +66,30 @@ exports.awardAdCredits = async (user, { source, amount, externalTxId = null }) =
   const cooldownMs = env.ADMOB_COOLDOWN_SECONDS * 1000;
   const dailyCap = env.ADMOB_DAILY_CAP;
 
+  // Only attach externalTxId when we actually have one (AdMob SSV). The web
+  // (Monetag) flow has no idempotency key — writing `externalTxId: null` makes
+  // the sparse-unique index treat every web reward as the same key and throw
+  // E11000 on the 2nd write. Omitting the field entirely keeps it out of the
+  // index. Spread `...txIdField` into each Transaction payload.
+  const txIdField = externalTxId ? { externalTxId } : {};
+
   if (!user.adWatch) {
     user.adWatch = { lastAt: null, todayCount: 0, todayDate: null };
   }
 
-  // Daily counter reset at UTC midnight
+  // Snapshot the on-disk values BEFORE any mutation — the optimistic-locking
+  // findOneAndUpdate query below must match what's actually in the DB, not a
+  // locally-reset value.
+  const originalLastAt = user.adWatch.lastAt;
+  const originalTodayCount = user.adWatch.todayCount;
+
+  // Daily counter reset at UTC midnight. We compute the *effective* count for
+  // this watch but DON'T overwrite user.adWatch.todayCount here — the reset is
+  // applied atomically inside the update ($set to effectiveTodayCount + 1).
   const todayDate = user.adWatch.todayDate ? new Date(user.adWatch.todayDate) : null;
-  if (!todayDate || todayDate.getTime() < todayUtc.getTime()) {
-    user.adWatch.todayCount = 0;
+  const isNewDay = !todayDate || todayDate.getTime() < todayUtc.getTime();
+  const effectiveTodayCount = isNewDay ? 0 : originalTodayCount;
+  if (isNewDay) {
     user.adWatch.todayDate = todayUtc;
   }
 
@@ -89,7 +105,7 @@ exports.awardAdCredits = async (user, { source, amount, externalTxId = null }) =
         description: `Rejected (cooldown) — ${source}`,
         status: "failed",
         rejectedReason: "cooldown",
-        externalTxId,
+        ...txIdField,
       }).catch((err) => {
         // Duplicate externalTxId or other write error — ok to swallow for telemetry
         logger.warn(`adReward cooldown audit write failed: ${err.message}`);
@@ -99,7 +115,7 @@ exports.awardAdCredits = async (user, { source, amount, externalTxId = null }) =
   }
 
   // Daily cap
-  if (user.adWatch.todayCount >= dailyCap) {
+  if (effectiveTodayCount >= dailyCap) {
     await Transaction.create({
       userId: user._id,
       amount: 0,
@@ -107,7 +123,7 @@ exports.awardAdCredits = async (user, { source, amount, externalTxId = null }) =
       description: `Rejected (daily cap) — ${source}`,
       status: "failed",
       rejectedReason: "daily_cap",
-      externalTxId,
+      ...txIdField,
     }).catch((err) => {
       logger.warn(`adReward cap audit write failed: ${err.message}`);
     });
@@ -127,15 +143,18 @@ exports.awardAdCredits = async (user, { source, amount, externalTxId = null }) =
 
   const query = {
     _id: user._id,
-    "adWatch.lastAt": user.adWatch ? user.adWatch.lastAt : null,
-    "adWatch.todayCount": user.adWatch ? user.adWatch.todayCount : 0,
+    "adWatch.lastAt": originalLastAt,
+    "adWatch.todayCount": originalTodayCount,
   };
 
   const update = {
-    $inc: { credits: totalReward, "adWatch.todayCount": 1 },
+    $inc: { credits: totalReward },
     $set: {
       "adWatch.lastAt": now,
       "adWatch.todayDate": todayUtc,
+      // Set rather than $inc so the UTC-day reset is applied atomically:
+      // effectiveTodayCount is 0 on a new day, originalTodayCount otherwise.
+      "adWatch.todayCount": effectiveTodayCount + 1,
     },
   };
 
@@ -170,7 +189,7 @@ exports.awardAdCredits = async (user, { source, amount, externalTxId = null }) =
     description:
       source === "admob" ? "AdMob Rewarded Video" : "Watched Sponsored Offer",
     status: "completed",
-    externalTxId,
+    ...txIdField,
   });
 
   if (streakBonus > 0) {

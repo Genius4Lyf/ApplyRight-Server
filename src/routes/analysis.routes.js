@@ -8,6 +8,7 @@ const {
   generateMoreApplicationInterview,
   generateApplicationStories,
   generateApplicationEssential,
+  generateDressGuide,
   generateApplicationBundle,
   preflightMetrics,
   editApplication,
@@ -31,6 +32,8 @@ router.post("/:id/generate-more-interview", protect, generateMoreApplicationInte
 router.post("/:id/generate-stories", protect, generateApplicationStories);
 // Essential answer: personalized "tell me about yourself" / "why this company".
 router.post("/:id/generate-essential", protect, generateApplicationEssential);
+// "What to wear" — tailored interview-attire & first-impression guide (2 credits).
+router.post("/:id/generate-dress-guide", protect, generateDressGuide);
 // Bundle: CV + cover letter + interview prep at a discount (18 vs 20 credits)
 router.post("/:id/generate-bundle", protect, generateApplicationBundle);
 

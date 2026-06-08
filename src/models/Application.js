@@ -293,9 +293,30 @@ const applicationSchema = new mongoose.Schema(
       lastInterviewSession: {
         completedAt: { type: Date },
         confidence: { type: String, enum: ["needs_work", "almost", "ready"] },
+        score: Number, // overall AI-graded score (0–100), if answers were graded
         durationSec: Number,
         plannedSec: Number,
         flagged: [{ index: Number, question: String }],
+      },
+      // Rolling log of recent Interview Mode runs (kept to the last ~10). Powers
+      // the "desensitization" trend — users see their nerves easing with reps,
+      // the core selling point of Interview Mode as repeated exposure practice.
+      interviewHistory: [
+        {
+          completedAt: { type: Date },
+          confidence: { type: String, enum: ["needs_work", "almost", "ready"] },
+          score: Number,
+        },
+      ],
+      // AI-generated "what to wear / first impression" guide for this role.
+      dressGuide: {
+        dressCode: { type: String },
+        summary: String,
+        wear: [String],
+        avoid: [String],
+        virtualTip: String,
+        groomingNote: String,
+        generatedAt: { type: Date },
       },
       // Multi-note model. Legacy single-string notes are folded into a single
       // saved note on read (see interviewPrep.controller.js) so reads stay

@@ -11,8 +11,21 @@ class TTSUnavailableError extends Error {
   }
 }
 
-const PROVIDER = (process.env.TTS_PROVIDER || "elevenlabs").toLowerCase();
 const MAX_CHARS = 1200; // bound cost / latency per request
+
+// The active provider is admin-switchable (SystemSettings.tts.provider), falling
+// back to the TTS_PROVIDER env var, then ElevenLabs. DB read is best-effort so a
+// settings hiccup never hard-fails synthesis.
+const resolveProvider = async () => {
+  try {
+    const SettingsService = require("./settings.service");
+    const p = await SettingsService.get("tts.provider");
+    if (p) return String(p).toLowerCase();
+  } catch {
+    /* fall through to env/default */
+  }
+  return (process.env.TTS_PROVIDER || "elevenlabs").toLowerCase();
+};
 
 const synthesizeElevenLabs = async (text) => {
   const key = process.env.ELEVENLABS_API_KEY;
@@ -53,9 +66,11 @@ const synthesizeOpenAI = async (text) => {
   return Buffer.from(await resp.arrayBuffer());
 };
 
-// True when the active provider has a usable key.
-const isConfigured = () => {
-  if (PROVIDER === "openai") return !!process.env.OPENAI_API_KEY;
+// True when premium voice is enabled and the active provider has a usable key.
+const isConfigured = async () => {
+  const provider = await resolveProvider();
+  if (provider === "off") return false;
+  if (provider === "openai") return !!process.env.OPENAI_API_KEY;
   return !!process.env.ELEVENLABS_API_KEY;
 };
 
@@ -63,7 +78,9 @@ const isConfigured = () => {
 const synthesize = async (text) => {
   const clean = (typeof text === "string" ? text : "").trim().slice(0, MAX_CHARS);
   if (!clean) throw new TTSUnavailableError("No text to synthesize");
-  if (PROVIDER === "openai") return synthesizeOpenAI(clean);
+  const provider = await resolveProvider();
+  if (provider === "off") throw new TTSUnavailableError("Premium voice is disabled");
+  if (provider === "openai") return synthesizeOpenAI(clean);
   return synthesizeElevenLabs(clean);
 };
 

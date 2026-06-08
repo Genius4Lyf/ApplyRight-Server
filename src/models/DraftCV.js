@@ -170,9 +170,28 @@ const draftCVSchema = new mongoose.Schema(
       lastInterviewSession: {
         completedAt: { type: Date },
         confidence: { type: String, enum: ["needs_work", "almost", "ready"] },
+        score: Number,
         durationSec: Number,
         plannedSec: Number,
         flagged: [{ index: Number, question: String }],
+      },
+      // Parity with Application.interviewPrep.interviewHistory (desensitization trend).
+      interviewHistory: [
+        {
+          completedAt: { type: Date },
+          confidence: { type: String, enum: ["needs_work", "almost", "ready"] },
+          score: Number,
+        },
+      ],
+      // Parity with Application.interviewPrep.dressGuide.
+      dressGuide: {
+        dressCode: { type: String },
+        summary: String,
+        wear: [String],
+        avoid: [String],
+        virtualTip: String,
+        groomingNote: String,
+        generatedAt: { type: Date },
       },
       // Mixed to support both the legacy single-string format and the new
       // multi-note array. The controller normalizes legacy string values into

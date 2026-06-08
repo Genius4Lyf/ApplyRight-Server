@@ -31,6 +31,12 @@ const COSTS = {
   // 18 as a bundle. Flat price — charged once, all-or-nothing: if any stage
   // fails, the user is not charged at all.
   GENERATE_BUNDLE: 18,
+  // Interview Mode (a full live run). Defined for the planned premium gate but
+  // NOT enforced yet — Interview Mode is free during testing.
+  INTERVIEW_MODE: 5,
+  // "What to wear" — a single tailored interview-attire guide. Same tier as an
+  // essential answer. Web charges; Android ad-rewarded.
+  GENERATE_DRESS_GUIDE: 2,
 };
 
 /**
@@ -1309,6 +1315,58 @@ const generateApplicationEssential = async (req, res) => {
 };
 
 /**
+ * POST /analysis/:id/generate-dress-guide
+ *
+ * Generate a tailored "what to wear / first impression" guide for this role.
+ * Job-linked only (mirrors generate-essential). No CV grounding required.
+ */
+const generateDressGuide = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+    const user = req.user;
+
+    const application = await Application.findOne({ _id: id, userId });
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    const jobData = await resolveJobDescription(application);
+    if (!jobData) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    checkCredits(user, COSTS.GENERATE_DRESS_GUIDE);
+
+    const guide = await aiService.generateDressGuide(
+      stringifyDescription(jobData.description),
+      {
+        jobTitle: application.jobTitle || jobData.title || "",
+        company: application.jobCompany || jobData.company || "",
+      },
+      { userId, applicationId: application._id }
+    );
+
+    const remainingCredits = await deductCredits(user, COSTS.GENERATE_DRESS_GUIDE);
+
+    const dressGuide = { ...guide, generatedAt: new Date() };
+    application.interviewPrep = application.interviewPrep || {};
+    application.interviewPrep.dressGuide = dressGuide;
+    application.markModified("interviewPrep.dressGuide");
+    await application.save();
+
+    res.status(200).json({ dressGuide, remainingCredits });
+  } catch (error) {
+    if (handleAIError(res, error)) return;
+    console.error("Dress Guide Generation Error:", error.message);
+    res.status(500).json({
+      message: "Failed to generate the dress guide. You have not been charged.",
+      error: error.message,
+    });
+  }
+};
+
+/**
  * POST /analysis/:id/generate-bundle
  *
  * Generate the full application kit (CV + cover letter + interview prep) in
@@ -1661,6 +1719,7 @@ module.exports = {
   generateMoreApplicationInterview,
   generateApplicationStories,
   generateApplicationEssential,
+  generateDressGuide,
   generateApplicationBundle,
   preflightMetrics,
   editApplication,

@@ -33,6 +33,16 @@ const systemSettingsSchema = new mongoose.Schema(
       model: { type: String, default: "gpt-3.5-turbo" },
       maxTokens: { type: Number, default: 2000 },
     },
+    // Interview Mode AI-interviewer voice. The provider toggle is admin-switchable;
+    // the API keys live in env (secrets). "off" disables premium voice so the
+    // frontend falls back to the browser's built-in TTS.
+    tts: {
+      provider: {
+        type: String,
+        enum: ["elevenlabs", "openai", "off"],
+        default: "elevenlabs",
+      },
+    },
   },
   {
     timestamps: true,

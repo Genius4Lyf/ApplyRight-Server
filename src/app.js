@@ -66,12 +66,15 @@ const aiLimiter = rateLimit({
   },
 });
 
-// Ad Watch-Specific Rate Limiting (prevent bots spamming Monetag ad rewards)
+// Ad Watch-Specific Rate Limiting (prevent bots spamming Monetag ad rewards).
+// Only SUCCESSFUL grants count toward the limit — failed attempts (e.g. the 60s
+// cooldown returns 429) must not snowball a user into a rate-limit lockout.
 const adWatchLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 15, // Limit each IP to 15 ad watches per 15 minutes
+  max: 15, // Limit each IP to 15 successful ad watches per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
+  skipFailedRequests: true, // don't count 4xx/5xx (cooldown, cap, errors)
   message: {
     message: "Too many ad requests from this IP. Please wait before watching more ads.",
   },

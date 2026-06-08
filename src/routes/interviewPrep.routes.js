@@ -53,6 +53,13 @@ router.post(
   interviewPrepController.gradeStoryAnswer
 );
 
+// Adaptive interviewer: one dynamic follow-up question (1 credit).
+router.post(
+  "/:applicationId/follow-up",
+  protect,
+  interviewPrepController.generateFollowUp
+);
+
 router.post(
   "/:applicationId/interview-session",
   protect,

@@ -1020,6 +1020,93 @@ exports.gradeAnswer = async (req, res) => {
 };
 
 /**
+ * Adaptive interviewer: take the question + the candidate's answer and return
+ * ONE dynamic follow-up question (the premium "real interview" upgrade). Charges
+ * 1 credit, only AFTER the AI produces a usable follow-up.
+ */
+exports.generateFollowUp = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const { questionText, answerText } = req.body || {};
+
+    if (!questionText || typeof questionText !== "string") {
+      return res.status(400).json({ message: "questionText is required" });
+    }
+    if (!answerText || typeof answerText !== "string" || !answerText.trim()) {
+      return res.status(400).json({ message: "answerText is required" });
+    }
+
+    const application = await Application.findById(id).populate("jobId");
+    if (!application) return res.status(404).json({ message: "Application not found" });
+    if (application.userId.toString() !== req.user.id) {
+      return res.status(401).json({ message: "User not authorized" });
+    }
+
+    const User = require("../models/User");
+    const Transaction = require("../models/Transaction");
+    const aiService = require("../services/ai.service");
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const FOLLOWUP_COST = 1;
+    if (user.credits < FOLLOWUP_COST) {
+      return res.status(403).json({
+        message: "Insufficient credits for a follow-up. Watch an ad to earn credits.",
+        code: "INSUFFICIENT_CREDITS",
+      });
+    }
+
+    // AI first — if it throws (mock / no key), we never reach the deduction.
+    const aiResult = await aiService.generateFollowUp(
+      questionText,
+      answerText,
+      {
+        jobTitle: application.jobTitle || application.jobId?.title || "",
+        company: application.jobCompany || application.jobId?.company || "",
+      },
+      { userId: req.user.id, applicationId: application._id }
+    );
+
+    if (!aiResult.followUp) {
+      // Nothing usable produced — don't charge.
+      return res.status(200).json({ followUp: "", remainingCredits: user.credits });
+    }
+
+    // Atomic, balance-guarded deduction (same pattern as gradeAnswer).
+    const decResult = await User.updateOne(
+      { _id: user._id, credits: { $gte: FOLLOWUP_COST } },
+      { $inc: { credits: -FOLLOWUP_COST } }
+    );
+    if (decResult.modifiedCount === 0) {
+      return res.status(403).json({
+        message: "Insufficient credits for a follow-up. Watch an ad to earn credits.",
+        code: "INSUFFICIENT_CREDITS",
+      });
+    }
+    user.credits -= FOLLOWUP_COST;
+
+    await Transaction.create({
+      userId: user._id,
+      amount: -FOLLOWUP_COST,
+      type: "usage",
+      description: "AI interview follow-up question",
+      status: "completed",
+    });
+
+    res.status(200).json({ followUp: aiResult.followUp, remainingCredits: user.credits });
+  } catch (error) {
+    console.error("[InterviewPrep] generateFollowUp failed:", error.message);
+    if (error.name === "AIUnavailableError" || error.code === "AI_UNAVAILABLE") {
+      return res
+        .status(503)
+        .json({ message: "The AI interviewer is temporarily unavailable.", code: "AI_UNAVAILABLE" });
+    }
+    res.status(500).json({ message: "Failed to generate a follow-up" });
+  }
+};
+
+/**
  * Grade a user's delivery of one of their Story Bank stories. The story's own
  * STAR text is the reference ("ideal") answer — we're scoring how well the user
  * delivered their prepared story, not inventing a new ideal. Charges 1 credit,
@@ -1134,7 +1221,7 @@ exports.synthesizeTts = async (req, res) => {
       return res.status(400).json({ message: "text is required" });
     }
     const tts = require("../services/tts.service");
-    if (!tts.isConfigured()) {
+    if (!(await tts.isConfigured())) {
       return res.status(503).json({ message: "Voice is not configured", code: "TTS_UNAVAILABLE" });
     }
     const audio = await tts.synthesize(text);
@@ -1154,7 +1241,7 @@ exports.synthesizeTts = async (req, res) => {
 exports.saveInterviewSession = async (req, res) => {
   try {
     const { applicationId: id } = req.params;
-    const { confidence, durationSec, plannedSec, flaggedIndices } = req.body || {};
+    const { confidence, score, durationSec, plannedSec, flaggedIndices } = req.body || {};
 
     const { doc, unauthorized, notFound } = await loadPrepDoc(
       id,
@@ -1172,17 +1259,38 @@ exports.saveInterviewSession = async (req, res) => {
       .filter((i) => Number.isInteger(i) && i >= 0 && i < questions.length)
       .map((i) => ({ index: i, question: questions[i].question }));
 
+    const cleanConfidence = ["needs_work", "almost", "ready"].includes(confidence)
+      ? confidence
+      : undefined;
+    const cleanScore = Number.isFinite(score)
+      ? Math.max(0, Math.min(100, Math.round(score)))
+      : undefined;
+    const completedAt = new Date();
+
     doc.interviewPrep.lastInterviewSession = {
-      completedAt: new Date(),
-      confidence: ["needs_work", "almost", "ready"].includes(confidence) ? confidence : undefined,
+      completedAt,
+      confidence: cleanConfidence,
+      score: cleanScore,
       durationSec: Number.isFinite(durationSec) ? Math.round(durationSec) : undefined,
       plannedSec: Number.isFinite(plannedSec) ? Math.round(plannedSec) : undefined,
       flagged,
     };
+
+    // Append to the rolling history (desensitization trend), keeping the last 10.
+    const history = Array.isArray(doc.interviewPrep.interviewHistory)
+      ? doc.interviewPrep.interviewHistory
+      : [];
+    history.push({ completedAt, confidence: cleanConfidence, score: cleanScore });
+    doc.interviewPrep.interviewHistory = history.slice(-10);
+
     doc.markModified("interviewPrep.lastInterviewSession");
+    doc.markModified("interviewPrep.interviewHistory");
     await doc.save();
 
-    res.json({ lastInterviewSession: doc.interviewPrep.lastInterviewSession });
+    res.json({
+      lastInterviewSession: doc.interviewPrep.lastInterviewSession,
+      interviewHistory: doc.interviewPrep.interviewHistory,
+    });
   } catch (error) {
     console.error("[InterviewPrep] saveInterviewSession failed:", error.message);
     res.status(500).json({ message: "Failed to save interview session" });
