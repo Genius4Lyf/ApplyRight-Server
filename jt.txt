@@ -1,0 +1,35 @@
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/question-confidence HTTP/1.1" 200 80 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/question-confidence HTTP/1.1" 400 38 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/grade-answer HTTP/1.1" 200 561 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/grade-answer HTTP/1.1" 403 112 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/story-confidence HTTP/1.1" 200 51 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/story-confidence HTTP/1.1" 400 38 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/story-confidence HTTP/1.1" 404 42 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/stories HTTP/1.1" 200 205 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/stories/s2 HTTP/1.1" 200 61 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/stories/nope HTTP/1.1" 404 29 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "DELETE /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/stories/a HTTP/1.1" 200 15 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "DELETE /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/stories/missing HTTP/1.1" 404 29 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/grade-story HTTP/1.1" 200 252 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/grade-story HTTP/1.1" 404 42 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/interview-session HTTP/1.1" 200 274 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/conversation-turn HTTP/1.1" 200 170 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/conversation-turn HTTP/1.1" 200 186 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/conversation-turn HTTP/1.1" 401 33 "-" "-"
+2026-06-12 09:13:58 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:58 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/conversation-turn HTTP/1.1" 503 84 "-" "-"
+2026-06-12 09:13:59 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:59 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/realtime-session HTTP/1.1" 200 112 "-" "-"
+2026-06-12 09:13:59 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:59 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/realtime-session HTTP/1.1" 401 33 "-" "-"
+2026-06-12 09:13:59 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:59 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/realtime-session HTTP/1.1" 404 35 "-" "-"
+2026-06-12 09:13:59 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:59 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/realtime-session HTTP/1.1" 503 92 "-" "-"
+2026-06-12 09:13:59 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:59 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/assess-interview HTTP/1.1" 200 831 "-" "-"
+PASS tests/interviewPrep.test.js (12.851 s)
+
+Test Suites: 1 passed, 1 total
+Tests:       26 passed, 26 total
+Snapshots:   0 total
+Time:        13.239 s
+2026-06-12 09:13:59 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:59 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/assess-interview HTTP/1.1" 401 33 "-" "-"
+2026-06-12 09:13:59 [32m'info'[39m: ::ffff:127.0.0.1 - - [12/Jun/2026:08:13:59 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/assess-interview HTTP/1.1" 503 88 "-" "-"
+Jest did not exit one second after the test run has completed.
+
+'This usually means that there are asynchronous operations that weren't stopped in your tests. Consider running Jest with `--detectOpenHandles` to troubleshoot this issue.

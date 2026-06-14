@@ -268,6 +268,8 @@ const loginUser = async (req, res, next) => {
         firstName: user.firstName,
         lastName: user.lastName,
         credits: user.credits,
+        plan: user.plan,
+        tier: user.tier,
         phoneNumber: user.phoneNumber,
         location: user.location,
         skills: user.skills,

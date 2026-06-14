@@ -14,6 +14,11 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   AI_PROVIDER: z.enum(["openai", "gemini"]).default("gemini"),
+  // Realtime (live voice) interview — OpenAI Realtime API over WebRTC.
+  REALTIME_MODEL: z.string().default("gpt-realtime"),
+  REALTIME_VOICE: z.string().default("marin"), // realtime voices: marin / cedar / alloy
+  REALTIME_MAX_SESSION_SEC: z.coerce.number().int().positive().default(360), // cost guardrail
+  REALTIME_SPEED: z.coerce.number().positive().optional(), // optional voice speed, e.g. 1.1 (snappier)
   ADMOB_SSV_KEYS_URL: z
     .string()
     .url()

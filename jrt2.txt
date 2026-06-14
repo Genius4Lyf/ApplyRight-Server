@@ -1,0 +1,124 @@
+  console.log
+    [dotenv@17.2.3] injecting env (17) from .env -- tip: 🔑 add access controls to secrets: https://dotenvx.com/ops
+
+      at _log (node_modules/dotenv/lib/main.js:142:11)
+
+  console.log
+    ✅ AI Service: OpenAI Enabled (model: gpt-4o-mini)
+
+      at Object.log (src/services/ai.service.js:18:11)
+
+2026-06-09 21:05:25 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:25 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/question-confidence HTTP/1.1" 200 80 "-" "-"
+2026-06-09 21:05:25 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:25 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/question-confidence HTTP/1.1" 400 38 "-" "-"
+2026-06-09 21:05:25 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:25 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/grade-answer HTTP/1.1" 200 561 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/grade-answer HTTP/1.1" 403 112 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/story-confidence HTTP/1.1" 200 51 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/story-confidence HTTP/1.1" 400 38 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/story-confidence HTTP/1.1" 404 42 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/stories HTTP/1.1" 200 205 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/stories/s2 HTTP/1.1" 200 61 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "PATCH /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/stories/nope HTTP/1.1" 404 29 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "DELETE /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/stories/a HTTP/1.1" 200 15 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "DELETE /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/stories/missing HTTP/1.1" 404 29 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/grade-story HTTP/1.1" 200 252 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/grade-story HTTP/1.1" 404 42 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/interview-session HTTP/1.1" 200 274 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/conversation-turn HTTP/1.1" 200 170 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/conversation-turn HTTP/1.1" 200 186 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/conversation-turn HTTP/1.1" 401 33 "-" "-"
+  console.error
+    [InterviewPrep] conversationTurn failed: undefined
+
+    [0m [90m 1161 |[39m     res[33m.[39mstatus([35m200[39m)[33m.[39mjson(result)[33m;[39m
+     [90m 1162 |[39m   } [36mcatch[39m (error) {
+    [31m[1m>[22m[39m[90m 1163 |[39m     console[33m.[39merror([32m"[InterviewPrep] conversationTurn failed:"[39m[33m,[39m error[33m.[39mmessage)[33m;[39m
+     [90m      |[39m             [31m[1m^[22m[39m
+     [90m 1164 |[39m     [36mif[39m (error[33m.[39mname [33m===[39m [32m"AIUnavailableError"[39m [33m||[39m error[33m.[39mcode [33m===[39m [32m"AI_UNAVAILABLE"[39m) {
+     [90m 1165 |[39m       [36mreturn[39m res
+     [90m 1166 |[39m         [33m.[39mstatus([35m503[39m)[0m
+
+      at error (src/controllers/interviewPrep.controller.js:1163:13)
+
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/conversation-turn HTTP/1.1" 503 84 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/realtime-session HTTP/1.1" 200 112 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/realtime-session HTTP/1.1" 401 33 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/realtime-session HTTP/1.1" 404 35 "-" "-"
+  console.error
+    [InterviewPrep] createRealtimeSession failed: undefined
+
+    [0m [90m 1251 |[39m   } [36mcatch[39m (error) {
+     [90m 1252 |[39m     [90m// Log only the message — never the secret or the OpenAI response body.[39m
+    [31m[1m>[22m[39m[90m 1253 |[39m     console[33m.[39merror([32m"[InterviewPrep] createRealtimeSession failed:"[39m[33m,[39m error[33m.[39mmessage)[33m;[39m
+     [90m      |[39m             [31m[1m^[22m[39m
+     [90m 1254 |[39m     [36mif[39m (
+     [90m 1255 |[39m       error[33m.[39mcode [33m===[39m [32m"REALTIME_UNAVAILABLE"[39m [33m||[39m
+     [90m 1256 |[39m       error[33m.[39mcode [33m===[39m [32m"AI_UNAVAILABLE"[39m [33m||[39m[0m
+
+      at error (src/controllers/interviewPrep.controller.js:1253:13)
+
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/realtime-session HTTP/1.1" 503 92 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/assess-interview HTTP/1.1" 200 831 "-" "-"
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/assess-interview HTTP/1.1" 401 33 "-" "-"
+  console.error
+    [InterviewPrep] assessInterview failed: undefined
+
+    [0m [90m 1351 |[39m     })[33m;[39m
+     [90m 1352 |[39m   } [36mcatch[39m (error) {
+    [31m[1m>[22m[39m[90m 1353 |[39m     console[33m.[39merror([32m"[InterviewPrep] assessInterview failed:"[39m[33m,[39m error[33m.[39mmessage)[33m;[39m
+     [90m      |[39m             [31m[1m^[22m[39m
+     [90m 1354 |[39m     [36mif[39m (error[33m.[39mname [33m===[39m [32m"AIUnavailableError"[39m [33m||[39m error[33m.[39mcode [33m===[39m [32m"AI_UNAVAILABLE"[39m) {
+     [90m 1355 |[39m       [36mreturn[39m res
+     [90m 1356 |[39m         [33m.[39mstatus([35m503[39m)[0m
+
+      at error (src/controllers/interviewPrep.controller.js:1353:13)
+
+2026-06-09 21:05:26 [32m'info'[39m: ::ffff:127.0.0.1 - - [09/Jun/2026:20:05:26 +0000] "POST /api/interview-prep/60c72b2f9b1d8b2bad6e1a22/assess-interview HTTP/1.1" 503 88 "-" "-"
+PASS tests/interviewPrep.test.js (7.154 s)
+  Interview Prep API
+    PATCH /api/interview-prep/:applicationId/question-confidence
+      √ should update question confidence successfully (123 ms)
+      √ should return 400 for invalid confidence level (17 ms)
+    POST /api/interview-prep/:applicationId/grade-answer
+      √ should grade answer and deduct 1 credit successfully (19 ms)
+      √ should reject with 403 if user has insufficient credits (14 ms)
+    Story Bank — confidence + CRUD
+      PATCH /api/interview-prep/:applicationId/story-confidence
+        √ should set story confidence by id (13 ms)
+        √ should reject an invalid confidence value (11 ms)
+        √ should 404 when the story id is unknown (10 ms)
+      POST /api/interview-prep/:applicationId/stories
+        √ should create a story with a server-assigned id (15 ms)
+      PATCH /api/interview-prep/:applicationId/stories/:storyId
+        √ should update editable fields and clear that story's warning (18 ms)
+        √ should 404 for an unknown story id (16 ms)
+      DELETE /api/interview-prep/:applicationId/stories/:storyId
+        √ should remove the story and reindex remaining warnings (13 ms)
+        √ should 404 when deleting an unknown story id (10 ms)
+      POST /api/interview-prep/:applicationId/grade-story
+        √ should grade a story, charge 1 credit, and set confidence (12 ms)
+        √ should 404 when the story id is unknown (16 ms)
+      POST /api/interview-prep/:applicationId/interview-session
+        √ should save the self-assessed interview session result (10 ms)
+    POST /api/interview-prep/:applicationId/conversation-turn
+      √ should return the interviewer's greeting turn (no credits charged) (10 ms)
+      √ should forward the transcript + answer and return the next turn (11 ms)
+      √ should return 401 when the application belongs to another user (6 ms)
+      √ should return 503 (no charge) when the AI interviewer is unavailable (68 ms)
+    POST /api/interview-prep/:applicationId/realtime-session
+      √ should mint and return the ephemeral session (no credits charged) (12 ms)
+      √ should return 401 when the application belongs to another user (10 ms)
+      √ should return 404 when the application is missing (9 ms)
+      √ should return 503 (no charge) when realtime is unavailable (40 ms)
+    POST /api/interview-prep/:applicationId/assess-interview
+      √ should assess the transcript and persist the session (no credits charged) (17 ms)
+      √ should return 401 when the application belongs to another user (10 ms)
+      √ should return 503 when the assessor is unavailable (32 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       26 passed, 26 total
+Snapshots:   0 total
+Time:        7.3 s, estimated 9 s
+Ran all test suites matching interviewPrep.test.js.
+Jest did not exit one second after the test run has completed.
+
+'This usually means that there are asynchronous operations that weren't stopped in your tests. Consider running Jest with `--detectOpenHandles` to troubleshoot this issue.

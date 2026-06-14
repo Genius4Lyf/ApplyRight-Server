@@ -1107,6 +1107,260 @@ exports.generateFollowUp = async (req, res) => {
 };
 
 /**
+ * Conversational Interview Mode: one turn of a live, turn-based interview. The
+ * client owns the transcript + question spine and resends them each turn (the
+ * server stays stateless). Reacts to the candidate's actual answer, grounded in
+ * their CV + the job, and returns what to SAY (TTS) plus the QUESTION to show.
+ *
+ * FREE during testing — no credits are charged. When Interview Mode becomes a
+ * paid (Plus-tier) feature, add the tier gate to the route and the atomic charge
+ * at the marked site below (mirror generateFollowUp's deduction).
+ */
+exports.conversationTurn = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const { questionSpine, spineIndex, transcript, lastAnswer, phase } = req.body || {};
+
+    const application = await Application.findById(id).populate("jobId");
+    if (!application) return res.status(404).json({ message: "Application not found" });
+    if (application.userId.toString() !== req.user.id) {
+      return res.status(401).json({ message: "User not authorized" });
+    }
+
+    const aiService = require("../services/ai.service");
+    const { buildInterviewCandidateContext } = require("./analysis.controller");
+
+    const candidateContext = await buildInterviewCandidateContext(application, {
+      userId: req.user.id,
+      applicationId: application._id,
+    });
+    const jobDescription = application.jobId?.description || application.jobTitle || "";
+
+    // NOTE: when Interview Mode becomes a paid Plus-tier feature, charge here —
+    // mirror generateFollowUp: an atomic, balance-guarded
+    //   User.updateOne({ _id, credits: { $gte: COST } }, { $inc: { credits: -COST } })
+    // followed by Transaction.create({ ..., type: "usage" }). Free during testing.
+
+    const result = await aiService.conversationTurn(
+      {
+        questionSpine: Array.isArray(questionSpine) ? questionSpine : [],
+        spineIndex: Number.isInteger(spineIndex) ? spineIndex : 0,
+        transcript: Array.isArray(transcript) ? transcript : [],
+        lastAnswer: typeof lastAnswer === "string" ? lastAnswer : "",
+        phase: phase === "answer" ? "answer" : "greeting",
+      },
+      candidateContext,
+      {
+        jobTitle: application.jobTitle || application.jobId?.title || "",
+        company: application.jobCompany || application.jobId?.company || "",
+        jobDescription,
+      },
+      { userId: req.user.id, applicationId: application._id }
+    );
+
+    res.status(200).json(result);
+  } catch (error) {
+    console.error("[InterviewPrep] conversationTurn failed:", error.message);
+    if (error.name === "AIUnavailableError" || error.code === "AI_UNAVAILABLE") {
+      return res
+        .status(503)
+        .json({ message: "The AI interviewer is temporarily unavailable.", code: "AI_UNAVAILABLE" });
+    }
+    res.status(500).json({ message: "Failed to continue the interview" });
+  }
+};
+
+/**
+ * Realtime (live voice) Interview Mode: mint a short-lived OpenAI ephemeral
+ * client secret. The browser does the WebRTC handshake DIRECTLY with OpenAI
+ * using this secret — audio never flows through our backend. The candidate's
+ * CV + job grounding rides in the session `instructions`.
+ *
+ * FREE during testing — no credits charged. When realtime becomes a paid
+ * (Plus-tier) feature, add the tier gate to the route and the atomic charge
+ * here (mirror generateFollowUp's deduction). SECURITY: never log the secret.
+ */
+exports.createRealtimeSession = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const { questionSpine, timeOfDay, candidateName, voice, style } = req.body || {};
+
+    const application = await Application.findById(id).populate("jobId");
+    if (!application) return res.status(404).json({ message: "Application not found" });
+    if (application.userId.toString() !== req.user.id) {
+      return res.status(401).json({ message: "User not authorized" });
+    }
+
+    const aiService = require("../services/ai.service");
+    const realtime = require("../services/realtime.service");
+    const { buildInterviewCandidateContext } = require("./analysis.controller");
+
+    const candidateContext = await buildInterviewCandidateContext(application, {
+      userId: req.user.id,
+      applicationId: application._id,
+    });
+    const jobMeta = {
+      jobTitle: application.jobTitle || application.jobId?.title || "",
+      company: application.jobCompany || application.jobId?.company || "",
+      jobDescription: application.jobId?.description || application.jobDescription || "",
+    };
+
+    // Fit/gap data lets the interviewer probe missing must-have skills + test the
+    // ones the candidate claims — like a real interviewer.
+    const fa = application.fitAnalysis || {};
+    const mustHaveNames = (arr) =>
+      (Array.isArray(arr) ? arr : [])
+        .filter((s) => s && s.importance === "must_have" && s.name)
+        .map((s) => s.name);
+    const fit = {
+      matchedMustHaves: mustHaveNames(fa.matchedSkills),
+      missingMustHaves: mustHaveNames(fa.missingSkills),
+      experienceNote: fa.experienceAnalysis?.match === false ? fa.experienceAnalysis?.feedback || "" : "",
+      seniorityNote: fa.seniorityAnalysis?.match === false ? fa.seniorityAnalysis?.feedback || "" : "",
+    };
+
+    const maxSessionSec = Number(process.env.REALTIME_MAX_SESSION_SEC) || 360;
+    const ALLOWED_STYLES = ["balanced", "screening", "technical", "behavioral"];
+    const instructions = aiService.buildRealtimeInstructions(
+      candidateContext,
+      jobMeta,
+      Array.isArray(questionSpine) ? questionSpine : [],
+      Math.round(maxSessionSec / 60),
+      {
+        timeOfDay: typeof timeOfDay === "string" ? timeOfDay : "",
+        candidateName: typeof candidateName === "string" ? candidateName.slice(0, 40) : "",
+        fit,
+        style: ALLOWED_STYLES.includes(style) ? style : "balanced",
+      }
+    );
+
+    // NOTE: when realtime becomes a paid Plus-tier feature, charge here — mirror
+    // generateFollowUp: atomic, balance-guarded User.updateOne($inc) + Transaction.
+    // Free during testing.
+
+    // voice is validated against the allowlist inside the service.
+    const session = await realtime.mintRealtimeSession({ instructions, voice });
+
+    res.status(200).json({
+      clientSecret: session.clientSecret,
+      expiresAt: session.expiresAt,
+      model: session.model,
+      voice: session.voice,
+      maxSessionSec: session.maxSessionSec,
+    });
+  } catch (error) {
+    // Log only the message — never the secret or the OpenAI response body.
+    console.error("[InterviewPrep] createRealtimeSession failed:", error.message);
+    if (
+      error.code === "REALTIME_UNAVAILABLE" ||
+      error.code === "AI_UNAVAILABLE" ||
+      error.name === "AIUnavailableError"
+    ) {
+      return res
+        .status(503)
+        .json({ message: "The live interviewer is temporarily unavailable.", code: "REALTIME_UNAVAILABLE" });
+    }
+    res.status(500).json({ message: "Failed to start the live interview" });
+  }
+};
+
+/**
+ * Assess a completed CONVERSATIONAL interview from its transcript and persist the
+ * result as this prep's last session. Grounded in the candidate's CV + the job.
+ * Replaces the old self-rating for conversational/realtime runs. Content-only
+ * (a transcript can't judge vocal delivery).
+ *
+ * FREE during testing — no credits charged (future Plus charge site here).
+ */
+exports.assessInterview = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const { transcript, durationSec, plannedSec } = req.body || {};
+
+    const application = await Application.findById(id).populate("jobId");
+    if (!application) return res.status(404).json({ message: "Application not found" });
+    if (application.userId.toString() !== req.user.id) {
+      return res.status(401).json({ message: "User not authorized" });
+    }
+
+    const aiService = require("../services/ai.service");
+    const { buildInterviewCandidateContext } = require("./analysis.controller");
+
+    const candidateContext = await buildInterviewCandidateContext(application, {
+      userId: req.user.id,
+      applicationId: application._id,
+    });
+    const jobMeta = {
+      jobTitle: application.jobTitle || application.jobId?.title || "",
+      company: application.jobCompany || application.jobId?.company || "",
+    };
+
+    const turns = Array.isArray(transcript) ? transcript : [];
+    const assessment = await aiService.assessInterview(
+      turns,
+      candidateContext,
+      jobMeta,
+      { userId: req.user.id, applicationId: application._id }
+    );
+
+    // The questions the interviewer actually asked (the interviewer's turns) — so
+    // the user can see what they were asked after the interview.
+    assessment.questionsAsked = turns
+      .filter((t) => t && t.role === "interviewer" && typeof t.text === "string" && t.text.trim())
+      .map((t) => t.text.trim())
+      .slice(0, 30);
+
+    // Persist as the prep's last session + push the desensitization-trend entry,
+    // so doing a conversational interview updates readiness/history automatically.
+    application.interviewPrep = application.interviewPrep || {};
+    const completedAt = new Date();
+    application.interviewPrep.lastInterviewSession = {
+      completedAt,
+      confidence: assessment.readiness,
+      score: assessment.overallScore,
+      durationSec: Number.isFinite(durationSec) ? Math.round(durationSec) : undefined,
+      plannedSec: Number.isFinite(plannedSec) ? Math.round(plannedSec) : undefined,
+      flagged: [],
+      assessment,
+    };
+    const history = Array.isArray(application.interviewPrep.interviewHistory)
+      ? application.interviewPrep.interviewHistory
+      : [];
+    history.push({ completedAt, confidence: assessment.readiness, score: assessment.overallScore });
+    application.interviewPrep.interviewHistory = history.slice(-10);
+
+    // Readiness: a real interview is evidence about every prepared question. Raise
+    // (never lower) each question's confidence toward the assessment band, so a
+    // strong conversational interview visibly moves the readiness ring.
+    const RANK = { needs_work: 1, almost: 2, ready: 3 };
+    const band = assessment.readiness;
+    if (RANK[band] && Array.isArray(application.interviewPrep.jobQuestions)) {
+      application.interviewPrep.jobQuestions.forEach((q) => {
+        if ((RANK[q.confidence] || 0) < RANK[band]) q.confidence = band;
+      });
+      application.markModified("interviewPrep.jobQuestions");
+    }
+
+    application.markModified("interviewPrep.lastInterviewSession");
+    application.markModified("interviewPrep.interviewHistory");
+    await application.save();
+
+    res.status(200).json({
+      assessment,
+      lastInterviewSession: application.interviewPrep.lastInterviewSession,
+    });
+  } catch (error) {
+    console.error("[InterviewPrep] assessInterview failed:", error.message);
+    if (error.name === "AIUnavailableError" || error.code === "AI_UNAVAILABLE") {
+      return res
+        .status(503)
+        .json({ message: "The interview assessor is temporarily unavailable.", code: "AI_UNAVAILABLE" });
+    }
+    res.status(500).json({ message: "Failed to assess the interview" });
+  }
+};
+
+/**
  * Grade a user's delivery of one of their Story Bank stories. The story's own
  * STAR text is the reference ("ideal") answer — we're scoring how well the user
  * delivered their prepared story, not inventing a new ideal. Charges 1 credit,

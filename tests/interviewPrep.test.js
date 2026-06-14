@@ -5,6 +5,7 @@ const User = require("../src/models/User");
 const Transaction = require("../src/models/Transaction");
 const SystemSettings = require("../src/models/SystemSettings");
 const aiService = require("../src/services/ai.service");
+const realtimeService = require("../src/services/realtime.service");
 const analysisController = require("../src/controllers/analysis.controller");
 const jwt = require("jsonwebtoken");
 
@@ -15,6 +16,7 @@ jest.mock("../src/models/User");
 jest.mock("../src/models/Transaction");
 jest.mock("../src/models/SystemSettings");
 jest.mock("../src/services/ai.service");
+jest.mock("../src/services/realtime.service");
 jest.mock("jsonwebtoken");
 
 // Mock Data
@@ -376,6 +378,245 @@ describe("Interview Prep API", () => {
         ]);
         expect(mockApplication.save).toHaveBeenCalled();
       });
+    });
+  });
+
+  describe("POST /api/interview-prep/:applicationId/conversation-turn", () => {
+    const spine = [
+      { question: "Tell me about yourself.", type: "intro" },
+      { question: "Tell me about React hooks.", type: "technical" },
+    ];
+
+    it("should return the interviewer's greeting turn (no credits charged)", async () => {
+      aiService.conversationTurn.mockResolvedValue({
+        spoken: "Hi there, great to meet you! So, tell me a bit about yourself.",
+        displayQuestion: "Tell me about yourself.",
+        isFollowUp: false,
+        nextSpineIndex: 0,
+        done: false,
+      });
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/conversation-turn`)
+        .set("Authorization", "Bearer mock-token")
+        .send({ phase: "greeting", questionSpine: spine, spineIndex: 0, transcript: [], lastAnswer: "" });
+
+      expect(res.statusCode).toEqual(200);
+      expect(res.body.spoken).toMatch(/tell me a bit about yourself/i);
+      expect(res.body.displayQuestion).toEqual("Tell me about yourself.");
+      expect(res.body.done).toBe(false);
+      // FREE during testing: no credit deduction and no transaction recorded.
+      expect(User.updateOne).not.toHaveBeenCalled();
+      expect(Transaction.create).not.toHaveBeenCalled();
+    });
+
+    it("should forward the transcript + answer and return the next turn", async () => {
+      aiService.conversationTurn.mockResolvedValue({
+        spoken: "Nice — hooks are key. Quick follow-up: how did you handle cleanup?",
+        displayQuestion: "How did you handle effect cleanup?",
+        isFollowUp: true,
+        nextSpineIndex: 1,
+        done: false,
+      });
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/conversation-turn`)
+        .set("Authorization", "Bearer mock-token")
+        .send({
+          phase: "answer",
+          questionSpine: spine,
+          spineIndex: 1,
+          transcript: [{ role: "interviewer", text: "Tell me about React hooks." }],
+          lastAnswer: "I use useState and useEffect a lot.",
+        });
+
+      expect(res.statusCode).toEqual(200);
+      expect(res.body.isFollowUp).toBe(true);
+      expect(res.body.nextSpineIndex).toEqual(1);
+      // The controller passes the candidate's answer + transcript through to AI.
+      const passedInput = aiService.conversationTurn.mock.calls[0][0];
+      expect(passedInput.lastAnswer).toEqual("I use useState and useEffect a lot.");
+      expect(passedInput.phase).toEqual("answer");
+      expect(passedInput.transcript).toHaveLength(1);
+    });
+
+    it("should return 401 when the application belongs to another user", async () => {
+      const otherApp = { ...mockApplication, userId: "different-user-id" };
+      Application.findById.mockReturnValue({
+        populate: jest.fn().mockReturnThis(),
+        then: jest.fn().mockImplementation(function (resolve) {
+          return resolve(otherApp);
+        }),
+      });
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/conversation-turn`)
+        .set("Authorization", "Bearer mock-token")
+        .send({ phase: "greeting", questionSpine: spine, spineIndex: 0 });
+
+      expect(res.statusCode).toEqual(401);
+    });
+
+    it("should return 503 (no charge) when the AI interviewer is unavailable", async () => {
+      aiService.conversationTurn.mockRejectedValue({ code: "AI_UNAVAILABLE" });
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/conversation-turn`)
+        .set("Authorization", "Bearer mock-token")
+        .send({ phase: "greeting", questionSpine: spine, spineIndex: 0 });
+
+      expect(res.statusCode).toEqual(503);
+      expect(res.body.code).toBe("AI_UNAVAILABLE");
+      expect(User.updateOne).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("POST /api/interview-prep/:applicationId/realtime-session", () => {
+    const spine = [{ question: "Tell me about yourself.", type: "intro" }];
+
+    beforeEach(() => {
+      aiService.buildRealtimeInstructions.mockReturnValue("INSTRUCTIONS");
+    });
+
+    it("should mint and return the ephemeral session (no credits charged)", async () => {
+      realtimeService.mintRealtimeSession.mockResolvedValue({
+        clientSecret: "ek_test_123",
+        expiresAt: 1234567890,
+        model: "gpt-realtime",
+        voice: "marin",
+        maxSessionSec: 360,
+      });
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/realtime-session`)
+        .set("Authorization", "Bearer mock-token")
+        .send({ questionSpine: spine });
+
+      expect(res.statusCode).toEqual(200);
+      expect(res.body.clientSecret).toBe("ek_test_123");
+      expect(res.body.maxSessionSec).toBe(360);
+      expect(res.body.model).toBe("gpt-realtime");
+      // Grounding instructions are built from the candidate context + spine.
+      expect(aiService.buildRealtimeInstructions).toHaveBeenCalled();
+      // FREE during testing: no credit deduction and no transaction recorded.
+      expect(User.updateOne).not.toHaveBeenCalled();
+      expect(Transaction.create).not.toHaveBeenCalled();
+    });
+
+    it("should return 401 when the application belongs to another user", async () => {
+      const otherApp = { ...mockApplication, userId: "different-user-id" };
+      Application.findById.mockReturnValue({
+        populate: jest.fn().mockReturnThis(),
+        then: jest.fn().mockImplementation(function (resolve) {
+          return resolve(otherApp);
+        }),
+      });
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/realtime-session`)
+        .set("Authorization", "Bearer mock-token")
+        .send({ questionSpine: spine });
+
+      expect(res.statusCode).toEqual(401);
+      expect(realtimeService.mintRealtimeSession).not.toHaveBeenCalled();
+    });
+
+    it("should return 404 when the application is missing", async () => {
+      Application.findById.mockReturnValue({
+        populate: jest.fn().mockReturnThis(),
+        then: jest.fn().mockImplementation(function (resolve) {
+          return resolve(null);
+        }),
+      });
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/realtime-session`)
+        .set("Authorization", "Bearer mock-token")
+        .send({ questionSpine: spine });
+
+      expect(res.statusCode).toEqual(404);
+    });
+
+    it("should return 503 (no charge) when realtime is unavailable", async () => {
+      realtimeService.mintRealtimeSession.mockRejectedValue({ code: "REALTIME_UNAVAILABLE" });
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/realtime-session`)
+        .set("Authorization", "Bearer mock-token")
+        .send({ questionSpine: spine });
+
+      expect(res.statusCode).toEqual(503);
+      expect(res.body.code).toBe("REALTIME_UNAVAILABLE");
+      expect(User.updateOne).not.toHaveBeenCalled();
+      expect(Transaction.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("POST /api/interview-prep/:applicationId/assess-interview", () => {
+    const transcript = [
+      { role: "interviewer", text: "Tell me about yourself." },
+      { role: "candidate", text: "I am a developer who led a payments migration and cut latency by 40%." },
+    ];
+    const mockAssessment = {
+      overallScore: 78,
+      readiness: "ready",
+      summary: "Strong, specific answers.",
+      dimensions: [{ key: "relevance", label: "Relevance to the role", score: 80, feedback: "Good." }],
+      strengths: ["Concrete metrics"],
+      gaps: ["Tighten the close"],
+      nextSteps: ["Practice the weakness question"],
+    };
+
+    it("should assess the transcript and persist the session (no credits charged)", async () => {
+      aiService.assessInterview.mockResolvedValue(mockAssessment);
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/assess-interview`)
+        .set("Authorization", "Bearer mock-token")
+        .send({ transcript, durationSec: 300, plannedSec: 360 });
+
+      expect(res.statusCode).toEqual(200);
+      expect(res.body.assessment.overallScore).toEqual(78);
+      expect(res.body.lastInterviewSession.assessment.readiness).toEqual("ready");
+      expect(res.body.lastInterviewSession.score).toEqual(78);
+      // Persisted on the application + pushed to the trend history.
+      expect(mockApplication.interviewPrep.lastInterviewSession.assessment).toBeTruthy();
+      expect(mockApplication.save).toHaveBeenCalled();
+      // FREE during testing.
+      expect(User.updateOne).not.toHaveBeenCalled();
+      expect(Transaction.create).not.toHaveBeenCalled();
+      // The candidate's transcript is forwarded to the assessor.
+      expect(aiService.assessInterview.mock.calls[0][0]).toEqual(transcript);
+    });
+
+    it("should return 401 when the application belongs to another user", async () => {
+      const otherApp = { ...mockApplication, userId: "different-user-id" };
+      Application.findById.mockReturnValue({
+        populate: jest.fn().mockReturnThis(),
+        then: jest.fn().mockImplementation(function (resolve) {
+          return resolve(otherApp);
+        }),
+      });
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/assess-interview`)
+        .set("Authorization", "Bearer mock-token")
+        .send({ transcript });
+
+      expect(res.statusCode).toEqual(401);
+      expect(aiService.assessInterview).not.toHaveBeenCalled();
+    });
+
+    it("should return 503 when the assessor is unavailable", async () => {
+      aiService.assessInterview.mockRejectedValue({ code: "AI_UNAVAILABLE" });
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/assess-interview`)
+        .set("Authorization", "Bearer mock-token")
+        .send({ transcript });
+
+      expect(res.statusCode).toEqual(503);
+      expect(res.body.code).toBe("AI_UNAVAILABLE");
     });
   });
 });

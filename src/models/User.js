@@ -28,6 +28,14 @@ const userSchema = new mongoose.Schema(
       enum: ["free", "paid"],
       default: "free",
     },
+    // Subscription tier for premium features (e.g. Interview Mode variants).
+    // Separate from `plan` (the lifetime template unlock). Admin-set during
+    // testing; a payment provider can set it later. See requireTier middleware.
+    tier: {
+      type: String,
+      enum: ["free", "plus", "pro"],
+      default: "free",
+    },
     role: {
       type: String,
       enum: ["user", "admin"],

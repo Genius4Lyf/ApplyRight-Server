@@ -317,6 +317,68 @@ exports.updateUserRole = async (req, res, next) => {
   }
 };
 
+// @desc    Update user subscription tier
+// @route   PUT /api/v1/admin/users/:id/tier
+// @access  Private/Admin
+exports.updateUserTier = async (req, res, next) => {
+  try {
+    const { tier } = req.body;
+
+    if (!tier || !["free", "plus", "pro"].includes(tier)) {
+      return res.status(400).json({ success: false, message: "Invalid tier" });
+    }
+
+    const user = await User.findById(req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    user.tier = tier;
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      data: user,
+      message: `User tier updated to ${tier}`,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
+// @desc    Update user plan (free <-> paid)
+// @route   PUT /api/v1/admin/users/:id/plan
+// @access  Private/Admin
+exports.updateUserPlan = async (req, res, next) => {
+  try {
+    const { plan } = req.body;
+
+    if (!plan || !["free", "paid"].includes(plan)) {
+      return res.status(400).json({ success: false, message: "Invalid plan" });
+    }
+
+    const user = await User.findById(req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    user.plan = plan;
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      data: user,
+      message: `User plan updated to ${plan}`,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
 // @desc    Delete user
 // @route   DELETE /api/v1/admin/users/:id
 // @access  Private/Admin

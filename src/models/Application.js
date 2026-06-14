@@ -297,6 +297,18 @@ const applicationSchema = new mongoose.Schema(
         durationSec: Number,
         plannedSec: Number,
         flagged: [{ index: Number, question: String }],
+        // AI assessment of a conversational interview (graded from the transcript,
+        // grounded in the candidate's CV + the job). Absent for guided/self-rated runs.
+        assessment: {
+          overallScore: Number,
+          readiness: { type: String, enum: ["needs_work", "almost", "ready"] },
+          summary: String,
+          dimensions: [{ key: String, label: String, score: Number, feedback: String }],
+          strengths: [String],
+          gaps: [String],
+          nextSteps: [String],
+          questionsAsked: [String], // the questions the interviewer actually asked
+        },
       },
       // Rolling log of recent Interview Mode runs (kept to the last ~10). Powers
       // the "desensitization" trend — users see their nerves easing with reps,

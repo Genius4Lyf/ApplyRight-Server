@@ -4,6 +4,8 @@ const {
   getDashboardStats,
   getAllUsers,
   updateUserRole,
+  updateUserTier,
+  updateUserPlan,
   deleteUser,
   getAllTransactions,
   getUserDetails,
@@ -25,6 +27,8 @@ router.get("/users", admin, getAllUsers);
 router.get("/transactions", admin, getAllTransactions);
 router.get("/users/:id", admin, getUserDetails);
 router.put("/users/:id/role", admin, updateUserRole);
+router.put("/users/:id/tier", admin, updateUserTier);
+router.put("/users/:id/plan", admin, updateUserPlan);
 router.delete("/users/:id", admin, deleteUser);
 
 // Job Searches

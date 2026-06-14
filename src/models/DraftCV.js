@@ -174,6 +174,16 @@ const draftCVSchema = new mongoose.Schema(
         durationSec: Number,
         plannedSec: Number,
         flagged: [{ index: Number, question: String }],
+        assessment: {
+          overallScore: Number,
+          readiness: { type: String, enum: ["needs_work", "almost", "ready"] },
+          summary: String,
+          dimensions: [{ key: String, label: String, score: Number, feedback: String }],
+          strengths: [String],
+          gaps: [String],
+          nextSteps: [String],
+          questionsAsked: [String],
+        },
       },
       // Parity with Application.interviewPrep.interviewHistory (desensitization trend).
       interviewHistory: [
