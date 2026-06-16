@@ -1247,6 +1247,9 @@ exports.createRealtimeSession = async (req, res) => {
       model: session.model,
       voice: session.voice,
       maxSessionSec: session.maxSessionSec,
+      // Grace window (seconds) the client adds AFTER the main time runs out, so
+      // the interviewer can verbally wrap up + run the closing instead of a hard cut.
+      graceSec: Number(process.env.REALTIME_GRACE_SEC) || 90,
     });
   } catch (error) {
     // Log only the message — never the secret or the OpenAI response body.

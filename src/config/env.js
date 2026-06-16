@@ -18,6 +18,7 @@ const envSchema = z.object({
   REALTIME_MODEL: z.string().default("gpt-realtime"),
   REALTIME_VOICE: z.string().default("marin"), // realtime voices: marin / cedar / alloy
   REALTIME_MAX_SESSION_SEC: z.coerce.number().int().positive().default(360), // cost guardrail
+  REALTIME_GRACE_SEC: z.coerce.number().int().nonnegative().default(90), // wind-down window after time-up for the closing ("any questions for me?")
   REALTIME_SPEED: z.coerce.number().positive().optional(), // optional voice speed, e.g. 1.1 (snappier)
   ADMOB_SSV_KEYS_URL: z
     .string()

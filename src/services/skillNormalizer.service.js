@@ -496,10 +496,106 @@ const compareSkills = (candidateSkills, requiredSkills) => {
   };
 };
 
+// ─── Keyword Coverage (CV builder live tracker) ───
+// Invert SYNONYMS → canonical(lowercased) : Set(surface forms) so a keyword can
+// be detected in free-text bullets under any of its spellings (e.g. "CI/CD"
+// matches "continuous integration"). Built once, lazily.
+let _surfaceIndex = null;
+const buildSurfaceIndex = () => {
+  if (_surfaceIndex) return _surfaceIndex;
+  const idx = new Map();
+  const add = (canonicalLower, surface) => {
+    if (!idx.has(canonicalLower)) idx.set(canonicalLower, new Set());
+    idx.get(canonicalLower).add(surface.toLowerCase());
+  };
+  for (const [surface, canonical] of Object.entries(SYNONYMS)) {
+    const cl = canonical.toLowerCase();
+    add(cl, surface);
+    add(cl, canonical); // canonical is itself a valid surface form
+  }
+  _surfaceIndex = idx;
+  return idx;
+};
+
+// Surfaces too ambiguous to scan for in CV prose (e.g. "cv" → Computer Vision
+// would match constantly in a CV builder).
+const AMBIGUOUS_TEXT_SURFACES = new Set(["cv"]);
+
+// Does `lowerText` mention `surface`? Uses alphanumeric boundaries for ALL
+// surfaces so we never report a false "covered" (e.g. "react" must not match
+// "reaction", "go" must not match "going"). Treats + # . / as boundaries so
+// tech tokens like "c++", "ci/cd", "node.js" still match. Trade-off: a plural
+// like "APIs" won't match the singular surface — we prefer a miss over a lie.
+const textMentions = (lowerText, surface) => {
+  const s = (surface || "").trim().toLowerCase();
+  if (s.length < 2 || AMBIGUOUS_TEXT_SURFACES.has(s)) return false;
+  const escaped = s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(lowerText);
+};
+
+/**
+ * Compute live keyword coverage for the CV builder. A keyword counts as covered
+ * if it matches the candidate's discrete skills (via compareSkills — synonym +
+ * fuzzy) OR appears in their free-text content (bullets) under any synonym.
+ *
+ * @param {{ name: string, importance?: string }[]} keywords
+ * @param {{ text?: string, skills?: string[] }} candidate
+ * @returns {{ results: object[], covered: number, total: number,
+ *             mustHaveCovered: number, mustHaveTotal: number }}
+ */
+const computeKeywordCoverage = (keywords = [], { text = "", skills = [] } = {}) => {
+  const lowerText = (text || "").toLowerCase();
+  const idx = buildSurfaceIndex();
+
+  // Discrete-skill matches (best accuracy) when a skills list is provided.
+  let skillMatched = new Set();
+  if (Array.isArray(skills) && skills.length && keywords.length) {
+    const cmp = compareSkills(skills, keywords);
+    skillMatched = new Set(cmp.matched.map((m) => m.canonical?.toLowerCase() || m.name.toLowerCase()));
+  }
+
+  const results = (keywords || [])
+    .filter((kw) => kw && (kw.name || "").trim())
+    .map((kw) => {
+      const name = kw.name.trim();
+      const importance = kw.importance || "nice_to_have";
+      const norm = normalizeSkill(name);
+      const canonicalLower = norm.canonical.toLowerCase();
+
+      let covered =
+        skillMatched.has(canonicalLower) || skillMatched.has(name.toLowerCase());
+
+      if (!covered && lowerText) {
+        const surfaces = new Set([name.toLowerCase(), canonicalLower]);
+        if (idx.has(canonicalLower)) for (const s of idx.get(canonicalLower)) surfaces.add(s);
+        for (const s of surfaces) {
+          if (textMentions(lowerText, s)) {
+            covered = true;
+            break;
+          }
+        }
+      }
+
+      return { name, importance, covered };
+    });
+
+  const covered = results.filter((r) => r.covered).length;
+  const mustHave = results.filter((r) => r.importance === "must_have");
+
+  return {
+    results,
+    covered,
+    total: results.length,
+    mustHaveCovered: mustHave.filter((r) => r.covered).length,
+    mustHaveTotal: mustHave.length,
+  };
+};
+
 module.exports = {
   normalizeSkill,
   normalizeSkills,
   compareSkills,
+  computeKeywordCoverage,
   CANONICAL_SKILLS,
   SYNONYMS,
 };

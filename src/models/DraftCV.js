@@ -33,6 +33,17 @@ const draftCVSchema = new mongoose.Schema(
     targetJob: {
       title: String,
       description: String, // Context for AI tailoring
+      // Cached richer AI keyword extraction (the paid "Find more keywords"
+      // action). Stored per CV so re-viewing a step never re-charges; the hash
+      // of the job description it was derived from lets us detect a changed JD
+      // and charge again only then.
+      aiKeywords: [
+        {
+          name: String,
+          importance: String, // 'must_have' | 'nice_to_have'
+        },
+      ],
+      aiKeywordsHash: String,
     },
     personalInfo: {
       fullName: String,
