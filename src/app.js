@@ -24,6 +24,7 @@ const allowedOrigins = [
   "https://localhost", // Capacitor Android default
   "capacitor://localhost", // Capacitor iOS default
   "http://localhost:5173", // Vite dev server
+  "http://localhost:5174", // Vite dev server
 ].filter(Boolean);
 
 const corsOptions = {
@@ -47,8 +48,10 @@ const globalLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   // AdMob SSV callbacks come from Google and can burst. Skip them; the
-  // route itself is protected by ECDSA signature verification.
-  skip: (req) => req.path === "/api/billing/admob-ssv",
+  // route itself is protected by ECDSA signature verification. The Flutterwave
+  // webhook is likewise verified (verif-hash) and may retry, so skip it too.
+  skip: (req) =>
+    req.path === "/api/billing/admob-ssv" || req.path === "/api/billing/flutterwave-webhook",
   message: {
     message: "Too many requests from this IP, please try again after 15 minutes",
   },

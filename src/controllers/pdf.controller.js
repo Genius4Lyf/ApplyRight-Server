@@ -1,4 +1,5 @@
 const PdfService = require("../services/pdf.service");
+const subscription = require("../services/subscription.service");
 
 exports.generateCvPdf = async (req, res) => {
   console.log("--- [PDF Controller] Generate Request Received ---");
@@ -10,12 +11,38 @@ exports.generateCvPdf = async (req, res) => {
       return res.status(400).json({ message: "HTML content is required" });
     }
 
+    // Download entitlement (WEB only). The native app keeps its own AdMob-rewarded
+    // download model, so native requests are exempt (see api.js X-Client-Platform).
+    // On web: first download is free (lifetime taste); after that a ₦500 single-
+    // download pass or any paid subscription (unlimited). Consume BEFORE generating
+    // and refund on failure, so a failed PDF never burns a unit and concurrent
+    // requests can't double-spend.
+    const isNativeApp = req.headers["x-client-platform"] === "native";
+    let consumed = { ok: true, method: "subscription" }; // native/exempt → nothing consumed
+    if (!isNativeApp) {
+      consumed = await subscription.consumeDownload(req.user);
+      if (!consumed.ok) {
+        return res.status(402).json({
+          message:
+            "You've used your free download. Pay ₦500 to download this CV, or go unlimited with a plan.",
+          code: "NEED_DOWNLOAD",
+        });
+      }
+    }
+
     console.log(`--- [PDF Controller] HTML Content Length: ${html.length} chars ---`);
     console.log("--- [PDF Controller] Options:", JSON.stringify(options || {}));
 
     // Generate PDF with options
     console.log("--- [PDF Controller] Calling PdfService.generatePdf... ---");
-    const buffer = await PdfService.generatePdf(html, options || {});
+    let buffer;
+    try {
+      buffer = await PdfService.generatePdf(html, options || {});
+    } catch (genErr) {
+      // Generation failed → give the download unit back.
+      await subscription.refundDownload(req.user, consumed.method).catch(() => {});
+      throw genErr;
+    }
     console.log("--- [PDF Controller] PDF Generation Successful. Buffer size:", buffer.length);
 
     // Send PDF response

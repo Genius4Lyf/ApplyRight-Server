@@ -36,6 +36,41 @@ const userSchema = new mongoose.Schema(
       enum: ["free", "plus", "pro"],
       default: "free",
     },
+    // Time-boxed entitlement from a one-time Flutterwave purchase. `tier` (above)
+    // is kept in sync on grant so requireTier keeps working; THIS subdoc is the
+    // source of truth for expiry (effective tier is computed lazily on read —
+    // see subscription.service.getEffectiveTier). No auto-renew: when expiresAt
+    // passes, the user is treated as free until they buy again.
+    subscription: {
+      planId: { type: String, default: null }, // catalog id, e.g. "monthly_premium"
+      tier: { type: String, enum: ["free", "plus", "pro"], default: "free" },
+      status: { type: String, enum: ["active", "expired", "none"], default: "none" },
+      source: { type: String, enum: ["flutterwave", "admin", "none"], default: "none" },
+      currentPeriodStart: { type: Date, default: null },
+      expiresAt: { type: Date, default: null }, // null => no active subscription
+    },
+    // Live (voice) interview minute balance. Minutes expire each period (no
+    // rollover): a new subscription REPLACES secondsRemaining; top-ups $inc it.
+    liveInterview: {
+      secondsRemaining: { type: Number, default: 0 },
+      periodExpiresAt: { type: Date, default: null },
+      // Free tier's one-time taste (lifetime, never reset), capped at FREE_TASTE_SEC.
+      freeTasteUsedSec: { type: Number, default: 0 },
+      // In-flight reservation while a session is live (reserve-then-reconcile).
+      // `mode` records which balance was debited so reconcile refunds the right one.
+      activeReservation: {
+        reservationId: { type: String, default: null },
+        reservedSec: { type: Number, default: 0 },
+        startedAt: { type: Date, default: null },
+        mode: { type: String, enum: ["free", "paid", null], default: null },
+      },
+    },
+    // CV PDF downloads. Free users get one clean download (lifetime taste); after
+    // that they buy ₦500 single-download passes or subscribe (paid = unlimited).
+    downloads: {
+      freeDownloadUsed: { type: Boolean, default: false },
+      passRemaining: { type: Number, default: 0 },
+    },
     role: {
       type: String,
       enum: ["user", "admin"],

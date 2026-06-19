@@ -496,10 +496,16 @@ describe("Interview Prep API", () => {
       expect(res.body.clientSecret).toBe("ek_test_123");
       expect(res.body.maxSessionSec).toBe(360);
       expect(res.body.model).toBe("gpt-realtime");
+      // The session echoes a reservation id for later reconciliation.
+      expect(res.body.reservationId).toBeTruthy();
       // Grounding instructions are built from the candidate context + spine.
       expect(aiService.buildRealtimeInstructions).toHaveBeenCalled();
-      // FREE during testing: no credit deduction and no transaction recorded.
-      expect(User.updateOne).not.toHaveBeenCalled();
+      // The free user's taste minutes are RESERVED (not credits), and no usage
+      // Transaction is recorded until the interview is assessed.
+      expect(User.updateOne).toHaveBeenCalledWith(
+        expect.objectContaining({ "liveInterview.freeTasteUsedSec": expect.anything() }),
+        expect.objectContaining({ $inc: { "liveInterview.freeTasteUsedSec": expect.any(Number) } })
+      );
       expect(Transaction.create).not.toHaveBeenCalled();
     });
 
@@ -547,7 +553,11 @@ describe("Interview Prep API", () => {
 
       expect(res.statusCode).toEqual(503);
       expect(res.body.code).toBe("REALTIME_UNAVAILABLE");
-      expect(User.updateOne).not.toHaveBeenCalled();
+      // On mint failure the reservation is RELEASED (refund), so the minutes
+      // aren't lost — reserve + refund = two updateOne calls — and no charge.
+      expect(User.updateOne).toHaveBeenCalledTimes(2);
+      const refundCall = User.updateOne.mock.calls[1];
+      expect(refundCall[1].$inc["liveInterview.freeTasteUsedSec"]).toBeLessThan(0);
       expect(Transaction.create).not.toHaveBeenCalled();
     });
   });

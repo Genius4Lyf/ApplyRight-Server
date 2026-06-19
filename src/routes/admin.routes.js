@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const {
   getDashboardStats,
+  getRevenueStats,
   getAllUsers,
   updateUserRole,
   updateUserTier,
@@ -23,6 +24,7 @@ router.use(protect);
 
 // Admin Only Routes
 router.get("/stats", admin, getDashboardStats);
+router.get("/revenue", admin, getRevenueStats);
 router.get("/users", admin, getAllUsers);
 router.get("/transactions", admin, getAllTransactions);
 router.get("/users/:id", admin, getUserDetails);

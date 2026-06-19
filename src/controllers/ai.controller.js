@@ -2,6 +2,7 @@ const { generateOptimizedContent, generateInterviewQuestions } = require("../ser
 const Application = require("../models/Application");
 const Resume = require("../models/Resume");
 const Job = require("../models/Job");
+const subscription = require("../services/subscription.service");
 
 // @desc    Generate optimized CV and Cover Letter
 // @route   POST /api/ai/generate
@@ -29,8 +30,9 @@ const generateApplication = async (req, res) => {
     // Check for existing application
     let application = await Application.findOne({ userId: req.user.id, jobId, resumeId });
 
-    // Check Usage Limits ONLY if creating a NEW application
-    if (!application && req.user.plan === "free") {
+    // Check Usage Limits ONLY if creating a NEW application (active paid tier is
+    // unlimited; honors subscription expiry).
+    if (!application && !subscription.isPaidActive(req.user)) {
       const applicationCount = await Application.countDocuments({ userId: req.user.id });
       if (applicationCount >= 2) {
         return res
@@ -122,8 +124,9 @@ const generateBullets = async (req, res) => {
     let out = suggestions;
     let lockedCount = 0;
     if (type === "experience" && Array.isArray(suggestions) && suggestions.length > FREE_VISIBLE_BULLETS) {
-      const user = await require("../models/User").findById(req.user.id).select("plan");
-      if (user?.plan !== "paid") {
+      const user = await require("../models/User").findById(req.user.id).select("plan subscription");
+      // Honor subscription expiry: an expired paid plan locks extras again.
+      if (!subscription.isPaidActive(user)) {
         lockedCount = suggestions.length - FREE_VISIBLE_BULLETS;
         const locked = Array.from(
           { length: lockedCount },
@@ -150,7 +153,8 @@ const generateSkills = async (req, res) => {
   try {
     const user = await require("../models/User").findById(req.user.id);
 
-    if (user.credits < SKILLS_COST) {
+    // Active paid tiers get unlimited text prep — skip the balance check.
+    if (!subscription.isPaidActive(user) && user.credits < SKILLS_COST) {
       return res.status(403).json({
         message: "Insufficient credits",
         code: "INSUFFICIENT_CREDITS",
@@ -166,18 +170,19 @@ const generateSkills = async (req, res) => {
       targetJob || ""
     );
 
-    // Deduct credits
-    user.credits -= SKILLS_COST;
-    await user.updateOne({ credits: user.credits });
-
-    // Record Transaction
-    await require("../models/Transaction").create({
-      userId: user.id,
-      amount: -SKILLS_COST,
+    // Charge (or skip for an active paid tier).
+    const charge = await subscription.chargeOrSkip(user, SKILLS_COST, {
       type: "usage",
       description: "AI Skills Generation users profile context",
-      status: "completed",
     });
+    if (charge.insufficient) {
+      return res.status(403).json({
+        message: "Insufficient credits",
+        code: "INSUFFICIENT_CREDITS",
+        required: SKILLS_COST,
+        current: user.credits,
+      });
+    }
 
     res.json({
       suggestions,
@@ -266,7 +271,8 @@ const getJobKeywords = async (req, res) => {
       // New/changed JD → verify credits before spending.
       const User = require("../models/User");
       const user = await User.findById(req.user.id);
-      if (user.credits < JD_KEYWORDS_COST) {
+      // Active paid tiers get unlimited text prep — skip the balance check.
+      if (!subscription.isPaidActive(user) && user.credits < JD_KEYWORDS_COST) {
         return res.status(403).json({
           message: "Insufficient credits",
           code: "INSUFFICIENT_CREDITS",
@@ -288,22 +294,25 @@ const getJobKeywords = async (req, res) => {
       draft.markModified("targetJob");
       await draft.save();
 
-      // Deduct credits + record the transaction (mirrors generateSkills).
-      user.credits -= JD_KEYWORDS_COST;
-      await user.updateOne({ credits: user.credits });
-      await require("../models/Transaction").create({
-        userId: user.id,
-        amount: -JD_KEYWORDS_COST,
+      // Charge (or skip for an active paid tier).
+      const charge = await subscription.chargeOrSkip(user, JD_KEYWORDS_COST, {
         type: "usage",
         description: "AI job keyword extraction (CV builder)",
-        status: "completed",
       });
+      if (charge.insufficient) {
+        return res.status(403).json({
+          message: "Insufficient credits",
+          code: "INSUFFICIENT_CREDITS",
+          required: JD_KEYWORDS_COST,
+          current: user.credits,
+        });
+      }
 
       return res.json({
         keywords,
         aiKeywordsHash: jdHash,
         source: "jd-ai",
-        charged: true,
+        charged: charge.charged,
         remainingCredits: user.credits,
       });
     }

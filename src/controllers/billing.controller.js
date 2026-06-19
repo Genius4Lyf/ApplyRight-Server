@@ -1,7 +1,12 @@
+const crypto = require("crypto");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
+const Payment = require("../models/Payment");
 const adReward = require("../services/adReward.service");
 const admobSsv = require("../services/admobSsv.service");
+const flutterwave = require("../services/flutterwave.service");
+const subscription = require("../services/subscription.service");
+const { getItem, FREE_TASTE_SEC } = require("../config/catalog");
 const env = require("../config/env");
 const logger = require("../utils/logger");
 
@@ -325,5 +330,204 @@ exports.unlockTemplate = async (req, res) => {
   } catch (error) {
     console.error("Unlock Template Error:", error);
     res.status(500).json({ message: "Server Error" });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Flutterwave one-time payments (subscription tiers + minute top-ups)
+// ---------------------------------------------------------------------------
+
+// Shared helper: build the entitlement snapshot the client UI needs.
+const entitlementFor = (user) => {
+  const tier = subscription.getEffectiveTier(user);
+  const li = user.liveInterview || {};
+  const freeTasteRemaining = Math.max(0, FREE_TASTE_SEC - (li.freeTasteUsedSec || 0));
+  const dl = subscription.downloadStatus(user);
+  return {
+    tier,
+    plan: user.plan,
+    expiresAt: user.subscription?.expiresAt || null,
+    planId: user.subscription?.planId || null,
+    minutesRemaining: Math.floor((li.secondsRemaining || 0) / 60),
+    secondsRemaining: li.secondsRemaining || 0,
+    freeTasteRemainingSec: tier === "free" ? freeTasteRemaining : 0,
+    model: subscription.modelForUser(user),
+    downloads: {
+      unlimited: dl.unlimited,
+      passRemaining: dl.passRemaining,
+      freeAvailable: dl.freeAvailable,
+    },
+  };
+};
+
+// @desc    Start a Flutterwave checkout for a catalog item
+// @route   POST /api/billing/checkout
+// @access  Private
+exports.createCheckout = async (req, res) => {
+  try {
+    const { planId, currency } = req.body || {};
+    const item = getItem(planId);
+    if (!item) {
+      return res.status(400).json({ message: "Unknown plan", code: "UNKNOWN_PLAN" });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const selectedCurrency = currency === "USD" ? "USD" : "NGN";
+
+    // Our reference — also the create-idempotency key on the Payment row.
+    const txRef = `AR-${crypto.randomUUID()}`;
+    await Payment.create({
+      userId: user._id,
+      amountNgn: item.amountNgn, // from catalog, never the client
+      currency: selectedCurrency,
+      flwTxRef: txRef,
+      status: "pending",
+      purpose: item.purpose,
+      planId: item.id,
+    });
+
+    const redirectUrl = `${env.FRONTEND_URL || ""}/billing/return`;
+    const { link } = await flutterwave.buildCheckout({
+      user,
+      item,
+      txRef,
+      redirectUrl,
+      currency: selectedCurrency,
+    });
+
+    return res.status(200).json({ link, txRef });
+  } catch (error) {
+    if (error.code === "FLW_UNAVAILABLE") {
+      return res
+        .status(503)
+        .json({ message: "Payments are temporarily unavailable.", code: "FLW_UNAVAILABLE" });
+    }
+    console.error("createCheckout error:", error.message);
+    return res.status(500).json({ message: "Failed to start checkout" });
+  }
+};
+
+// Core verify+grant, shared by the webhook and the redirect fallback. Idempotent.
+// Returns { granted, payment } or throws on provider/verify failure.
+const settlePayment = async (payment, flwTransactionId) => {
+  // Already settled — short-circuit (idempotent).
+  if (payment.status === "successful" && payment.grantedAt) {
+    return { granted: false, payment };
+  }
+
+  const verify = await flutterwave.verifyTransaction(flwTransactionId);
+
+  const item = getItem(payment.planId);
+  const expectedAmount = payment.currency === "USD" ? item?.amountUsd : payment.amountNgn;
+  const expectedCurrency = payment.currency || "NGN";
+
+  const ok =
+    verify.status === "successful" &&
+    verify.currency === expectedCurrency &&
+    verify.txRef === payment.flwTxRef &&
+    Number(verify.amount) >= Number(expectedAmount);
+
+  if (!ok) {
+    payment.status = "failed";
+    payment.raw = verify.raw || {};
+    await payment.save();
+    logger.warn(
+      `Flutterwave settle rejected txRef=${payment.flwTxRef} status=${verify.status} amount=${verify.amount}`
+    );
+    return { granted: false, payment };
+  }
+
+  payment.flwTransactionId = verify.id;
+  payment.status = "successful";
+  payment.raw = verify.raw || {};
+  await payment.save();
+
+  const granted = await subscription.grantEntitlement(payment);
+  return { granted, payment };
+};
+
+// @desc    Flutterwave webhook (payment.completed)
+// @route   POST /api/billing/flutterwave-webhook
+// @access  Public (verified via verif-hash shared secret)
+//
+// Always 200 on business-logic rejections so Flutterwave stops retrying; 401 only
+// on a bad signature. Mirrors the AdMob SSV handler's response discipline.
+exports.flutterwaveWebhook = async (req, res) => {
+  try {
+    const sigHeader = req.headers["verif-hash"] || "";
+    const secret = env.FLW_SECRET_HASH || "";
+    // Constant-time compare; reject if not configured or mismatched.
+    const a = Buffer.from(String(sigHeader));
+    const b = Buffer.from(String(secret));
+    if (!secret || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      logger.warn("Flutterwave webhook: invalid verif-hash");
+      return res.status(401).send("invalid signature");
+    }
+
+    const data = req.body?.data || {};
+    const txRef = data.tx_ref;
+    const flwId = data.id;
+    if (!txRef || flwId == null) return res.status(200).send("ok");
+
+    const payment = await Payment.findOne({ flwTxRef: txRef });
+    if (!payment) return res.status(200).send("ok"); // not ours
+
+    await settlePayment(payment, flwId);
+    return res.status(200).send("ok");
+  } catch (error) {
+    logger.error(`flutterwaveWebhook error: ${error.message}`);
+    // 200 to avoid retries on transient internal errors; redirect fallback covers us.
+    return res.status(200).send("ok");
+  }
+};
+
+// @desc    Verify a payment on redirect-return (webhook fallback)
+// @route   POST /api/billing/verify
+// @access  Private
+exports.verifyPaymentRedirect = async (req, res) => {
+  try {
+    const { txRef, transactionId } = req.body || {};
+    if (!txRef) return res.status(400).json({ message: "Missing txRef" });
+
+    const payment = await Payment.findOne({ flwTxRef: txRef });
+    if (!payment) return res.status(404).json({ message: "Payment not found" });
+    if (String(payment.userId) !== String(req.user.id)) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    if (payment.status !== "successful") {
+      // transactionId from the redirect query lets us verify even if the webhook
+      // hasn't landed yet. Fall back to the stored id if the webhook beat us.
+      const flwId = transactionId || payment.flwTransactionId;
+      if (flwId != null) await settlePayment(payment, flwId);
+    }
+
+    const user = await User.findById(req.user.id);
+    return res.status(200).json({
+      status: payment.status,
+      entitlement: entitlementFor(user),
+    });
+  } catch (error) {
+    if (error.code === "FLW_UNAVAILABLE") {
+      return res.status(503).json({ message: "Could not verify payment yet.", code: "FLW_UNAVAILABLE" });
+    }
+    console.error("verifyPaymentRedirect error:", error.message);
+    return res.status(500).json({ message: "Failed to verify payment" });
+  }
+};
+
+// @desc    Current subscription/minute entitlement
+// @route   GET /api/billing/entitlement
+// @access  Private
+exports.getEntitlement = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    return res.status(200).json(entitlementFor(user));
+  } catch (error) {
+    console.error("getEntitlement error:", error.message);
+    return res.status(500).json({ message: "Server Error" });
   }
 };

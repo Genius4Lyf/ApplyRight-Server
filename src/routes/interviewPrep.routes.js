@@ -60,8 +60,9 @@ router.post(
   interviewPrepController.generateFollowUp
 );
 
-// Conversational Interview Mode: one live turn-based exchange. FREE during
-// testing; later add requireTier("plus") + a credit charge in the controller.
+// Conversational Interview Mode: one live turn-based (text) exchange. Runs on the
+// cheap Gemini text model and stays free for now (the metered, paid product is the
+// live VOICE interview below). Revisit if abuse shows up.
 router.post(
   "/:applicationId/conversation-turn",
   protect,
@@ -69,8 +70,9 @@ router.post(
 );
 
 // Realtime voice interview: mint a short-lived OpenAI ephemeral client secret;
-// the browser does the WebRTC handshake directly with OpenAI. FREE during
-// testing; later add requireTier("plus") + a credit charge in the controller.
+// the browser does the WebRTC handshake directly with OpenAI. Gated by live-
+// minute balance in the controller (free 5-min taste vs paid minutes), NOT by
+// requireTier — the Free tier must reach this to spend its taste.
 router.post(
   "/:applicationId/realtime-session",
   protect,
@@ -78,7 +80,7 @@ router.post(
 );
 
 // Assess a finished conversational interview from its transcript (AI grade,
-// grounded in CV + job). Persists as the prep's last session. FREE during testing.
+// grounded in CV + job). Also reconciles the reserved live-interview minutes.
 router.post(
   "/:applicationId/assess-interview",
   protect,

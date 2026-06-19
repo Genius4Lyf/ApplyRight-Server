@@ -19,6 +19,25 @@ const CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets";
 
 // Current (nested) session-config shape. The candidate's CV/job grounding rides
 // in `instructions`; server-side VAD lets the model take turns naturally.
+// Bound the per-turn input cost of a multi-turn voice session. Without this, every
+// turn re-sends the whole growing audio history as input; prompt caching discounts
+// the matching prefix but the bill still creeps up. A retention_ratio < 1.0 prunes
+// older turns more aggressively (keeping cache headroom), and post_instructions caps
+// the per-response input tokens (excluding the cached instruction block). Both are
+// env-tunable; defaults are conservative for a ~6-minute mock interview.
+const buildTruncation = () => {
+  const ratio = Number(process.env.REALTIME_RETENTION_RATIO);
+  const postInstr = Number(process.env.REALTIME_POST_INSTRUCTION_TOKENS);
+  return {
+    type: "retention_ratio",
+    retention_ratio: Number.isFinite(ratio) && ratio > 0 && ratio <= 1 ? ratio : 0.8,
+    token_limits: {
+      post_instructions:
+        Number.isFinite(postInstr) && postInstr > 0 ? Math.round(postInstr) : 4000,
+    },
+  };
+};
+
 const buildSessionConfig = (instructions, model, voice) => {
   // Optional voice playback speed (e.g. 1.1 for a snappier, less-draggy delivery).
   // Only included when REALTIME_SPEED is set, so we never risk a 400 by default.
@@ -31,6 +50,7 @@ const buildSessionConfig = (instructions, model, voice) => {
       type: "realtime",
       model,
       instructions,
+      truncation: buildTruncation(),
       audio: {
         input: {
           // Transcribe the candidate's speech so the client can collect a transcript
@@ -68,15 +88,30 @@ const buildLegacySessionConfig = (instructions, model, voice) => ({
 // OpenAI realtime voices we let users pick from. Keep in sync with the frontend.
 const ALLOWED_VOICES = ["marin", "cedar", "alloy", "sage", "verse", "shimmer", "ash"];
 
-const mintRealtimeSession = async ({ instructions, voice: requestedVoice }) => {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new RealtimeUnavailableError("OPENAI_API_KEY not configured");
+const mintRealtimeSession = async ({
+  instructions,
+  voice: requestedVoice,
+  model: modelOverride,
+  maxSessionSec: maxSessionSecOverride,
+}) => {
+  // Dedicated realtime key so live-interview spend is tracked on its own OpenAI
+  // account. Falls back to the shared key if a separate one isn't configured.
+  const key = process.env.OPENAI_REALTIME_API_KEY || process.env.OPENAI_API_KEY;
+  if (!key) throw new RealtimeUnavailableError("OPENAI_REALTIME_API_KEY / OPENAI_API_KEY not configured");
 
-  const model = process.env.REALTIME_MODEL || "gpt-realtime";
+  // Caller (the tier-aware controller) may override the model per user. Default to
+  // the mini speech2speech model: ~3-4x cheaper than full gpt-realtime with
+  // negligible quality loss for a practice mock. Premium (pro) tier passes the
+  // full "gpt-realtime" for its sharper interviewer.
+  const model = modelOverride || process.env.REALTIME_MODEL || "gpt-realtime-mini";
   const voice = ALLOWED_VOICES.includes(requestedVoice)
     ? requestedVoice
     : process.env.REALTIME_VOICE || "marin";
-  const maxSessionSec = Number(process.env.REALTIME_MAX_SESSION_SEC) || 360;
+  // Caller passes the per-user reserved seconds; fall back to the env cap.
+  const maxSessionSec =
+    Number(maxSessionSecOverride) > 0
+      ? Math.round(Number(maxSessionSecOverride))
+      : Number(process.env.REALTIME_MAX_SESSION_SEC) || 360;
 
   const headers = {
     Authorization: `Bearer ${key}`,

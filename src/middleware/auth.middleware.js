@@ -32,14 +32,12 @@ const admin = (req, res, next) => {
 
 const TIER_RANK = { free: 0, plus: 1, pro: 2 };
 
-// While premium features are free during testing, this gate is a no-op (flip
-// TIERS_FREE_DURING_TESTING to false in env to enforce). When enforced, it 403s
-// users whose tier is below `min` so a route can be locked with requireTier("plus").
+// Gate a route on the user's EFFECTIVE tier (honors subscription expiry — an
+// expired sub counts as free). 403s users below `min`, e.g. requireTier("plus").
 const requireTier = (min) => (req, res, next) => {
-  const freeDuringTesting = process.env.TIERS_FREE_DURING_TESTING !== "false";
-  if (freeDuringTesting) return next();
-
-  const userRank = TIER_RANK[req.user?.tier] ?? 0;
+  const { getEffectiveTier } = require("../services/subscription.service");
+  const eff = getEffectiveTier(req.user);
+  const userRank = TIER_RANK[eff] ?? 0;
   if (userRank >= (TIER_RANK[min] ?? 0)) return next();
 
   return res.status(403).json({

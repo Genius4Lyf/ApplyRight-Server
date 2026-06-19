@@ -248,6 +248,143 @@ exports.getDashboardStats = async (req, res, next) => {
   }
 };
 
+// @desc    Revenue & subscription analytics (real NGN, from the Payment model)
+// @route   GET /api/v1/admin/revenue
+// @access  Private/Admin
+//
+// Kept separate from getDashboardStats: that one aggregates Transaction.amount as
+// CREDITS. Money lives in Payment, so revenue reads from there and never pollutes
+// the credit charts.
+exports.getRevenueStats = async (req, res) => {
+  try {
+    const Payment = require("../models/Payment");
+    const { CATALOG, EST_COST_NGN_PER_MIN } = require("../config/catalog");
+
+    const period = req.query.period || "monthly"; // 'monthly' | 'daily'
+    const year = parseInt(req.query.year) || new Date().getFullYear();
+    const month = parseInt(req.query.month) || new Date().getMonth() + 1;
+
+    let dateGroupFormat;
+    let startDate;
+    let endDate;
+    if (period === "daily") {
+      startDate = new Date(year, month - 1, 1);
+      endDate = new Date(year, month, 0, 23, 59, 59, 999);
+      dateGroupFormat = "%Y-%m-%d";
+    } else {
+      startDate = new Date(year, 0, 1);
+      endDate = new Date(year, 11, 31, 23, 59, 59, 999);
+      dateGroupFormat = "%Y-%m";
+    }
+
+    // Only successful payments count as revenue. Use grantedAt where present so
+    // the chart reflects when money was actually recognized.
+    const successMatch = { status: "successful" };
+
+    // Revenue over time
+    const revenueOverTimeRaw = await Payment.aggregate([
+      { $match: { ...successMatch, createdAt: { $gte: startDate, $lte: endDate } } },
+      {
+        $group: {
+          _id: { $dateToString: { format: dateGroupFormat, date: "$createdAt" } },
+          revenue: { $sum: "$amountNgn" },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+    const revenueOverTime = revenueOverTimeRaw.map((r) => ({
+      name: r._id,
+      revenue: r.revenue,
+      count: r.count,
+    }));
+
+    // Revenue by plan (all-time successful)
+    const revenueByPlanRaw = await Payment.aggregate([
+      { $match: successMatch },
+      { $group: { _id: "$planId", revenue: { $sum: "$amountNgn" }, count: { $sum: 1 } } },
+      { $sort: { revenue: -1 } },
+    ]);
+    const revenueByPlan = revenueByPlanRaw.map((r) => ({
+      planId: r._id,
+      label: CATALOG[r._id]?.label || r._id,
+      revenue: r.revenue,
+      count: r.count,
+    }));
+
+    // Totals
+    const totalRevenue = revenueByPlan.reduce((s, r) => s + r.revenue, 0);
+    const totalTopupRevenue = revenueByPlan
+      .filter((r) => CATALOG[r.planId]?.purpose === "topup")
+      .reduce((s, r) => s + r.revenue, 0);
+
+    // Active subscriptions by tier (not expired)
+    const now = new Date();
+    const activeSubsRaw = await User.aggregate([
+      { $match: { "subscription.expiresAt": { $gt: now } } },
+      { $group: { _id: "$subscription.tier", count: { $sum: 1 } } },
+    ]);
+    const activeSubsByTier = activeSubsRaw.reduce(
+      (acc, r) => ({ ...acc, [r._id || "free"]: r.count }),
+      {}
+    );
+    const activeSubsTotal = activeSubsRaw.reduce((s, r) => s + r.count, 0);
+
+    // New conversions in the selected window (first-time or any successful sub purchase)
+    const newConversions = await Payment.countDocuments({
+      status: "successful",
+      purpose: "subscription",
+      createdAt: { $gte: startDate, $lte: endDate },
+    });
+
+    // Live-interview minutes consumed in the window (from usage transactions we tag
+    // "Live interview Ns (...)"). Sum the reported seconds for an est. OpenAI cost.
+    const liveTxns = await Transaction.find({
+      type: "usage",
+      description: { $regex: /^Live interview \d+s/ },
+      createdAt: { $gte: startDate, $lte: endDate },
+    }).select("description");
+    let liveSecondsFull = 0;
+    let liveSecondsMini = 0;
+    for (const t of liveTxns) {
+      const m = /^Live interview (\d+)s \((\w+)\)/.exec(t.description || "");
+      if (!m) continue;
+      const sec = Number(m[1]) || 0;
+      if (m[2] === "pro") liveSecondsFull += sec;
+      else liveSecondsMini += sec;
+    }
+    const liveMinutesConsumed = Math.round((liveSecondsFull + liveSecondsMini) / 60);
+    const estOpenAiCostNgn = Math.round(
+      (liveSecondsMini / 60) * (EST_COST_NGN_PER_MIN.mini || 0) +
+        (liveSecondsFull / 60) * (EST_COST_NGN_PER_MIN.full || 0)
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        period,
+        totalRevenue,
+        totalTopupRevenue,
+        revenueOverTime,
+        revenueByPlan,
+        activeSubsByTier,
+        activeSubsTotal,
+        newConversions,
+        liveMinutesConsumed,
+        estOpenAiCostNgn,
+        // Crude gross-margin guardrail for the window's recognized revenue.
+        estGrossMarginPct:
+          totalRevenue > 0
+            ? Math.round(((totalRevenue - estOpenAiCostNgn) / totalRevenue) * 100)
+            : null,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
 // @desc    Get all users
 // @route   GET /api/v1/admin/users
 // @access  Private/Admin

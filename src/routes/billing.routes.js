@@ -7,6 +7,15 @@ const billingController = require("../controllers/billing.controller");
 // any auth middleware. Rate-limiter exemption handled in src/app.js.
 router.get("/admob-ssv", billingController.admobSsv);
 
+// Public Flutterwave webhook (verified via verif-hash). Before any auth.
+// Rate-limiter exemption handled in src/app.js.
+router.post("/flutterwave-webhook", billingController.flutterwaveWebhook);
+
+// Flutterwave one-time payments
+router.post("/checkout", protect, billingController.createCheckout);
+router.post("/verify", protect, billingController.verifyPaymentRedirect);
+router.get("/entitlement", protect, billingController.getEntitlement);
+
 router.get("/balance", protect, billingController.getBalance);
 router.post("/add", protect, billingController.addCredits);
 router.post("/usage", protect, billingController.deductCredits);

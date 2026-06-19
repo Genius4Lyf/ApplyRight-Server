@@ -8,6 +8,7 @@ const extractionService = require("../services/extraction.service");
 const aiService = require("../services/ai.service");
 const cvOptimizer = require("../services/cvOptimizer.service");
 const metricCapture = require("../services/metricCapture.service");
+const subscription = require("../services/subscription.service");
 
 // Credit costs
 const COSTS = {
@@ -45,6 +46,8 @@ const COSTS = {
  * Does NOT deduct — call deductCredits only after AI work succeeds.
  */
 const checkCredits = (user, cost) => {
+  // Active paid tiers get unlimited text prep — never blocked on balance.
+  if (subscription.isPaidActive(user)) return;
   if (user.credits < cost) {
     const err = new Error("Insufficient credits");
     err.code = "INSUFFICIENT_CREDITS";
@@ -57,10 +60,11 @@ const checkCredits = (user, cost) => {
 /**
  * Helper: Deduct credits atomically and return the new balance.
  * Call this only after AI work has succeeded so users are never charged
- * for failed or unavailable AI calls.
+ * for failed or unavailable AI calls. Active paid tiers are not charged.
  */
 const deductCredits = async (user, cost) => {
   checkCredits(user, cost);
+  if (subscription.isPaidActive(user)) return user.credits; // unlimited, no charge
   user.credits -= cost;
   await user.updateOne({ credits: user.credits });
   return user.credits;

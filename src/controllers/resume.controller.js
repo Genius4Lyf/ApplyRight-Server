@@ -1,5 +1,6 @@
 const { parseResume } = require("../services/resumeParser.service");
 const aiService = require("../services/ai.service");
+const subscription = require("../services/subscription.service");
 const Resume = require("../models/Resume");
 const DraftCV = require("../models/DraftCV");
 const Transaction = require("../models/Transaction");
@@ -236,9 +237,11 @@ const uploadAndCreateDraft = async (req, res) => {
 
   const user = req.user;
   const filePath = req.file.path;
+  // Active paid tiers get unlimited text prep (no upload charge).
+  const paid = subscription.isPaidActive(user);
 
   // 1. Check credits BEFORE doing any expensive work
-  if (user.credits < UPLOAD_CREATE_COST) {
+  if (!paid && user.credits < UPLOAD_CREATE_COST) {
     cleanupUploadedFile(filePath);
     return res.status(403).json({
       message: "Insufficient credits",
@@ -272,9 +275,11 @@ const uploadAndCreateDraft = async (req, res) => {
       targetJob: null,
     });
 
-    // 5. Deduct credits only after all AI work succeeds
-    user.credits -= UPLOAD_CREATE_COST;
-    await user.updateOne({ credits: user.credits });
+    // 5. Deduct credits only after all AI work succeeds (skipped for paid tiers)
+    if (!paid) {
+      user.credits -= UPLOAD_CREATE_COST;
+      await user.updateOne({ credits: user.credits });
+    }
 
     // 6. Save Resume record
     const resume = await Resume.create({
@@ -341,12 +346,14 @@ const uploadAndCreateDraft = async (req, res) => {
     // 9. Compute ATS readiness score
     const atsReadiness = computeATSReadiness(extractedData, draft);
 
-    // 10. Record transaction for audit trail
+    // 10. Record transaction for audit trail (amount 0 when covered by a paid tier)
     await Transaction.create({
       userId: user._id,
-      amount: -UPLOAD_CREATE_COST,
+      amount: paid ? 0 : -UPLOAD_CREATE_COST,
       type: "usage",
-      description: "Create CV from uploaded resume",
+      description: paid
+        ? "Create CV from uploaded resume (covered by plan)"
+        : "Create CV from uploaded resume",
       status: "completed",
     });
 

@@ -901,13 +901,15 @@ exports.gradeAnswer = async (req, res) => {
     const User = require("../models/User");
     const Transaction = require("../models/Transaction");
     const aiService = require("../services/ai.service");
+    const subscription = require("../services/subscription.service");
     const { buildInterviewCandidateContext } = require("./analysis.controller");
 
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const GRADE_COST = 1;
-    if (user.credits < GRADE_COST) {
+    // Active paid tiers get unlimited text prep — skip the balance check for them.
+    if (!subscription.isPaidActive(user) && user.credits < GRADE_COST) {
       return res.status(403).json({
         message: "Insufficient credits to grade response. Watch an ad to earn credits.",
         code: "INSUFFICIENT_CREDITS",
@@ -951,30 +953,19 @@ exports.gradeAnswer = async (req, res) => {
       { userId: req.user.id, applicationId: application._id }
     );
 
-    // Deduct credit atomically — guard on the balance inside the update so two
-    // concurrent AI actions can't both read the old balance and overspend (or
-    // drive credits negative). modifiedCount === 0 means the balance dropped
-    // below the cost between the pre-check and here.
-    const decResult = await User.updateOne(
-      { _id: user._id, credits: { $gte: GRADE_COST } },
-      { $inc: { credits: -GRADE_COST } }
-    );
-    if (decResult.modifiedCount === 0) {
+    // Charge (or skip for paid). chargeOrSkip does the atomic balance-guarded
+    // deduction + Transaction record, or — for an active paid tier — records a
+    // zero-cost usage Transaction and skips the charge.
+    const charge = await subscription.chargeOrSkip(user, GRADE_COST, {
+      type: "usage",
+      description: `AI grade mock answer: "${questionText.substring(0, 40)}..."`,
+    });
+    if (charge.insufficient) {
       return res.status(403).json({
         message: "Insufficient credits to grade response. Watch an ad to earn credits.",
         code: "INSUFFICIENT_CREDITS",
       });
     }
-    user.credits -= GRADE_COST;
-
-    // Record Transaction
-    await Transaction.create({
-      userId: user._id,
-      amount: -GRADE_COST,
-      type: "usage",
-      description: `AI grade mock answer: "${questionText.substring(0, 40)}..."`,
-      status: "completed",
-    });
 
     // Normalize the AI score to a clamped integer before it drives the dial,
     // the readiness thresholds, and the response.
@@ -1045,12 +1036,14 @@ exports.generateFollowUp = async (req, res) => {
     const User = require("../models/User");
     const Transaction = require("../models/Transaction");
     const aiService = require("../services/ai.service");
+    const subscription = require("../services/subscription.service");
 
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const FOLLOWUP_COST = 1;
-    if (user.credits < FOLLOWUP_COST) {
+    // Active paid tiers get unlimited text prep — skip the balance check.
+    if (!subscription.isPaidActive(user) && user.credits < FOLLOWUP_COST) {
       return res.status(403).json({
         message: "Insufficient credits for a follow-up. Watch an ad to earn credits.",
         code: "INSUFFICIENT_CREDITS",
@@ -1073,26 +1066,17 @@ exports.generateFollowUp = async (req, res) => {
       return res.status(200).json({ followUp: "", remainingCredits: user.credits });
     }
 
-    // Atomic, balance-guarded deduction (same pattern as gradeAnswer).
-    const decResult = await User.updateOne(
-      { _id: user._id, credits: { $gte: FOLLOWUP_COST } },
-      { $inc: { credits: -FOLLOWUP_COST } }
-    );
-    if (decResult.modifiedCount === 0) {
+    // Charge (or skip for an active paid tier).
+    const charge = await subscription.chargeOrSkip(user, FOLLOWUP_COST, {
+      type: "usage",
+      description: "AI interview follow-up question",
+    });
+    if (charge.insufficient) {
       return res.status(403).json({
         message: "Insufficient credits for a follow-up. Watch an ad to earn credits.",
         code: "INSUFFICIENT_CREDITS",
       });
     }
-    user.credits -= FOLLOWUP_COST;
-
-    await Transaction.create({
-      userId: user._id,
-      amount: -FOLLOWUP_COST,
-      type: "usage",
-      description: "AI interview follow-up question",
-      status: "completed",
-    });
 
     res.status(200).json({ followUp: aiResult.followUp, remainingCredits: user.credits });
   } catch (error) {
@@ -1219,13 +1203,77 @@ exports.createRealtimeSession = async (req, res) => {
       seniorityNote: fa.seniorityAnalysis?.match === false ? fa.seniorityAnalysis?.feedback || "" : "",
     };
 
-    const maxSessionSec = Number(process.env.REALTIME_MAX_SESSION_SEC) || 360;
+    const planCap = Number(process.env.REALTIME_MAX_SESSION_SEC) || 360;
+
+    // ---- Live-minute gate + reservation (reserve-then-reconcile) ----
+    // Audio is WebRTC-direct to OpenAI, so we can't observe duration live. Reserve
+    // up front against the user's balance, hard-cap the minted session to the
+    // reservation, then refund the unused remainder when the client reports the
+    // real duration in assessInterview. This bounds OpenAI cost no matter what the
+    // client later claims.
+    const subscription = require("../services/subscription.service");
+    const { FREE_TASTE_SEC } = require("../config/catalog");
+    const UserModel = require("../models/User");
+
+    const user = await UserModel.findById(req.user.id);
+    const eff = subscription.getEffectiveTier(user);
+    const li = user.liveInterview || {};
+    const avail =
+      eff === "free"
+        ? Math.max(0, FREE_TASTE_SEC - (li.freeTasteUsedSec || 0))
+        : Math.max(0, li.secondsRemaining || 0);
+
+    if (avail <= 0) {
+      return res.status(402).json({
+        message:
+          eff === "free"
+            ? "You've used your free interview minutes. Upgrade to keep practicing."
+            : "You're out of interview minutes. Upgrade or grab a top-up.",
+        code: "NO_MINUTES",
+      });
+    }
+
+    const reservedSec = Math.min(planCap, avail);
+    const reservationId = require("crypto").randomUUID();
+    const startedAt = new Date();
+
+    // Atomic reservation: the guard ensures two concurrent sessions can't both
+    // spend the same balance (mirrors the credit-deduction $gte guard pattern).
+    let reserved;
+    if (eff === "free") {
+      reserved = await UserModel.updateOne(
+        { _id: user._id, "liveInterview.freeTasteUsedSec": { $lte: FREE_TASTE_SEC - reservedSec } },
+        {
+          $inc: { "liveInterview.freeTasteUsedSec": reservedSec },
+          $set: {
+            "liveInterview.activeReservation": { reservationId, reservedSec, startedAt, mode: "free" },
+          },
+        }
+      );
+    } else {
+      reserved = await UserModel.updateOne(
+        { _id: user._id, "liveInterview.secondsRemaining": { $gte: reservedSec } },
+        {
+          $inc: { "liveInterview.secondsRemaining": -reservedSec },
+          $set: {
+            "liveInterview.activeReservation": { reservationId, reservedSec, startedAt, mode: "paid" },
+          },
+        }
+      );
+    }
+    if (reserved.modifiedCount === 0) {
+      return res.status(402).json({
+        message: "Could not reserve interview minutes. Please try again.",
+        code: "NO_MINUTES",
+      });
+    }
+
     const ALLOWED_STYLES = ["balanced", "screening", "technical", "behavioral"];
     const instructions = aiService.buildRealtimeInstructions(
       candidateContext,
       jobMeta,
       Array.isArray(questionSpine) ? questionSpine : [],
-      Math.round(maxSessionSec / 60),
+      Math.round(reservedSec / 60), // tell the interviewer the real time budget
       {
         timeOfDay: typeof timeOfDay === "string" ? timeOfDay : "",
         candidateName: typeof candidateName === "string" ? candidateName.slice(0, 40) : "",
@@ -1234,12 +1282,30 @@ exports.createRealtimeSession = async (req, res) => {
       }
     );
 
-    // NOTE: when realtime becomes a paid Plus-tier feature, charge here — mirror
-    // generateFollowUp: atomic, balance-guarded User.updateOne($inc) + Transaction.
-    // Free during testing.
+    // Premium (pro) tier gets the sharper full model; others the cheaper mini.
+    const model = subscription.modelForUser(user);
 
-    // voice is validated against the allowlist inside the service.
-    const session = await realtime.mintRealtimeSession({ instructions, voice });
+    // voice is validated against the allowlist inside the service. If minting
+    // fails after we reserved, release the reservation so minutes aren't lost.
+    let session;
+    try {
+      session = await realtime.mintRealtimeSession({
+        instructions,
+        voice,
+        model,
+        maxSessionSec: reservedSec,
+      });
+    } catch (mintErr) {
+      const refund =
+        eff === "free"
+          ? { $inc: { "liveInterview.freeTasteUsedSec": -reservedSec } }
+          : { $inc: { "liveInterview.secondsRemaining": reservedSec } };
+      await UserModel.updateOne(
+        { _id: user._id, "liveInterview.activeReservation.reservationId": reservationId },
+        { ...refund, $set: { "liveInterview.activeReservation": {} } }
+      ).catch(() => {});
+      throw mintErr;
+    }
 
     res.status(200).json({
       clientSecret: session.clientSecret,
@@ -1247,6 +1313,9 @@ exports.createRealtimeSession = async (req, res) => {
       model: session.model,
       voice: session.voice,
       maxSessionSec: session.maxSessionSec,
+      // Echoed back to assess-interview so we reconcile the right reservation.
+      reservationId,
+      reservedSec,
       // Grace window (seconds) the client adds AFTER the main time runs out, so
       // the interviewer can verbally wrap up + run the closing instead of a hard cut.
       graceSec: Number(process.env.REALTIME_GRACE_SEC) || 90,
@@ -1273,17 +1342,53 @@ exports.createRealtimeSession = async (req, res) => {
  * Replaces the old self-rating for conversational/realtime runs. Content-only
  * (a transcript can't judge vocal delivery).
  *
- * FREE during testing — no credits charged (future Plus charge site here).
+ * Also reconciles the live-interview minutes reserved by createRealtimeSession:
+ * the unused remainder of the reservation is refunded based on the client-reported
+ * (and clamped) duration. Done first, so minutes reconcile even if AI grading fails.
  */
 exports.assessInterview = async (req, res) => {
   try {
     const { applicationId: id } = req.params;
-    const { transcript, durationSec, plannedSec } = req.body || {};
+    const { transcript, durationSec, plannedSec, reservationId } = req.body || {};
 
     const application = await Application.findById(id).populate("jobId");
     if (!application) return res.status(404).json({ message: "Application not found" });
     if (application.userId.toString() !== req.user.id) {
       return res.status(401).json({ message: "User not authorized" });
+    }
+
+    // ---- Reconcile the reserved minutes (reserve-then-reconcile) ----
+    // Only when this came from a realtime session (reservationId present). The
+    // updateOne is guarded on the reservation id, so a double-submit can't refund
+    // twice. usedSec is clamped to what we reserved — the trust boundary: the
+    // client can only reduce the bill, never exceed the reservation.
+    if (reservationId) {
+      const UserModel = require("../models/User");
+      const u = await UserModel.findById(req.user.id);
+      const ar = u?.liveInterview?.activeReservation;
+      if (ar && ar.reservationId === reservationId) {
+        const reservedSec = ar.reservedSec || 0;
+        const usedSec = Math.max(0, Math.min(Math.round(Number(durationSec) || 0), reservedSec));
+        const refund = reservedSec - usedSec;
+        const refundInc =
+          ar.mode === "free"
+            ? { $inc: { "liveInterview.freeTasteUsedSec": -refund } }
+            : { $inc: { "liveInterview.secondsRemaining": refund } };
+        const recon = await UserModel.updateOne(
+          { _id: u._id, "liveInterview.activeReservation.reservationId": reservationId },
+          { ...refundInc, $set: { "liveInterview.activeReservation": {} } }
+        );
+        if (recon.modifiedCount === 1) {
+          const eff = require("../services/subscription.service").getEffectiveTier(u);
+          await Transaction.create({
+            userId: u._id,
+            amount: 0, // money/credits don't move here — usage record for analytics
+            type: "usage",
+            description: `Live interview ${usedSec}s (${eff})`,
+            status: "completed",
+          });
+        }
+      }
     }
 
     const aiService = require("../services/ai.service");
@@ -1397,11 +1502,13 @@ exports.gradeStoryAnswer = async (req, res) => {
     const User = require("../models/User");
     const Transaction = require("../models/Transaction");
     const aiService = require("../services/ai.service");
+    const subscription = require("../services/subscription.service");
 
     const GRADE_COST = 1;
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    if (user.credits < GRADE_COST) {
+    // Active paid tiers get unlimited text prep — skip the balance check.
+    if (!subscription.isPaidActive(user) && user.credits < GRADE_COST) {
       return res.status(403).json({
         message: "Insufficient credits to grade response. Watch an ad to earn credits.",
         code: "INSUFFICIENT_CREDITS",
@@ -1422,26 +1529,17 @@ exports.gradeStoryAnswer = async (req, res) => {
       userId: req.user.id,
     });
 
-    // Charge only after the AI call succeeds; guard the balance atomically.
-    const decResult = await User.updateOne(
-      { _id: user._id, credits: { $gte: GRADE_COST } },
-      { $inc: { credits: -GRADE_COST } }
-    );
-    if (decResult.modifiedCount === 0) {
+    // Charge only after the AI call succeeds (or skip for an active paid tier).
+    const charge = await subscription.chargeOrSkip(user, GRADE_COST, {
+      type: "usage",
+      description: `AI grade story: "${(story.title || prompt).substring(0, 40)}..."`,
+    });
+    if (charge.insufficient) {
       return res.status(403).json({
         message: "Insufficient credits to grade response. Watch an ad to earn credits.",
         code: "INSUFFICIENT_CREDITS",
       });
     }
-    user.credits -= GRADE_COST;
-
-    await Transaction.create({
-      userId: user._id,
-      amount: -GRADE_COST,
-      type: "usage",
-      description: `AI grade story: "${(story.title || prompt).substring(0, 40)}..."`,
-      status: "completed",
-    });
 
     const score = Math.max(0, Math.min(100, Math.round(Number(aiResult.score) || 0)));
     let autoConfidence = "needs_work";
