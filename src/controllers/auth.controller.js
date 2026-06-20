@@ -22,7 +22,7 @@ const generateToken = (id) => {
 // @access  Public
 const registerUser = async (req, res, next) => {
   try {
-    const { email, password, phone, referralCode } = req.body;
+    const { email, password, phone, referralCode, accountType } = req.body;
 
     if (!email || !password || !phone) {
       return res.status(400).json({ message: "Please add all fields" });
@@ -98,11 +98,16 @@ const registerUser = async (req, res, next) => {
       referrer = await User.findOne({ referralCode: referralCode.toUpperCase() });
     }
 
+    // Self-serve CV-agent signup. Only "agent" is honored here; "admin" still
+    // requires the secret-key route. Defaults to a normal job-seeker account.
+    const role = accountType === "agent" ? "agent" : "user";
+
     // Create user
     const user = await User.create({
       email,
       phone,
       password: hashedPassword,
+      role,
       referralCode: newReferralCode,
       credits: initialCredits,
       referredBy: referrer ? referrer._id : null,
@@ -132,6 +137,7 @@ const registerUser = async (req, res, next) => {
         _id: user.id,
         email: user.email,
         phone: user.phone,
+        role: user.role,
         firstName: user.firstName,
         lastName: user.lastName,
         referralCode: user.referralCode,
@@ -265,6 +271,7 @@ const loginUser = async (req, res, next) => {
         _id: user.id,
         email: user.email,
         phone: user.phone,
+        role: user.role,
         firstName: user.firstName,
         lastName: user.lastName,
         credits: user.credits,

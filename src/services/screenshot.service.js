@@ -28,50 +28,26 @@ const pct = (part, total) => {
   return Math.round((part / total) * 100);
 };
 
-const sourceLabel = (value) => {
-  if (!value) return "Direct";
-  if (value === "adzuna") return "Adzuna";
-  if (value === "jobberman") return "Jobberman";
-  return value
-    .split(/[-_\s]+/)
-    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
-    .join(" ");
-};
-
+// Job-search analytics are not rendered on the platform, so reports are built
+// entirely from CV / platform metrics (users, resumes, analyses, downloads, applications).
 const getReportData = (stats = {}) => {
-  const searches = 0; // not live yet
-  const clicks = stats.jobMetrics?.engagement?.totalClicks || 0;
-  const saves = stats.jobMetrics?.engagement?.totalSaved || 0;
-  const tailors = 0; // not live yet
+  const users = stats.totalUsers || 0;
+  const resumes = stats.totalResumes || 0;
   const applications = stats.totalApplications || 0;
   const downloads = stats.featureUsage?.cvGeneration?.downloads || 0;
   const optimizations = stats.featureUsage?.cvGeneration?.optimizations || 0;
-  const topKeyword = stats.jobMetrics?.topKeywords?.[0]?._id || "career growth";
-  const topLocation = stats.jobMetrics?.topLocations?.[0]?._id || "Nigeria";
-  const sources = (stats.jobMetrics?.searchesBySource || []).slice(0, 3).map((s) => ({
-    label: sourceLabel(s._id),
-    count: s.count || 0,
-    share: pct(s.count || 0, searches),
-  }));
 
   return {
-    users: stats.totalUsers || 0,
-    resumes: stats.totalResumes || 0,
+    users,
+    resumes,
     credits: stats.totalCredits || 0,
     applications,
-    searches,
-    clicks,
-    saves,
-    tailors,
     downloads,
     optimizations,
     newUsers: stats.newUsersLastMonth || 0,
-    topKeyword,
-    topLocation,
-    searchToApplyRate: pct(applications, searches),
-    clickToSaveRate: pct(saves, clicks),
-    tailorRate: pct(tailors, searches),
-    sources,
+    analysisRate: pct(optimizations, resumes),
+    downloadRate: pct(downloads, resumes),
+    applyRate: pct(applications, resumes),
   };
 };
 
@@ -81,9 +57,9 @@ const ICONS = {
   sparkles: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg>`,
   arrowUpRight: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>`,
   badgeCheck: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"/><path d="m9 12 2 2 4-4"/></svg>`,
-  search: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`,
-  mouseClick: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4.1 12 6"/><path d="M5.1 8 7 10"/><path d="m6 15-1.3 1.3a2.83 2.83 0 1 0 4 4L10 19"/><path d="m12 12-8 8"/><path d="M18 11.8 14 10"/><path d="M15 2v2"/><path d="M2 15h2"/></svg>`,
-  briefcase: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12h.01"/><path d="M16 6V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><path d="M22 13a18.15 18.15 0 0 1-20 0"/><rect width="20" height="14" x="2" y="6" rx="2"/></svg>`,
+  fileText: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>`,
+  download: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>`,
+  clipboardCheck: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg>`,
 };
 
 /* ── Shared HTML wrapper ── */
@@ -107,18 +83,21 @@ const wrapHtml = (bodyContent, bgColor = "#020617") => `
 /* ── Template: Social Proof (Trust Pulse) ── */
 
 const buildSocialProof = (r, ctx) => {
-  const barColors = ["#67e8f9", "#a5b4fc", "#c4b5fd"];
-  const sources = r.sources.length ? r.sources : [{ label: "Organic", count: 0, share: 0 }];
   const statCards = [
     { value: `${fmt(r.resumes)}+`, label: "Resumes created", accent: true },
-    { value: `${fmt(r.searches)}+`, label: "Jobs searched", accent: false },
     { value: `${fmt(r.optimizations)}+`, label: "Analyses run", accent: false },
-    { value: `${fmt(r.tailors)}+`, label: "CVs tailored", accent: false },
+    { value: `${fmt(r.downloads)}+`, label: "CVs downloaded", accent: false },
+    { value: `${fmt(r.applications)}+`, label: "Applications", accent: false },
   ];
   const rates = [
-    { icon: "search", label: "Search to apply", value: `${r.searchToApplyRate}%` },
-    { icon: "mouseClick", label: "Click to save", value: `${r.clickToSaveRate}%` },
-    { icon: "briefcase", label: "Tailor rate", value: `${r.tailorRate}%` },
+    { icon: "fileText", label: "Resumes analyzed", value: `${r.analysisRate}%` },
+    { icon: "download", label: "Download rate", value: `${r.downloadRate}%` },
+    { icon: "clipboardCheck", label: "Apply rate", value: `${r.applyRate}%` },
+  ];
+  const momentum = [
+    { label: "Resumes built", value: r.resumes, bar: 100, color: "#67e8f9" },
+    { label: "Analyses run", value: r.optimizations, bar: r.resumes ? Math.max(pct(r.optimizations, r.resumes), 18) : 18, color: "#a5b4fc" },
+    { label: "CVs downloaded", value: r.downloads, bar: r.resumes ? Math.max(pct(r.downloads, r.resumes), 12) : 12, color: "#c4b5fd" },
   ];
 
   return wrapHtml(`
@@ -151,7 +130,7 @@ const buildSocialProof = (r, ctx) => {
         <div>
           <div style="margin-bottom:16px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.3em;color:rgba(165,243,252,0.75);">Trusted by professionals</div>
           <div style="font-size:72px;font-weight:800;line-height:0.95;letter-spacing:-0.03em;color:#fff;">${fmt(r.users)}+ professionals building careers with AI.</div>
-          <div style="margin-top:16px;max-width:520px;font-size:20px;line-height:1.4;color:#cbd5e1;">Smart resumes, ATS scoring, and job search — one faster workflow.</div>
+          <div style="margin-top:16px;max-width:520px;font-size:20px;line-height:1.4;color:#cbd5e1;">Smart resumes, ATS scoring, and AI analysis — one faster workflow.</div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
           ${statCards.map((c) => `
@@ -182,22 +161,22 @@ const buildSocialProof = (r, ctx) => {
               </div>`).join("")}
           </div>
         </div>
-        <!-- Channel card -->
+        <!-- Momentum card -->
         <div style="flex:1;border-radius:16px;border:1px solid rgba(255,255,255,0.1);background:rgba(2,6,23,0.4);padding:20px;">
-          <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.2em;color:#94a3b8;">Top search channels</div>
+          <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.2em;color:#94a3b8;">Platform momentum</div>
           <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">
-            ${sources.map((s, i) => `
+            ${momentum.map((m) => `
               <div>
-                <div style="display:flex;justify-content:space-between;font-size:14px;color:#cbd5e1;margin-bottom:6px;"><span>${s.label}</span><span>${s.share}%</span></div>
+                <div style="display:flex;justify-content:space-between;font-size:14px;color:#cbd5e1;margin-bottom:6px;"><span>${m.label}</span><span>${fmt(m.value)}</span></div>
                 <div style="height:10px;border-radius:999px;background:rgba(255,255,255,0.06);overflow:hidden;">
-                  <div style="height:100%;border-radius:999px;background:${barColors[i] || barColors[2]};width:${Math.max(s.share, s.count ? 18 : 10)}%;"></div>
+                  <div style="height:100%;border-radius:999px;background:${m.color};width:${Math.min(m.bar, 100)}%;"></div>
                 </div>
               </div>`).join("")}
           </div>
           <div style="margin-top:16px;border-radius:12px;border:1px solid rgba(103,232,249,0.15);background:rgba(103,232,249,0.1);padding:12px 16px;color:#cffafe;">
-            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.25em;color:rgba(165,243,252,0.8);">Top keyword</div>
-            <div style="margin-top:6px;font-size:24px;font-weight:700;letter-spacing:-0.025em;">${r.topKeyword}</div>
-            <div style="margin-top:4px;font-size:12px;color:rgba(207,250,254,0.7);">Strongest interest from ${r.topLocation}</div>
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.25em;color:rgba(165,243,252,0.8);">Applications tracked</div>
+            <div style="margin-top:6px;font-size:24px;font-weight:700;letter-spacing:-0.025em;">${fmt(r.applications)}</div>
+            <div style="margin-top:4px;font-size:12px;color:rgba(207,250,254,0.7);">Across the ApplyRight community</div>
           </div>
         </div>
       </div>
@@ -206,7 +185,7 @@ const buildSocialProof = (r, ctx) => {
     <!-- Footer -->
     <div style="display:flex;align-items:center;justify-content:space-between;border-radius:16px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.06);padding:16px 24px;">
       <div style="display:flex;gap:10px;">
-        ${["AI Resume Builder", "ATS Scoring", "Job Tracking"].map((t) => `<span style="border-radius:999px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.1);padding:6px 14px;font-size:12px;font-weight:500;color:rgba(255,255,255,0.7);">${t}</span>`).join("")}
+        ${["AI Resume Builder", "ATS Scoring", "Interview Prep"].map((t) => `<span style="border-radius:999px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.1);padding:6px 14px;font-size:12px;font-weight:500;color:rgba(255,255,255,0.7);">${t}</span>`).join("")}
       </div>
       <div style="display:flex;align-items:center;gap:8px;border-radius:999px;background:#fff;padding:10px 16px;font-size:14px;font-weight:600;color:#020617;">
         applyright.com.ng <span class="icon">${ICONS.arrowUpRight}</span>
@@ -221,19 +200,19 @@ const buildSocialProof = (r, ctx) => {
 const buildGrowthStory = (r, ctx) => {
   const statCards = [
     { value: `${fmt(r.resumes)}+`, label: "Resumes built" },
-    { value: `${fmt(r.searches)}+`, label: "Jobs searched" },
+    { value: `${fmt(r.optimizations)}+`, label: "Analyses run" },
+    { value: `${fmt(r.downloads)}+`, label: "CVs downloaded" },
     { value: `${fmt(r.applications)}+`, label: "Applications" },
-    { value: `${fmt(r.tailors)}+`, label: "CVs tailored" },
   ];
   const bars = [
     { label: "AI resumes built", value: `${fmt(r.resumes)}+`, bar: 100, color: "#020617" },
-    { label: "Applications analyzed", value: `${fmt(r.optimizations)}+`, bar: r.resumes ? Math.max(pct(r.optimizations, r.resumes), 24) : 36, color: "#6366f1" },
-    { label: "CVs tailored", value: `${fmt(r.tailors)}+`, bar: r.resumes ? Math.max(pct(r.tailors, r.resumes), 20) : 28, color: "#06b6d4" },
-    { label: "Job searches", value: `${fmt(r.searches)}+`, bar: r.resumes ? Math.max(pct(r.searches, r.resumes), 30) : 50, color: "#7c3aed" },
+    { label: "Analyses run", value: `${fmt(r.optimizations)}+`, bar: r.resumes ? Math.max(pct(r.optimizations, r.resumes), 24) : 36, color: "#6366f1" },
+    { label: "CVs downloaded", value: `${fmt(r.downloads)}+`, bar: r.resumes ? Math.max(pct(r.downloads, r.resumes), 20) : 28, color: "#06b6d4" },
+    { label: "Applications", value: `${fmt(r.applications)}+`, bar: r.resumes ? Math.max(pct(r.applications, r.resumes), 18) : 30, color: "#7c3aed" },
   ];
   const bottomStats = [
-    { value: `${fmt(r.searchToApplyRate)}%`, label: "search to apply" },
-    { value: `${fmt(r.tailorRate)}%`, label: "search to tailor" },
+    { value: `${fmt(r.applyRate)}%`, label: "apply rate" },
+    { value: `${fmt(r.downloadRate)}%`, label: "download rate" },
     { value: `${fmt(r.credits)}+`, label: "credits held" },
   ];
 
@@ -265,7 +244,7 @@ const buildGrowthStory = (r, ctx) => {
         <div>
           <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.32em;color:rgba(79,70,229,0.75);">Community milestone</div>
           <div style="margin-top:12px;font-size:72px;font-weight:600;line-height:0.92;letter-spacing:-0.04em;color:#020617;">${fmt(r.users)}+ professionals building careers with AI.</div>
-          <div style="margin-top:16px;max-width:480px;font-size:20px;line-height:1.4;color:#475569;">AI resume generation, job discovery, and application support — one clean workflow.</div>
+          <div style="margin-top:16px;max-width:480px;font-size:20px;line-height:1.4;color:#475569;">AI resume generation, ATS scoring, and application support — one clean workflow.</div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
           ${statCards.map((c) => `
@@ -299,18 +278,18 @@ const buildGrowthStory = (r, ctx) => {
                 <span style="font-weight:600;color:#020617;">${b.value}</span>
               </div>
               <div style="height:12px;border-radius:999px;background:#f1f5f9;overflow:hidden;">
-                <div style="height:100%;border-radius:999px;background:${b.color};width:${b.bar}%;"></div>
+                <div style="height:100%;border-radius:999px;background:${b.color};width:${Math.min(b.bar, 100)}%;"></div>
               </div>
             </div>`).join("")}
         </div>
         <div style="margin-top:20px;display:flex;flex:1;flex-direction:column;gap:12px;border-top:1px solid #e2e8f0;padding-top:20px;">
           <div style="flex:1;border-radius:20px;background:#020617;padding:20px;color:#fff;">
-            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.28em;color:#94a3b8;">Top keyword</div>
-            <div style="margin-top:8px;font-size:28px;font-weight:600;letter-spacing:-0.025em;">${r.topKeyword}</div>
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.28em;color:#94a3b8;">Applications tracked</div>
+            <div style="margin-top:8px;font-size:28px;font-weight:600;letter-spacing:-0.025em;">${fmt(r.applications)}+</div>
           </div>
           <div style="flex:1;border-radius:20px;background:#eef2ff;padding:20px;color:#020617;">
-            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.28em;color:rgba(79,70,229,0.7);">Top location</div>
-            <div style="margin-top:8px;font-size:28px;font-weight:600;letter-spacing:-0.025em;">${r.topLocation}</div>
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.28em;color:rgba(79,70,229,0.7);">Credits in play</div>
+            <div style="margin-top:8px;font-size:28px;font-weight:600;letter-spacing:-0.025em;">${fmt(r.credits)}+</div>
           </div>
         </div>
       </div>
@@ -319,7 +298,7 @@ const buildGrowthStory = (r, ctx) => {
     <!-- Footer -->
     <div style="display:flex;align-items:center;justify-content:space-between;border-radius:16px;border:1px solid rgba(226,232,240,0.6);background:rgba(255,255,255,0.6);padding:16px 24px;">
       <div style="display:flex;gap:10px;">
-        ${["AI Resume Builder", "ATS Scoring", "Job Tracking", "CV Downloads"].map((t) => `<span style="border-radius:999px;border:1px solid #e2e8f0;background:#fff;padding:6px 14px;font-size:12px;font-weight:500;color:#475569;">${t}</span>`).join("")}
+        ${["AI Resume Builder", "ATS Scoring", "Interview Prep", "CV Downloads"].map((t) => `<span style="border-radius:999px;border:1px solid #e2e8f0;background:#fff;padding:6px 14px;font-size:12px;font-weight:500;color:#475569;">${t}</span>`).join("")}
       </div>
       <div style="display:flex;align-items:center;gap:8px;border-radius:999px;background:#4f46e5;padding:10px 16px;font-size:14px;font-weight:600;color:#fff;">
         applyright.com.ng <span class="icon">${ICONS.arrowUpRight}</span>
@@ -332,22 +311,24 @@ const buildGrowthStory = (r, ctx) => {
 /* ── Template: Impact Report ── */
 
 const buildImpactReport = (r, ctx) => {
+  const funnelWidth = (value, floor) =>
+    r.users ? Math.min(Math.max(pct(value, r.users), floor), 100) : floor;
   const steps = [
-    { label: "Search", value: r.searches, width: 100, color: "linear-gradient(90deg,#818cf8,#6366f1)" },
-    { label: "Click", value: r.clicks, width: r.searches ? Math.max(pct(r.clicks, r.searches), 24) : 60, color: "linear-gradient(90deg,#67e8f9,#06b6d4)" },
-    { label: "Save", value: r.saves, width: r.searches ? Math.max(pct(r.saves, r.searches), 20) : 48, color: "linear-gradient(90deg,#c4b5fd,#8b5cf6)" },
-    { label: "Tailor", value: r.tailors, width: r.searches ? Math.max(pct(r.tailors, r.searches), 18) : 42, color: "linear-gradient(90deg,#f9a8d4,#ec4899)" },
-    { label: "Apply", value: r.applications, width: r.searches ? Math.max(pct(r.applications, r.searches), 16) : 36, color: "linear-gradient(90deg,#fde68a,#f59e0b)" },
+    { label: "Sign-ups", value: r.users, width: 100, color: "linear-gradient(90deg,#818cf8,#6366f1)" },
+    { label: "Resumes", value: r.resumes, width: funnelWidth(r.resumes, 60), color: "linear-gradient(90deg,#67e8f9,#06b6d4)" },
+    { label: "Analyses", value: r.optimizations, width: funnelWidth(r.optimizations, 48), color: "linear-gradient(90deg,#c4b5fd,#8b5cf6)" },
+    { label: "Downloads", value: r.downloads, width: funnelWidth(r.downloads, 42), color: "linear-gradient(90deg,#f9a8d4,#ec4899)" },
+    { label: "Applications", value: r.applications, width: funnelWidth(r.applications, 36), color: "linear-gradient(90deg,#fde68a,#f59e0b)" },
   ];
   const leftStats = [
     { value: `${fmt(r.users)}+`, label: "Users" },
     { value: `${fmt(r.resumes)}+`, label: "Resumes" },
-    { value: `${fmt(r.tailors)}+`, label: "CVs tailored" },
+    { value: `${fmt(r.downloads)}+`, label: "Downloads" },
     { value: `${fmt(r.optimizations)}+`, label: "Analyses" },
   ];
   const topCards = [
     { label: "Total users", value: `${fmt(r.users)}+` },
-    { label: "Searches", value: `${fmt(r.searches)}+` },
+    { label: "Resumes", value: `${fmt(r.resumes)}+` },
     { label: "Applications", value: `${fmt(r.applications)}+` },
   ];
   return wrapHtml(`
@@ -370,7 +351,7 @@ const buildImpactReport = (r, ctx) => {
     </div>
     <div>
       <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.3em;color:rgba(224,231,255,0.75);">The journey</div>
-      <div style="margin-top:16px;font-size:56px;font-weight:600;line-height:0.94;letter-spacing:-0.04em;">How job seekers move from search to application.</div>
+      <div style="margin-top:16px;font-size:56px;font-weight:600;line-height:0.94;letter-spacing:-0.04em;">How professionals build and ship standout CVs.</div>
       <div style="margin-top:16px;max-width:280px;font-size:18px;line-height:1.45;color:rgba(224,231,255,0.8);">Real data from real professionals using ApplyRight to land their next role.</div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
@@ -382,13 +363,13 @@ const buildImpactReport = (r, ctx) => {
     </div>
     <div style="border-radius:24px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.1);padding:20px;">
       <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.3em;color:rgba(224,231,255,0.7);">Snapshot</div>
-      <div style="margin-top:12px;font-size:40px;font-weight:600;line-height:1;">${r.searchToApplyRate}%</div>
-      <div style="margin-top:6px;font-size:14px;color:rgba(224,231,255,0.8);">search-to-apply conversion</div>
+      <div style="margin-top:12px;font-size:40px;font-weight:600;line-height:1;">${r.applyRate}%</div>
+      <div style="margin-top:6px;font-size:14px;color:rgba(224,231,255,0.8);">applications per resume</div>
       <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">
         ${[
           { label: "New users", value: `+${fmt(r.newUsers)}` },
-          { label: "Top keyword", value: r.topKeyword },
-          { label: "Best market", value: r.topLocation },
+          { label: "Resumes built", value: fmt(r.resumes) },
+          { label: "CVs downloaded", value: fmt(r.downloads) },
         ].map((item) => `
           <div style="display:flex;align-items:center;justify-content:space-between;border-radius:12px;border:1px solid rgba(255,255,255,0.1);background:rgba(2,6,23,0.2);padding:10px 12px;">
             <span style="font-size:12px;color:rgba(224,231,255,0.7);">${item.label}</span>
@@ -423,7 +404,7 @@ const buildImpactReport = (r, ctx) => {
       <div style="display:flex;align-items:center;justify-content:space-between;">
         <div>
           <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.32em;color:#64748b;">Funnel performance</div>
-          <div style="margin-top:6px;font-size:24px;font-weight:600;letter-spacing:-0.025em;">From search to hired</div>
+          <div style="margin-top:6px;font-size:24px;font-weight:600;letter-spacing:-0.025em;">From sign-up to application</div>
         </div>
         <div style="border-radius:999px;background:rgba(103,232,249,0.1);padding:6px 12px;font-size:12px;font-weight:600;color:#67e8f9;">${ctx.periodLabel}</div>
       </div>
@@ -455,10 +436,10 @@ const buildImpactReport = (r, ctx) => {
         ${[
           { num: "1", text: "Create your free account" },
           { num: "2", text: "Build a professional CV" },
-          { num: "3", text: "Tailor CV to any job" },
-          { num: "4", text: "Get ATS score & tips" },
-          { num: "5", text: "Search & apply to jobs" },
-          { num: "6", text: "Track all applications" },
+          { num: "3", text: "Get an instant ATS score" },
+          { num: "4", text: "Improve it with AI suggestions" },
+          { num: "5", text: "Download your polished CV" },
+          { num: "6", text: "Track your applications" },
         ].map((s) => `
           <div style="display:flex;align-items:center;gap:10px;border-radius:14px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);padding:10px 12px;">
             <div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0;">${s.num}</div>

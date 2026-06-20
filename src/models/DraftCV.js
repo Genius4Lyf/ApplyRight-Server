@@ -17,6 +17,14 @@ const draftCVSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    // Set when a CV agent files this CV under one of their clients (Client model).
+    // null for normal job-seeker CVs, so existing CVs keep working unchanged.
+    clientId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Client",
+      default: null,
+      index: true,
+    },
     title: {
       type: String,
       default: "Untitled CV",

@@ -18,6 +18,7 @@ jest.mock("../src/middleware/auth.middleware", () => ({
     next();
   },
   admin: (req, res, next) => next(),
+  agent: (req, res, next) => next(),
 }));
 
 // Mock SettingsService to bypass DB checks in maintenance middleware

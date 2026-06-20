@@ -30,6 +30,15 @@ const admin = (req, res, next) => {
   }
 };
 
+// Gate a route to CV-agent accounts only (the agent dashboard / client folders).
+const agent = (req, res, next) => {
+  if (req.user && req.user.role === "agent") {
+    next();
+  } else {
+    res.status(401).json({ message: "Not authorized as an agent" });
+  }
+};
+
 const TIER_RANK = { free: 0, plus: 1, pro: 2 };
 
 // Gate a route on the user's EFFECTIVE tier (honors subscription expiry — an
@@ -47,4 +56,4 @@ const requireTier = (min) => (req, res, next) => {
   });
 };
 
-module.exports = { protect, admin, requireTier, TIER_RANK };
+module.exports = { protect, admin, agent, requireTier, TIER_RANK };

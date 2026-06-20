@@ -1,4 +1,5 @@
 const DraftCV = require("../models/DraftCV");
+const { isPaidActive } = require("../services/subscription.service");
 
 // @desc    Save/Update a Draft CV
 // @route   POST /api/cv/save
@@ -26,6 +27,16 @@ const saveDraft = async (req, res) => {
 
       draft = await DraftCV.findByIdAndUpdate(_id, data, { new: true });
       return res.json(draft);
+    }
+
+    // CV agents must hold an active (agent) subscription to create new CVs —
+    // the agent product is a paid CV factory. Editing existing CVs is unaffected
+    // (only the create branch is gated). Job seekers are never gated here.
+    if (req.user.role === "agent" && !isPaidActive(req.user)) {
+      return res.status(402).json({
+        message: "An active agent plan is required to create CVs.",
+        code: "NEED_AGENT_SUB",
+      });
     }
 
     // Else create new

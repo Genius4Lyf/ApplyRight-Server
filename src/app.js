@@ -126,6 +126,7 @@ app.use("/api/billing", require("./routes/billing.routes"));
 app.use("/api/feedback", require("./routes/feedback.routes"));
 app.use("/api/ai-feedback", require("./routes/aiFeedback.routes"));
 app.use("/api/interview-prep", require("./routes/interviewPrep.routes"));
+app.use("/api/agent", require("./routes/agent.routes"));
 app.use("/api/admin", require("./routes/admin.routes"));
 app.use("/api/system", require("./routes/system.routes"));
 

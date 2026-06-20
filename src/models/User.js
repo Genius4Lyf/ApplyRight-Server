@@ -71,9 +71,12 @@ const userSchema = new mongoose.Schema(
       freeDownloadUsed: { type: Boolean, default: false },
       passRemaining: { type: Number, default: 0 },
     },
+    // "agent" = a CV-writing agent (builds CVs for paying clients). Agents get a
+    // CV-only dashboard (no interview/job-search/credits UI); see Client model and
+    // agent.routes. Set self-serve at signup via accountType: "agent".
     role: {
       type: String,
-      enum: ["user", "admin"],
+      enum: ["user", "admin", "agent"],
       default: "user",
     },
     credits: {

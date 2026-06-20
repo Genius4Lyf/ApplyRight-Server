@@ -78,6 +78,31 @@ describe("Auth API (Mocked DB)", () => {
 
       expect(res.statusCode).toEqual(400);
     });
+
+    it("should default to a job-seeker account (role 'user')", async () => {
+      await request(app).post("/api/auth/register").send({
+        email: "seeker@example.com",
+        password: "Password123",
+        phone: "+12025550111",
+      });
+
+      expect(User.create).toHaveBeenCalledWith(expect.objectContaining({ role: "user" }));
+    });
+
+    it("should create a CV-agent account when accountType is 'agent'", async () => {
+      User.create.mockResolvedValue({ ...mockUser, role: "agent" });
+
+      const res = await request(app).post("/api/auth/register").send({
+        email: "agent@example.com",
+        password: "Password123",
+        phone: "+12025550122",
+        accountType: "agent",
+      });
+
+      expect(res.statusCode).toEqual(201);
+      expect(User.create).toHaveBeenCalledWith(expect.objectContaining({ role: "agent" }));
+      expect(res.body).toHaveProperty("role", "agent");
+    });
   });
 
   describe("POST /api/auth/login", () => {
