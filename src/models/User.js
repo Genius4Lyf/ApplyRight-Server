@@ -71,6 +71,12 @@ const userSchema = new mongoose.Schema(
       freeDownloadUsed: { type: Boolean, default: false },
       passRemaining: { type: Number, default: 0 },
     },
+    // ApplyRight ATS suggestions. Free users get ONE lifetime taste of the real
+    // (JD-keyword-targeted) suggestions on a single work-history role; afterwards
+    // the ATS column is a blurred upsell teaser. Claimed atomically on generate.
+    atsSuggestions: {
+      freeTasteUsed: { type: Boolean, default: false },
+    },
     // "agent" = a CV-writing agent (builds CVs for paying clients). Agents get a
     // CV-only dashboard (no interview/job-search/credits UI); see Client model and
     // agent.routes. Set self-serve at signup via accountType: "agent".

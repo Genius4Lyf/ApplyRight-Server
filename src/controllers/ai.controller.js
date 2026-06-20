@@ -83,26 +83,83 @@ const generateApplication = async (req, res) => {
   }
 };
 
-// Of the AI's work-history bullets, free users receive only this many real
-// suggestions; the rest are redacted to placeholders so the real text never
-// leaves the server. Mirrored on the frontend (History.jsx → derived from the
-// lockedCount the API returns). Keep this in sync with that expectation.
-const FREE_VISIBLE_BULLETS = 4;
+// ── Two-tier work-history suggestions (free "AI" vs paid "ApplyRight ATS") ──
+// Free users: 6 generic (JD-blind) suggestions on the left, pick up to 3, max 3
+// bullets per role. The right "ApplyRight ATS" column is a BLURRED TEASER only —
+// no ATS AI call is made for free users, so free clicks stay cheap. Paid users:
+// 10 real ATS suggestions (JD-keyword targeted, truth-grounded), pick all.
+const FREE_AI_SUGGESTIONS = 6; // generic suggestions shown to free users
+const FREE_SELECT_LIMIT = 3; // free users can apply at most this many
+const FREE_BULLET_LIMIT = 3; // free users limited to this many bullets per role
+const PAID_ATS_SUGGESTIONS = 10; // ATS suggestions generated for paid users
 
-// Plausible-looking filler shown (blurred) in the locked slots as an upsell
-// teaser. The real generated text is withheld from free users entirely.
+// Plausible-looking filler shown (blurred) in the locked ApplyRight ATS column
+// as an upsell teaser. No real ATS text is generated for free users at all.
 const LOCKED_BULLET_PLACEHOLDERS = [
   "Spearheaded a cross-functional effort that streamlined daily operations and improved turnaround time.",
   "Partnered with stakeholders to close process gaps and deliver measurable quality improvements.",
   "Owned end-to-end delivery of a key workstream while balancing competing priorities under deadline.",
   "Introduced practical improvements that reduced rework and lifted overall team output.",
+  "Drove measurable gains by aligning daily execution with the priorities hiring teams screen for.",
+  "Translated hands-on results into the exact terminology recruiters search for in this role.",
 ];
+
+// Resolve the target-job keyword set for ATS suggestions, reusing existing
+// infrastructure and never charging here (extraction is charged in
+// getJobKeywords): 1) the AI keywords already cached on the draft, else
+// 2) free deterministic dictionary extraction from the JD text.
+const resolveJobKeywords = async ({ draftId, userId, targetJob }) => {
+  if (draftId && draftId !== "new") {
+    try {
+      const draft = await require("../models/DraftCV")
+        .findById(draftId)
+        .select("userId targetJob");
+      if (
+        draft &&
+        draft.userId.toString() === userId &&
+        Array.isArray(draft.targetJob?.aiKeywords) &&
+        draft.targetJob.aiKeywords.length > 0
+      ) {
+        return draft.targetJob.aiKeywords;
+      }
+    } catch (_) {
+      /* fall through to deterministic extraction */
+    }
+  }
+
+  const desc = (typeof targetJob === "string" ? targetJob : targetJob?.description || "").trim();
+  if (desc) {
+    const { skills = [] } = require("../services/extraction.service").extractRequirements(desc);
+    return skills.map((s) => ({
+      name: s.name,
+      importance: s.importance >= 4 ? "must_have" : "nice_to_have",
+    }));
+  }
+  return [];
+};
+
+// Generate the real, JD-keyword-targeted ApplyRight ATS suggestions for one role.
+// Shared by paid generation (generateBullets) and the free user's explicit
+// one-time reveal (revealAtsTaste). `real` is false when the AI service returned
+// its "Error generating…" sentinel (it does that instead of throwing).
+const generateAtsSuggestions = async ({ role, context, targetJob, draftId, userId }) => {
+  const aiService = require("../services/ai.service");
+  const keywords = await resolveJobKeywords({ draftId, userId, targetJob });
+  const ats = await aiService.generateBulletPoints(role, context, "experience", targetJob, {
+    mode: "ats",
+    keywords,
+    count: PAID_ATS_SUGGESTIONS,
+  });
+  const list = Array.isArray(ats) ? ats : [];
+  const real = list.length > 0 && !/^Error generating/i.test(list[0] || "");
+  return { ats: list, keywords, real };
+};
 
 // @desc    Generate bullet points or summary
 // @route   POST /api/ai/generate-bullets
 // @access  Private
 const generateBullets = async (req, res) => {
-  const { role, context, type, targetJob } = req.body;
+  const { role, context, type, targetJob, draftId } = req.body;
 
   // Basic validation
   if (!role && !context) {
@@ -110,36 +167,122 @@ const generateBullets = async (req, res) => {
   }
 
   try {
-    const suggestions = await require("../services/ai.service").generateBulletPoints(
-      role,
-      context,
-      type,
-      targetJob
-    );
+    const aiService = require("../services/ai.service");
 
-    // Plan gate (work-history bullets only): free users get the first 4 real
-    // bullets; any extras are replaced with locked placeholders BEFORE the
-    // response leaves the server, so the withheld suggestions can't be read via
-    // dev tools. Paid users get everything.
-    let out = suggestions;
-    let lockedCount = 0;
-    if (type === "experience" && Array.isArray(suggestions) && suggestions.length > FREE_VISIBLE_BULLETS) {
-      const user = await require("../models/User").findById(req.user.id).select("plan subscription");
-      // Honor subscription expiry: an expired paid plan locks extras again.
-      if (!subscription.isPaidActive(user)) {
-        lockedCount = suggestions.length - FREE_VISIBLE_BULLETS;
-        const locked = Array.from(
-          { length: lockedCount },
-          (_, i) => LOCKED_BULLET_PLACEHOLDERS[i % LOCKED_BULLET_PLACEHOLDERS.length]
-        );
-        out = [...suggestions.slice(0, FREE_VISIBLE_BULLETS), ...locked];
-      }
+    // Summary & Project keep the original simple contract (no two-tier UI).
+    if (type !== "experience") {
+      const suggestions = await aiService.generateBulletPoints(role, context, type, targetJob);
+      return res.json({ suggestions, lockedCount: 0 });
     }
 
-    res.json({ suggestions: out, lockedCount });
+    // ── Work history: two-tier (AI vs ApplyRight ATS) ──
+    const User = require("../models/User");
+    const user = await User.findById(req.user.id).select("plan subscription atsSuggestions");
+    const isPaid = subscription.isPaidActive(user); // honors subscription expiry
+
+    // Paid: full ApplyRight ATS, unlimited selection.
+    if (isPaid) {
+      const { ats, keywords } = await generateAtsSuggestions({
+        role,
+        context,
+        targetJob,
+        draftId,
+        userId: req.user.id,
+      });
+      return res.json({
+        isPaid: true,
+        ats: { title: "ApplyRight ATS", suggestions: ats, locked: false },
+        limits: { selectMax: null, bulletMax: null },
+        keywordCount: keywords.length,
+      });
+    }
+
+    // Free user. The generic "AI suggestions" are always real (cheap). The
+    // ApplyRight ATS column starts as a BLURRED teaser — the REAL suggestions are
+    // generated only when the user explicitly clicks "Reveal" (POST
+    // /ai/reveal-ats-taste), which is also where the one-time taste is consumed.
+    // `atsTasteAvailable` tells the client to show the "Reveal" button (still
+    // available) vs the upgrade CTA (already used).
+    const ai = await aiService.generateBulletPoints(role, context, "experience", "");
+    const aiTrimmed = (Array.isArray(ai) ? ai : []).slice(0, FREE_AI_SUGGESTIONS);
+    const atsTeaser = Array.from(
+      { length: PAID_ATS_SUGGESTIONS },
+      (_, i) => LOCKED_BULLET_PLACEHOLDERS[i % LOCKED_BULLET_PLACEHOLDERS.length]
+    );
+    return res.json({
+      isPaid: false,
+      atsTasteAvailable: !user?.atsSuggestions?.freeTasteUsed,
+      ai: { title: "AI suggestions", suggestions: aiTrimmed },
+      ats: { title: "ApplyRight ATS", suggestions: atsTeaser, locked: true },
+      limits: { selectMax: FREE_SELECT_LIMIT, bulletMax: FREE_BULLET_LIMIT },
+    });
   } catch (error) {
     console.error("Bullet Gen Error:", error);
     res.status(500).json({ message: "Failed to generate suggestions" });
+  }
+};
+
+// @desc    Reveal the free user's ONE-TIME real ApplyRight ATS suggestions for a
+//          role. Triggered explicitly by the user (a "Reveal" button) so they
+//          choose to spend their trial. The taste is claimed ATOMICALLY before
+//          generating, so the real ATS runs at most once per user, ever; the
+//          claim is refunded if generation fails so they can retry.
+// @route   POST /api/ai/reveal-ats-taste
+// @access  Private
+const revealAtsTaste = async (req, res) => {
+  const { role, context, targetJob, draftId } = req.body;
+
+  if (!role && !context) {
+    return res.status(400).json({ message: "Please provide role/title and some context." });
+  }
+
+  try {
+    const User = require("../models/User");
+
+    // Claim the one-time taste BEFORE spending any tokens.
+    const claimed = await User.findOneAndUpdate(
+      { _id: req.user.id, "atsSuggestions.freeTasteUsed": { $ne: true } },
+      { $set: { "atsSuggestions.freeTasteUsed": true } }
+    );
+    if (!claimed) {
+      return res
+        .status(409)
+        .json({ code: "TASTE_USED", message: "Your free ApplyRight ATS preview has been used." });
+    }
+
+    try {
+      const { ats, real } = await generateAtsSuggestions({
+        role,
+        context,
+        targetJob,
+        draftId,
+        userId: req.user.id,
+      });
+      if (!real) {
+        // Refund so the user can try again.
+        await User.updateOne(
+          { _id: req.user.id },
+          { $set: { "atsSuggestions.freeTasteUsed": false } }
+        );
+        return res
+          .status(502)
+          .json({ message: "Couldn't generate ATS suggestions. Please try again." });
+      }
+      return res.json({
+        taste: true,
+        ats: { title: "ApplyRight ATS", suggestions: ats, locked: false },
+        limits: { selectMax: FREE_SELECT_LIMIT, bulletMax: FREE_BULLET_LIMIT },
+      });
+    } catch (err) {
+      await User.updateOne(
+        { _id: req.user.id },
+        { $set: { "atsSuggestions.freeTasteUsed": false } }
+      );
+      throw err;
+    }
+  } catch (error) {
+    console.error("Reveal ATS Taste Error:", error);
+    return res.status(500).json({ message: "Failed to reveal ATS suggestions" });
   }
 };
 
@@ -378,6 +521,7 @@ const getKeywordCoverage = async (req, res) => {
 module.exports = {
   generateApplication,
   generateBullets,
+  revealAtsTaste,
   getJobKeywords,
   getKeywordCoverage,
   generateSkills,

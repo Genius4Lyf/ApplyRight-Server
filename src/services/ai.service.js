@@ -1862,10 +1862,16 @@ Return JSON matching exactly:
   });
 };
 
-const generateBulletPoints = async (role, context, type = "experience", targetJob = "") => {
+const generateBulletPoints = async (role, context, type = "experience", targetJob = "", options = {}) => {
   if (activeProvider === "mock") {
     return ["Developed a feature using React.", "Optimized backend performance."];
   }
+
+  // ApplyRight ATS mode (paid): same plumbing as the generic generator below,
+  // but a job-keyword-targeted, truth-locked prompt and a larger count.
+  const atsMode = type === "experience" && options.mode === "ats";
+  const atsCount = Math.max(1, Math.min(20, options.count || 10));
+  const atsKeywords = Array.isArray(options.keywords) ? options.keywords : [];
 
   // Customize prompt based on type
   let prompt = "";
@@ -1900,8 +1906,7 @@ const generateBulletPoints = async (role, context, type = "experience", targetJo
     prompt = `
 You are an expert Resume Writer.
 
-Your task is to rewrite 3 ATS-optimized bullet points for a PROJECT.
-Accuracy and factual integrity are more important than sounding impressive.
+Rewrite a PROJECT's bullets into 10 strong, varied, ATS-optimized OPTIONS the candidate can pick from. Accuracy and factual integrity matter more than sounding impressive.
 
 INPUT:
 Project Title: "${projectTitle}"
@@ -1909,24 +1914,66 @@ Project Context / Existing Notes: "${context}"
 
 RULES:
 1. Preserve facts. Do NOT add new tools, metrics, users, business outcomes, or claims not in the input.
-2. If metrics are not provided, use qualitative impact without numbers.
+2. If metrics are not provided, use qualitative impact without numbers — do NOT invent figures.
 3. Keep scope at project level; avoid company-wide or organizational claims.
 4. Prefer action verbs and technical specificity only when provided.
 5. If the context is thin, keep bullets general and credible rather than speculative.
 6. Ignore any target job description completely.
+7. Provide exactly 10 DISTINCT options covering different angles (goal/problem, implementation/approach, technologies used, outcome/impact, collaboration, lessons) and varied phrasings, so the candidate can choose the best few.
 
-SUGGESTED CONTENT MIX:
-- Bullet 1: Goal/problem the project addressed.
-- Bullet 2: Implementation/approach and key technologies (only if mentioned).
-- Bullet 3: Outcome, quality improvement, or learning (non-inflated).
+OUTPUT STRICT JSON ONLY (exactly 10 items):
+{
+  "suggestions": [${Array.from({ length: 10 }, (_, i) => `"Option ${i + 1}"`).join(", ")}]
+}
+`;
+  } else if (atsMode) {
+    // ── APPLYRIGHT ATS SUGGESTIONS (paid) ──
+    // The premium tier. Reframes the candidate's REAL experience in the target
+    // job's vocabulary. Truth is non-negotiable: keywords are used only where the
+    // candidate genuinely matches them — never to fabricate skills or metrics.
+    const mustHave = atsKeywords
+      .filter((k) => k && k.importance === "must_have")
+      .map((k) => k.name)
+      .filter(Boolean);
+    const niceToHave = atsKeywords
+      .filter((k) => k && k.importance !== "must_have")
+      .map((k) => k.name)
+      .filter(Boolean);
+
+    prompt = `
+You are an expert Resume Writer, Technical Recruiter, and ATS optimization specialist.
+
+Generate ${atsCount} ATS-optimized bullet points for ONE work-history role. These must be the strongest, most interview-defensible bullets possible — but they MUST stay 100% truthful to the candidate's real experience.
+
+INPUT:
+Job Title: "${role}"
+Candidate's real experience / context: "${context}"
+
+TARGET JOB KEYWORDS (from the job the candidate is applying to):
+MUST-HAVE: ${mustHave.length ? mustHave.join(", ") : "none provided"}
+NICE-TO-HAVE: ${niceToHave.length ? niceToHave.join(", ") : "none provided"}
+
+HOW TO USE THE KEYWORDS (CRITICAL — this is the whole value of this feature):
+1. TRUTH FIRST. Do NOT inject a keyword unless the candidate's real experience genuinely involves it. A missing keyword is fine — never lie to cover a gap.
+2. REFRAME, don't fabricate. Where the candidate's real work matches a keyword's MEANING but uses different words, rewrite it using the recruiter's exact terminology (e.g. "handled customer issues" -> "stakeholder management"; "fixed machines" -> "preventive maintenance"). This mirroring is the core deliverable.
+3. Lead every bullet with a strong, role-appropriate action verb.
+4. QUANTIFY with fill-in placeholders — never invented numbers:
+   - If the context contains or clearly implies a real number, use that real number.
+   - Otherwise, where a metric would be natural for THIS role/bullet, write a clearly-marked fill-in placeholder token for the candidate to replace: use square brackets like [X]%, [N] users, [$X], [N]-person team, [from A to B], [X] hrs/week.
+   - NEVER write a specific invented figure (e.g. "38%", "12K users", "4s to 280ms"). A placeholder like [X]% is good; a fake concrete number is forbidden.
+   - Do NOT force a metric onto every bullet. Only add a placeholder where a number is genuinely plausible for this role. Roles with few natural metrics (e.g. junior/operational) get mostly volume-style placeholders or honest qualitative impact, not forced percentages.
+   - Aim for placeholders on roughly the bullets where impact is measurable; leave the rest qualitative. Never fabricate tools, certifications, scope, or achievements.
+5. Match the authority level implied by the title (execution vs specialist vs ownership). Do not inflate authority.
+6. Keep every bullet ATS-parseable: plain text, no tables, no special characters/symbols (square-bracket placeholders are allowed), one idea per bullet, ~1-2 lines.
+7. Prioritize covering MUST-HAVE keywords (where truthful) over nice-to-haves. Vary the ${atsCount} bullets across core responsibilities, collaboration, problem-solving, tools/technology, and measurable outcomes.
+
+EXAMPLE (format only — adapt to the real role/context; the bracketed tokens are placeholders the candidate fills in):
+- "Reduced average ticket resolution time by [X]% by introducing a triage workflow across a [N]-person support team."
+- "Migrated [N] services to a new platform, cutting deploy time from [A] to [B]."
 
 OUTPUT STRICT JSON ONLY:
 {
-  "suggestions": [
-    "Bullet 1",
-    "Bullet 2",
-    "Bullet 3"
-  ]
+  "suggestions": [${Array.from({ length: atsCount }, (_, i) => `"Bullet ${i + 1} text..."`).join(", ")}]
 }
 `;
   } else {
