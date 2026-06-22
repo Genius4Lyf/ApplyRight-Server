@@ -7,10 +7,13 @@ const applicationSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    // Optional: the standard ApplyRight flow always links an uploaded Resume,
+    // but the standalone "Interview Me" flow can link a built DraftCV instead
+    // (via draftCVId). Every consumer of resumeId already guards for its
+    // absence and falls back to draftCVId, so leaving this unset is safe.
     resumeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Resume",
-      required: true,
     },
     jobId: {
       type: mongoose.Schema.Types.ObjectId,

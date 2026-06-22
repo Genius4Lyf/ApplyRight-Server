@@ -981,6 +981,129 @@ const generateApplicationInterview = async (req, res) => {
 };
 
 /**
+ * POST /analysis/direct-interview
+ *
+ * Standalone "Interview Me" flow — a paid-only shortcut that skips the full
+ * ApplyRight analysis (no fit score, no CV optimization, no cover letter) and
+ * takes the user straight from CV + job description to a live interview.
+ *
+ * Reuses all the existing interview machinery: it find-or-creates a lightweight
+ * Application (no fitAnalysis, no analyze charge), generates the grounded
+ * question set, and returns the applicationId so the client can drop into the
+ * existing mock-interview UI. The live-minute metering still happens later in
+ * createRealtimeSession.
+ *
+ * The CV may be an uploaded Resume (resumeId) OR a built CV (draftCVId). The
+ * job description is REQUIRED. Paid-tier gating is enforced by requireTier in
+ * the route, so there is no per-action credit charge here.
+ */
+const startDirectInterview = async (req, res) => {
+  try {
+    const { jobId, resumeId, draftCVId } = req.body;
+    const userId = req.user._id;
+
+    if (!jobId) {
+      return res
+        .status(400)
+        .json({ message: "A job description is required to start an interview." });
+    }
+    if (!resumeId && !draftCVId) {
+      return res.status(400).json({ message: "Select a saved CV or upload a resume first." });
+    }
+
+    // Job must exist and carry a usable description to interview against.
+    const job = await Job.findById(jobId);
+    if (!job) {
+      return res.status(404).json({ message: "Job not found." });
+    }
+    if (!job.description || !job.description.trim()) {
+      return res
+        .status(400)
+        .json({ message: "This job has no description to interview against." });
+    }
+
+    // Verify CV ownership before linking it.
+    if (draftCVId) {
+      const draft = await DraftCV.findOne({ _id: draftCVId, userId }).select("_id");
+      if (!draft) return res.status(404).json({ message: "Saved CV not found." });
+    }
+    if (resumeId) {
+      const resume = await Resume.findOne({ _id: resumeId, userId }).select("_id");
+      if (!resume) return res.status(404).json({ message: "Resume not found." });
+    }
+
+    // Find-or-create a lightweight Application (analysis fields intentionally
+    // left unset — this flow never scores fit). Re-running with the same CV+job
+    // reuses the existing prep instead of piling up duplicates.
+    const query = { userId, jobId };
+    if (resumeId) query.resumeId = resumeId;
+    if (draftCVId) query.draftCVId = draftCVId;
+
+    let application = await Application.findOne(query);
+    if (!application) {
+      application = new Application({
+        userId,
+        jobId,
+        ...(resumeId ? { resumeId } : {}),
+        ...(draftCVId ? { draftCVId } : {}),
+        jobTitle: job.title,
+        jobCompany: job.company,
+      });
+    }
+
+    // Build the candidate context and hard-gate on groundable experience (same
+    // guard as generate-interview) so the AI never invents past roles.
+    let candidateContext = null;
+    try {
+      candidateContext = await buildInterviewCandidateContext(application, {
+        userId,
+        applicationId: application._id,
+      });
+    } catch (e) {
+      console.error("[DirectInterview] Failed to build candidate context:", e.message);
+    }
+    if (!hasGroundableExperience(candidateContext)) {
+      return res.status(422).json({
+        code: "NO_CV_GROUNDING",
+        message:
+          "This CV needs at least one work experience entry (role and company) before we can run a grounded interview.",
+      });
+    }
+
+    // Generate the question spine so the live interviewer has real material.
+    const aiResult = await aiService.generateInterviewQuestions(
+      job.description,
+      candidateContext,
+      { userId, applicationId: application._id }
+    );
+
+    const fabricationWarnings = await aiService.factCheckInterviewQuestions(
+      candidateContext,
+      aiResult.jobQuestions || [],
+      { userId, applicationId: application._id }
+    );
+
+    application.interviewPrep = application.interviewPrep || {};
+    application.interviewPrep.jobQuestions = aiResult.jobQuestions || [];
+    application.interviewPrep.questionsToAsk = aiResult.questionsToAsk || [];
+    application.interviewPrep.fabricationWarnings = fabricationWarnings;
+    await application.save();
+
+    return res.status(200).json({
+      applicationId: application._id,
+      interviewPrep: serializeInterviewPrep(application),
+    });
+  } catch (error) {
+    if (handleAIError(res, error)) return;
+    console.error("Direct Interview Error:", error.message);
+    res.status(500).json({
+      message: "Failed to start the interview. You have not been charged.",
+      error: error.message,
+    });
+  }
+};
+
+/**
  * POST /analysis/:id/generate-more-interview
  *
  * Generate ADDITIONAL interview questions for an existing application,
@@ -1720,6 +1843,7 @@ module.exports = {
   generateApplicationCV,
   generateApplicationCoverLetter,
   generateApplicationInterview,
+  startDirectInterview,
   generateMoreApplicationInterview,
   generateApplicationStories,
   generateApplicationEssential,

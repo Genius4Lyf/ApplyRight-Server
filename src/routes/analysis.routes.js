@@ -5,6 +5,7 @@ const {
   generateApplicationCV,
   generateApplicationCoverLetter,
   generateApplicationInterview,
+  startDirectInterview,
   generateMoreApplicationInterview,
   generateApplicationStories,
   generateApplicationEssential,
@@ -13,10 +14,15 @@ const {
   preflightMetrics,
   editApplication,
 } = require("../controllers/analysis.controller");
-const { protect } = require("../middleware/auth.middleware");
+const { protect, requireTier } = require("../middleware/auth.middleware");
 
 // Core analysis (10 credits with job, 15 credits upload-only)
 router.post("/analyze", protect, analyzeFit);
+
+// Standalone "Interview Me": skip the full analysis and go straight to a live
+// interview. Paid-only (requireTier 403s free users with TIER_REQUIRED); no
+// per-action credit charge. Live minutes are still metered in realtime-session.
+router.post("/direct-interview", protect, requireTier("plus"), startDirectInterview);
 
 // Pre-flight: detect vague bullets the user could quantify before CV generation.
 // Free (no charge, cached extractions) — does NOT trigger generation by itself.
