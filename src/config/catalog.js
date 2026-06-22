@@ -16,7 +16,7 @@ const FREE_TASTE_SEC = 300; // 5 minutes
 const CATALOG = {
   weekly_pro: {
     id: "weekly_pro",
-    label: "Weekly Pro",
+    label: "Starter Pack",
     purpose: "subscription",
     amountNgn: 3000,
     amountUsd: 4,
@@ -27,7 +27,7 @@ const CATALOG = {
   },
   monthly_pro: {
     id: "monthly_pro",
-    label: "Monthly Pro",
+    label: "Level Up",
     purpose: "subscription",
     amountNgn: 9000,
     amountUsd: 12,
@@ -38,7 +38,7 @@ const CATALOG = {
   },
   monthly_premium: {
     id: "monthly_premium",
-    label: "Monthly Premium",
+    label: "Boss Tier",
     purpose: "subscription",
     amountNgn: 15000,
     amountUsd: 20,
@@ -54,7 +54,7 @@ const CATALOG = {
   // CV-AGENT-PLAN.md.)
   agent_weekly: {
     id: "agent_weekly",
-    label: "CV Agent (Weekly)",
+    label: "Small Wins",
     purpose: "subscription",
     amountNgn: 3500,
     amountUsd: 5,
@@ -65,7 +65,7 @@ const CATALOG = {
   },
   agent_monthly: {
     id: "agent_monthly",
-    label: "CV Agent (Monthly)",
+    label: "Big Taker",
     purpose: "subscription",
     amountNgn: 10000,
     amountUsd: 14,
@@ -76,7 +76,7 @@ const CATALOG = {
   },
   agent_yearly: {
     id: "agent_yearly",
-    label: "CV Agent (Yearly)",
+    label: "Odogwu",
     purpose: "subscription",
     amountNgn: 100000,
     amountUsd: 140,

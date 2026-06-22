@@ -104,6 +104,46 @@ const LOCKED_BULLET_PLACEHOLDERS = [
   "Translated hands-on results into the exact terminology recruiters search for in this role.",
 ];
 
+// ── ApplyRight Suggested Summary tones ──
+// Free users get only the first tone (Professional) generated for real; the rest
+// are shown as locked, blurred upsell teasers. Paid users get all of them.
+// Order matters: the first entry is the free tone.
+const SUMMARY_TONES = [
+  {
+    key: "professional",
+    label: "Professional",
+    guidance: "Balanced, formal, classic resume summary.",
+  },
+  {
+    key: "results",
+    label: "Results-Driven",
+    guidance:
+      "Lead with measurable impact and achievements; use only numbers present or clearly implied in the CV, never invented.",
+  },
+  { key: "concise", label: "Concise", guidance: "Punchy and tight — 2 sentences maximum." },
+  {
+    key: "leadership",
+    label: "Leadership",
+    guidance:
+      "Emphasize ownership, scope, and leading people/initiatives — only where the history supports it.",
+  },
+  {
+    key: "careerChanger",
+    label: "Career-Changer",
+    guidance: "Bridge the candidate's past experience to the target role via transferable skills.",
+  },
+  {
+    key: "warm",
+    label: "Warm / Approachable",
+    guidance: "Personable, human tone while staying professional.",
+  },
+];
+
+// Blurred filler shown behind the lock for a free user's locked tones. No real
+// AI text is generated for locked tones.
+const LOCKED_SUMMARY_TEASER =
+  "A polished, recruiter-ready summary written in this tone — tailored to your experience, highlighting your strongest, most relevant value in a way that makes hiring managers want to keep reading.";
+
 // Resolve the target-job keyword set for ATS suggestions, reusing existing
 // infrastructure and never charging here (extraction is charged in
 // getJobKeywords): 1) the AI keywords already cached on the draft, else
@@ -286,6 +326,54 @@ const revealAtsTaste = async (req, res) => {
   }
 };
 
+// @desc    ApplyRight Suggested Summary — professional-summary variations in
+//          different tones. Free users get ONLY the first tone (Professional)
+//          generated for real; the rest come back as locked blurred teasers.
+//          Paid users get every tone. Grounded in the candidate's CV (no JD).
+// @route   POST /api/ai/generate-summaries
+// @access  Private
+const generateSummaries = async (req, res) => {
+  const { role, context } = req.body;
+
+  if (!context) {
+    return res.status(400).json({ message: "Please provide some candidate context." });
+  }
+
+  try {
+    const aiService = require("../services/ai.service");
+    const user = await require("../models/User").findById(req.user.id).select("plan subscription");
+    const isPaid = subscription.isPaidActive(user);
+
+    // Free users: generate only the first tone (cheap). Paid: all tones.
+    const tonesToGenerate = isPaid ? SUMMARY_TONES : SUMMARY_TONES.slice(0, 1);
+    const generated = await aiService.generateSummaries(role, context, tonesToGenerate);
+    const byKey = Object.fromEntries((generated || []).map((g) => [g.key, g.summary]));
+
+    // Build the full ordered tone list; lock everything past the free tone for
+    // free users (blurred teaser text, no real generation leaked).
+    const tones = SUMMARY_TONES.map((t, idx) => {
+      const locked = !isPaid && idx > 0;
+      return {
+        key: t.key,
+        label: t.label,
+        text: locked ? LOCKED_SUMMARY_TEASER : byKey[t.key] || "",
+        locked,
+      };
+    });
+
+    // If the one free tone failed to generate, surface an error rather than an
+    // empty modal.
+    if (!isPaid && !tones[0].text) {
+      return res.status(502).json({ message: "Couldn't generate a summary. Please try again." });
+    }
+
+    return res.json({ isPaid, tones });
+  } catch (error) {
+    console.error("Summary Gen Error:", error);
+    return res.status(500).json({ message: "Failed to generate summaries" });
+  }
+};
+
 // @desc    Generate categorized skills from profile context
 // @route   POST /api/ai/generate-skills
 // @access  Private
@@ -306,11 +394,14 @@ const generateSkills = async (req, res) => {
       });
     }
 
+    const isPaid = subscription.isPaidActive(user);
+
     const suggestions = await require("../services/ai.service").generateSkillsFromContext(
       education || [],
       experience || [],
       projects || [],
-      targetJob || ""
+      targetJob || "",
+      isPaid
     );
 
     // Charge (or skip for an active paid tier).
@@ -329,6 +420,7 @@ const generateSkills = async (req, res) => {
 
     res.json({
       suggestions,
+      isPaid,
       remainingCredits: user.credits,
     });
   } catch (error) {
@@ -522,6 +614,7 @@ module.exports = {
   generateApplication,
   generateBullets,
   revealAtsTaste,
+  generateSummaries,
   getJobKeywords,
   getKeywordCoverage,
   generateSkills,

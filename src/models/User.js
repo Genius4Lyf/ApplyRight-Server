@@ -77,6 +77,19 @@ const userSchema = new mongoose.Schema(
     atsSuggestions: {
       freeTasteUsed: { type: Boolean, default: false },
     },
+    // CV Builder ATS Coach. The "Deep Scan" (Job Match + Career Match + recruiter
+    // red-flags) is paid; free users get ONE lifetime taste, claimed atomically on
+    // run (mirrors atsSuggestions). CV Health stays free and is computed client-side.
+    coach: {
+      deepScanTasteUsed: { type: Boolean, default: false },
+      // Live AI coach (conversational guidance). Free users get a daily quota
+      // (COACH_GUIDE_FREE_DAILY); paid = unlimited. `date` is a UTC YYYY-MM-DD
+      // string; `count` resets when the date rolls over.
+      aiGuide: {
+        date: { type: String, default: "" },
+        count: { type: Number, default: 0 },
+      },
+    },
     // "agent" = a CV-writing agent (builds CVs for paying clients). Agents get a
     // CV-only dashboard (no interview/job-search/credits UI); see Client model and
     // agent.routes. Set self-serve at signup via accountType: "agent".

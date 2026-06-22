@@ -119,6 +119,7 @@ app.use("/api/resumes", resumeRoutes);
 app.use("/api/ai", aiLimiter, aiRoutes); // Apply AI-specific rate limiter
 app.use("/api/applications", applicationRoutes);
 app.use("/api/analysis", require("./routes/analysis.routes"));
+app.use("/api/coach", aiLimiter, require("./routes/coach.routes")); // CV Builder ATS Coach (AI deep scan)
 app.use("/api/cv", require("./routes/cv.routes"));
 app.use("/api/pdf", require("./routes/pdf.routes"));
 app.use("/api/billing/watch-ad", adWatchLimiter);
