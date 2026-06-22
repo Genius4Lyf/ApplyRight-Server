@@ -1160,14 +1160,16 @@ exports.conversationTurn = async (req, res) => {
  * using this secret — audio never flows through our backend. The candidate's
  * CV + job grounding rides in the session `instructions`.
  *
- * FREE during testing — no credits charged. When realtime becomes a paid
- * (Plus-tier) feature, add the tier gate to the route and the atomic charge
- * here (mirror generateFollowUp's deduction). SECURITY: never log the secret.
+ * Metered in live-interview minutes (not credits): free spends its 5-min taste,
+ * paid spends its balance. Reserve-then-reconcile bounds OpenAI cost. The intro
+ * slider sends a requestedSec (paid only) and a wrapUp toggle; the wrap-up window
+ * draws from the same reservation so it is billed too. SECURITY: never log the secret.
  */
 exports.createRealtimeSession = async (req, res) => {
   try {
     const { applicationId: id } = req.params;
-    const { questionSpine, timeOfDay, candidateName, voice, style } = req.body || {};
+    const { questionSpine, timeOfDay, candidateName, voice, style, requestedSec, wrapUp } =
+      req.body || {};
 
     const application = await Application.findById(id).populate("jobId");
     if (!application) return res.status(404).json({ message: "Application not found" });
@@ -1203,8 +1205,6 @@ exports.createRealtimeSession = async (req, res) => {
       seniorityNote: fa.seniorityAnalysis?.match === false ? fa.seniorityAnalysis?.feedback || "" : "",
     };
 
-    const planCap = Number(process.env.REALTIME_MAX_SESSION_SEC) || 360;
-
     // ---- Live-minute gate + reservation (reserve-then-reconcile) ----
     // Audio is WebRTC-direct to OpenAI, so we can't observe duration live. Reserve
     // up front against the user's balance, hard-cap the minted session to the
@@ -1233,7 +1233,29 @@ exports.createRealtimeSession = async (req, res) => {
       });
     }
 
-    const reservedSec = Math.min(planCap, avail);
+    // Per-tier length cap. Paid users may request a shorter length (intro slider);
+    // free is fixed at its taste (requestedSec ignored). reservedSec = the full
+    // budget we'll bill against — main interview + (optional) wrap-up live inside it.
+    const planCap = subscription.maxSessionSecForTier(user);
+    const wantSec =
+      eff !== "free" && Number(requestedSec) > 0 ? Math.round(Number(requestedSec)) : planCap;
+    const reservedSec = Math.max(0, Math.min(planCap, avail, wantSec));
+    if (reservedSec <= 0) {
+      return res.status(402).json({
+        message: "Could not reserve interview minutes. Please try again.",
+        code: "NO_MINUTES",
+      });
+    }
+
+    // Wrap-up window (default on). It draws from the SAME reservation, so the
+    // client must run main+grace within reservedSec; reconciliation then bills
+    // whatever was actually used (no unbilled grace leak). Toggle off => hard cut.
+    const wrapUpOn = wrapUp !== false; // default true when omitted
+    const graceSec = wrapUpOn
+      ? Math.min(Number(process.env.REALTIME_GRACE_SEC) || 90, reservedSec)
+      : 0;
+    const mainSec = reservedSec - graceSec;
+
     const reservationId = require("crypto").randomUUID();
     const startedAt = new Date();
 
@@ -1273,7 +1295,7 @@ exports.createRealtimeSession = async (req, res) => {
       candidateContext,
       jobMeta,
       Array.isArray(questionSpine) ? questionSpine : [],
-      Math.round(reservedSec / 60), // tell the interviewer the real time budget
+      Math.max(1, Math.round(mainSec / 60)), // interviewer's speaking budget (grace is the wrap-up on top)
       {
         timeOfDay: typeof timeOfDay === "string" ? timeOfDay : "",
         candidateName: typeof candidateName === "string" ? candidateName.slice(0, 40) : "",
@@ -1312,13 +1334,17 @@ exports.createRealtimeSession = async (req, res) => {
       expiresAt: session.expiresAt,
       model: session.model,
       voice: session.voice,
+      // Client drives its main countdown from mainSec; the grace window runs AFTER
+      // it. Both live inside reservedSec (the OpenAI hard cap), so all of it bills.
+      mainSec,
+      // Wrap-up window (seconds) the client runs after the main time ends so the
+      // interviewer can verbally close out. 0 when the user turned wrap-up off.
+      graceSec,
+      // maxSessionSec = the full reserved budget (main + grace) = the OpenAI cap.
       maxSessionSec: session.maxSessionSec,
       // Echoed back to assess-interview so we reconcile the right reservation.
       reservationId,
       reservedSec,
-      // Grace window (seconds) the client adds AFTER the main time runs out, so
-      // the interviewer can verbally wrap up + run the closing instead of a hard cut.
-      graceSec: Number(process.env.REALTIME_GRACE_SEC) || 90,
     });
   } catch (error) {
     // Log only the message — never the secret or the OpenAI response body.

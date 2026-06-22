@@ -277,6 +277,9 @@ const loginUser = async (req, res, next) => {
         credits: user.credits,
         plan: user.plan,
         tier: user.tier,
+        // Expiry-aware paid checks on the client (e.g. template unlock-all) read
+        // subscription.expiresAt; include it so paid status reverts on expiry.
+        subscription: user.subscription,
         phoneNumber: user.phoneNumber,
         location: user.location,
         skills: user.skills,

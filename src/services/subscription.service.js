@@ -4,7 +4,7 @@
 // interview metering, and every text-AI charge site.
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
-const { getItem } = require("../config/catalog");
+const { getItem, MAX_SESSION_SEC_BY_TIER } = require("../config/catalog");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -21,9 +21,40 @@ const getEffectiveTier = (user) => {
 
 const isPaidActive = (user) => getEffectiveTier(user) !== "free";
 
+/**
+ * Broad "entitled to paid perks right now" check for features gated on plan
+ * rather than the minute economy (e.g. all CV templates unlocked). Honors
+ * subscription expiry when a subscription exists; otherwise falls back to the
+ * manually-set `plan` flag (admin grants set `plan: "paid"` with no subscription
+ * subdoc). So an expired Flutterwave subscriber reverts to free, while an
+ * admin-granted tester stays paid.
+ */
+const hasPaidAccess = (user) => {
+  const exp = user?.subscription?.expiresAt;
+  if (exp) return new Date(exp).getTime() > Date.now();
+  return user?.plan === "paid";
+};
+
 /** Premium tier (pro) gets the sharper full model; everyone else the mini model. */
 const modelForUser = (user) =>
   getEffectiveTier(user) === "pro" ? "gpt-realtime" : "gpt-realtime-mini";
+
+/**
+ * Hard cap (seconds) on a single live interview for this user's effective tier,
+ * clamped by the global REALTIME_MAX_SESSION_SEC backstop. The intro slider uses
+ * this (further bounded by the user's remaining balance) to let paid users pick a
+ * length; free stays fixed at its taste.
+ */
+const maxSessionSecForTier = (user) => {
+  const eff = getEffectiveTier(user);
+  const tierCap = MAX_SESSION_SEC_BY_TIER[eff] || MAX_SESSION_SEC_BY_TIER.free;
+  // The per-tier caps are authoritative. REALTIME_MAX_SESSION_SEC is an OPTIONAL
+  // absolute ceiling for cost control — only applied when an operator explicitly
+  // sets it (its in-code default of 360 must not silently cap the higher tiers).
+  const raw = process.env.REALTIME_MAX_SESSION_SEC;
+  const backstop = raw != null && raw !== "" ? Number(raw) : null;
+  return backstop && backstop > 0 ? Math.min(tierCap, backstop) : tierCap;
+};
 
 /**
  * Apply a successful Payment to its user. Idempotent: the guarded updateOne on
@@ -180,7 +211,9 @@ const chargeOrSkip = async (user, cost, txMeta = {}) => {
 module.exports = {
   getEffectiveTier,
   isPaidActive,
+  hasPaidAccess,
   modelForUser,
+  maxSessionSecForTier,
   grantEntitlement,
   chargeOrSkip,
   downloadStatus,

@@ -7,6 +7,7 @@ const admobSsv = require("../services/admobSsv.service");
 const flutterwave = require("../services/flutterwave.service");
 const subscription = require("../services/subscription.service");
 const { getItem, FREE_TASTE_SEC } = require("../config/catalog");
+const { isFreeTemplate, TEMPLATE_UNLOCK_COST } = require("../config/templates");
 const env = require("../config/env");
 const logger = require("../utils/logger");
 
@@ -279,16 +280,43 @@ exports.getWatchStats = async (req, res) => {
 // @route   POST /api/billing/unlock-template
 // @access  Private
 exports.unlockTemplate = async (req, res) => {
-  const { templateId, cost } = req.body;
+  // SECURITY: the client sends only the templateId. The price is server-owned
+  // (config/templates) — never trust a client-supplied cost.
+  const { templateId } = req.body;
 
   try {
-    const user = await User.findById(req.user.id);
+    if (!templateId || typeof templateId !== "string") {
+      return res.status(400).json({ message: "templateId is required" });
+    }
 
+    const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Check if already unlocked
+    // Paid tiers (active subscription, or an admin-granted plan) unlock every
+    // template for free — nothing to charge. Expiry-aware: an expired subscriber
+    // falls through to the credit path.
+    if (subscription.hasPaidAccess(user)) {
+      return res.json({
+        success: true,
+        message: "Included with your plan",
+        credits: user.credits,
+        unlockedTemplates: user.unlockedTemplates || [],
+      });
+    }
+
+    // Free templates never need an unlock.
+    if (isFreeTemplate(templateId)) {
+      return res.json({
+        success: true,
+        message: "Free template",
+        credits: user.credits,
+        unlockedTemplates: user.unlockedTemplates || [],
+      });
+    }
+
+    // Already unlocked → idempotent success (no double charge).
     if (user.unlockedTemplates && user.unlockedTemplates.includes(templateId)) {
       return res.status(200).json({
         success: true,
@@ -298,35 +326,47 @@ exports.unlockTemplate = async (req, res) => {
       });
     }
 
-    const costAmount = parseInt(cost, 10);
-    // Check balance
-    if (user.credits < costAmount) {
+    // Atomic, balance-guarded deduction + add-to-set in one update. The
+    // `unlockedTemplates: { $ne }` guard ensures a concurrent unlock of the SAME
+    // template can't be charged twice (only one update matches + deducts).
+    const cost = TEMPLATE_UNLOCK_COST;
+    const result = await User.updateOne(
+      { _id: user._id, credits: { $gte: cost }, unlockedTemplates: { $ne: templateId } },
+      { $inc: { credits: -cost }, $addToSet: { unlockedTemplates: templateId } }
+    );
+
+    if (result.modifiedCount === 0) {
+      // Either not enough credits, or a race already unlocked it. Re-read to tell
+      // the two apart so we return the right status.
+      const fresh = await User.findById(req.user.id).select("credits unlockedTemplates");
+      if (fresh?.unlockedTemplates?.includes(templateId)) {
+        return res.status(200).json({
+          success: true,
+          message: "Template already unlocked",
+          credits: fresh.credits,
+          unlockedTemplates: fresh.unlockedTemplates,
+        });
+      }
       return res
         .status(400)
         .json({ message: "Insufficient credits", error: "INSUFFICIENT_CREDITS" });
     }
 
-    // Deduct credits
-    user.credits -= costAmount;
+    const updated = await User.findById(req.user.id).select("credits unlockedTemplates");
 
-    // Add to unlocked
-    if (!user.unlockedTemplates) {
-      user.unlockedTemplates = [];
-    }
-    user.unlockedTemplates.push(templateId);
-
-    await user.save({ validateBeforeSave: false });
-
-    // Record Transaction
     await Transaction.create({
       userId: user.id,
-      amount: -costAmount,
+      amount: -cost,
       type: "usage",
       description: `Unlocked template: ${templateId}`,
       status: "completed",
     });
 
-    res.json({ success: true, credits: user.credits, unlockedTemplates: user.unlockedTemplates });
+    res.json({
+      success: true,
+      credits: updated.credits,
+      unlockedTemplates: updated.unlockedTemplates,
+    });
   } catch (error) {
     console.error("Unlock Template Error:", error);
     res.status(500).json({ message: "Server Error" });
@@ -351,6 +391,8 @@ const entitlementFor = (user) => {
     minutesRemaining: Math.floor((li.secondsRemaining || 0) / 60),
     secondsRemaining: li.secondsRemaining || 0,
     freeTasteRemainingSec: tier === "free" ? freeTasteRemaining : 0,
+    // Per-tier cap on a single interview's length — the intro slider's upper bound.
+    maxSessionSec: subscription.maxSessionSecForTier(user),
     model: subscription.modelForUser(user),
     downloads: {
       unlimited: dl.unlimited,

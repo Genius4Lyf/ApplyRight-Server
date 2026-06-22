@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { protect } = require("../middleware/auth.middleware");
+const { protect, requireTier } = require("../middleware/auth.middleware");
 const interviewPrepController = require("../controllers/interviewPrep.controller");
 
 router.post("/save-skills", protect, interviewPrepController.saveSkills);
@@ -41,22 +41,29 @@ router.post("/:applicationId/stories", protect, interviewPrepController.createSt
 router.patch("/:applicationId/stories/:storyId", protect, interviewPrepController.updateStory);
 router.delete("/:applicationId/stories/:storyId", protect, interviewPrepController.deleteStory);
 
+// AI answer-grading, story-grading and adaptive follow-ups are paid-only coaching
+// (Pro/Premium). requireTier("plus") 403s free users with code TIER_REQUIRED
+// before the controller's credit path; paid users hit chargeOrSkip, which skips
+// the charge => effectively unlimited for them.
 router.post(
   "/:applicationId/grade-answer",
   protect,
+  requireTier("plus"),
   interviewPrepController.gradeAnswer
 );
 
 router.post(
   "/:applicationId/grade-story",
   protect,
+  requireTier("plus"),
   interviewPrepController.gradeStoryAnswer
 );
 
-// Adaptive interviewer: one dynamic follow-up question (1 credit).
+// Adaptive interviewer: one dynamic follow-up question (paid-only, unlimited).
 router.post(
   "/:applicationId/follow-up",
   protect,
+  requireTier("plus"),
   interviewPrepController.generateFollowUp
 );
 

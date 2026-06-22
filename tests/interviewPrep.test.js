@@ -126,7 +126,23 @@ describe("Interview Prep API", () => {
   });
 
   describe("POST /api/interview-prep/:applicationId/grade-answer", () => {
-    it("should grade answer and deduct 1 credit successfully", async () => {
+    // Grading is a paid-only (Pro/Premium) coaching feature, unlimited for paid
+    // (chargeOrSkip skips the credit charge). Use an active-subscription user.
+    const mockPaidUser = {
+      ...mockUser,
+      subscription: { tier: "plus", expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) },
+    };
+    const authPaid = () => {
+      User.findById.mockReturnValue({
+        select: jest.fn().mockResolvedValue(mockPaidUser),
+        then: jest.fn().mockImplementation(function (resolve) {
+          return resolve(mockPaidUser);
+        }),
+      });
+    };
+
+    it("should grade answer for a paid user without charging credits", async () => {
+      authPaid();
       const mockAIResult = {
         score: 85,
         overallFeedback: "Good response, check STAR actions.",
@@ -158,27 +174,19 @@ describe("Interview Prep API", () => {
       expect(Array.isArray(res.body.attempts)).toBe(true);
       expect(res.body.attempts[res.body.attempts.length - 1].score).toEqual(85);
       expect(mockApplication.interviewPrep.jobQuestions[0].attempts.length).toBeGreaterThan(0);
-      // Credit deducted atomically via a balance-guarded $inc, not a
-      // read-modify-write on the loaded user document.
-      expect(User.updateOne).toHaveBeenCalledWith(
+      // Paid tier: chargeOrSkip records a 0-amount usage Transaction and never
+      // decrements credits (the balance-guarded $inc must NOT be called).
+      expect(User.updateOne).not.toHaveBeenCalledWith(
         { _id: mockUserId, credits: { $gte: 1 } },
         { $inc: { credits: -1 } }
       );
-      expect(res.body.remainingCredits).toEqual(9); // 10 - 1 = 9
+      expect(res.body.remainingCredits).toEqual(10); // unchanged
       expect(Transaction.create).toHaveBeenCalled();
       expect(mockApplication.save).toHaveBeenCalled();
     });
 
-    it("should reject with 403 if user has insufficient credits", async () => {
-      // Mock user with 0 credits
-      const poorUser = { ...mockUser, credits: 0 };
-      User.findById.mockReturnValue({
-        select: jest.fn().mockResolvedValue(poorUser),
-        then: jest.fn().mockImplementation(function(resolve) {
-          return resolve(poorUser);
-        }),
-      });
-
+    it("should reject a free user with 403 TIER_REQUIRED (paid-only feature)", async () => {
+      // Default mockUser has no subscription → effective tier "free".
       const res = await request(app)
         .post(`/api/interview-prep/${mockAppId}/grade-answer`)
         .set("Authorization", "Bearer mock-token")
@@ -189,7 +197,7 @@ describe("Interview Prep API", () => {
         });
 
       expect(res.statusCode).toEqual(403);
-      expect(res.body.code).toBe("INSUFFICIENT_CREDITS");
+      expect(res.body.code).toBe("TIER_REQUIRED");
     });
   });
 
@@ -313,7 +321,21 @@ describe("Interview Prep API", () => {
     });
 
     describe("POST /api/interview-prep/:applicationId/grade-story", () => {
-      it("should grade a story, charge 1 credit, and set confidence", async () => {
+      // Story grading is paid-only (unlimited for paid). Authenticate a paid user.
+      const mockPaidUser = {
+        ...mockUser,
+        subscription: { tier: "plus", expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) },
+      };
+      beforeEach(() => {
+        User.findById.mockReturnValue({
+          select: jest.fn().mockResolvedValue(mockPaidUser),
+          then: jest.fn().mockImplementation(function (resolve) {
+            return resolve(mockPaidUser);
+          }),
+        });
+      });
+
+      it("should grade a story for a paid user (no credit charge) and set confidence", async () => {
         mockApplication.interviewPrep.stories = [
           { id: "st1", title: "Led migration", situation: "s", task: "t", action: "a", result: "r" },
         ];
@@ -341,7 +363,8 @@ describe("Interview Prep API", () => {
         expect(res.statusCode).toEqual(200);
         expect(res.body.score).toEqual(80);
         expect(res.body.confidence).toEqual("ready"); // score > 75
-        expect(User.updateOne).toHaveBeenCalledWith(
+        // Paid tier: no balance-guarded credit decrement.
+        expect(User.updateOne).not.toHaveBeenCalledWith(
           { _id: mockUserId, credits: { $gte: 1 } },
           { $inc: { credits: -1 } }
         );
@@ -357,6 +380,24 @@ describe("Interview Prep API", () => {
           .send({ storyId: "missing", answerText: "an answer" });
 
         expect(res.statusCode).toEqual(404);
+      });
+
+      it("should reject a free user with 403 TIER_REQUIRED", async () => {
+        User.findById.mockReturnValue({
+          select: jest.fn().mockResolvedValue(mockUser),
+          then: jest.fn().mockImplementation(function (resolve) {
+            return resolve(mockUser);
+          }),
+        });
+        mockApplication.interviewPrep.stories = [{ id: "st1" }];
+
+        const res = await request(app)
+          .post(`/api/interview-prep/${mockAppId}/grade-story`)
+          .set("Authorization", "Bearer mock-token")
+          .send({ storyId: "st1", answerText: "an answer" });
+
+        expect(res.statusCode).toEqual(403);
+        expect(res.body.code).toBe("TIER_REQUIRED");
       });
     });
 

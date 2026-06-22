@@ -12,6 +12,16 @@
 // Free tier's one-time live-interview taste (seconds). Lifetime, never resets.
 const FREE_TASTE_SEC = 300; // 5 minutes
 
+// Per-tier hard cap on a single live interview's length (seconds). Paid users
+// pick any length up to this cap (and up to their remaining balance) via the
+// intro slider; free is fixed at its taste. REALTIME_MAX_SESSION_SEC remains the
+// absolute backstop and is applied on top of these in maxSessionSecForTier.
+const MAX_SESSION_SEC_BY_TIER = {
+  free: FREE_TASTE_SEC, // 5 min — the whole taste in one go
+  plus: 600, // 10 min
+  pro: 900, // 15 min (Premium)
+};
+
 // model: "mini" -> gpt-realtime-mini, "full" -> gpt-realtime (see subscription.service.modelForUser)
 const CATALOG = {
   weekly_pro: {
@@ -123,4 +133,10 @@ const EST_COST_NGN_PER_MIN = {
 
 const getItem = (planId) => CATALOG[planId] || null;
 
-module.exports = { CATALOG, FREE_TASTE_SEC, EST_COST_NGN_PER_MIN, getItem };
+module.exports = {
+  CATALOG,
+  FREE_TASTE_SEC,
+  MAX_SESSION_SEC_BY_TIER,
+  EST_COST_NGN_PER_MIN,
+  getItem,
+};
