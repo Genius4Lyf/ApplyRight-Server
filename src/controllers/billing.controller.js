@@ -17,78 +17,26 @@ const logger = require("../utils/logger");
 exports.getBalance = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
-    res.json({ credits: user.credits });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server Error" });
-  }
-};
-
-// @desc    Add credits to user (Simulated Payment / Admin)
-// @route   POST /api/billing/add
-// @access  Private (Should be Admin or Webhook, but keeping Private for prototype)
-exports.addCredits = async (req, res) => {
-  const { amount, description } = req.body;
-
-  try {
-    const user = await User.findById(req.user.id);
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    user.credits += parseInt(amount, 10);
-    await user.save({ validateBeforeSave: false });
-
-    // Record Transaction
-    await Transaction.create({
-      userId: user.id,
-      amount: amount,
-      type: "purchase",
-      description: description || "Credit Top-up",
-      status: "completed",
+    // `credits` = total SPENDABLE balance (per-tier allowance + wallet) so every
+    // client-side credit gate matches what the backend will actually charge
+    // (paid users draw from their plan allowance first). walletCredits/planCredits
+    // are the breakdown for UIs that need it.
+    res.json({
+      credits: subscription.availableCredits(user),
+      walletCredits: user.credits,
+      planCredits: subscription.isPaidActive(user) ? user.subscription?.creditsRemaining || 0 : 0,
     });
-
-    res.json({ message: "Credits added successfully", credits: user.credits });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server Error" });
   }
 };
 
-// @desc    Deduct credits for usage (Internal Service Call)
-// @route   POST /api/billing/usage
-// @access  Private
-exports.deductCredits = async (req, res) => {
-  const { cost, serviceName } = req.body;
-
-  try {
-    const user = await User.findById(req.user.id);
-
-    if (user.credits < cost) {
-      return res
-        .status(400)
-        .json({ message: "Insufficient credits", error: "INSUFFICIENT_CREDITS" });
-    }
-
-    user.credits -= parseInt(cost, 10);
-    await user.save({ validateBeforeSave: false });
-
-    // Record Transaction
-    await Transaction.create({
-      userId: user.id,
-      amount: -cost, // Negative for deduction
-      type: "usage",
-      description: `Used for ${serviceName}`,
-      status: "completed",
-    });
-
-    res.json({ success: true, credits: user.credits });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server Error" });
-  }
-};
+// NOTE: The self-serve `POST /billing/add` (addCredits) and `POST /billing/usage`
+// (deductCredits) endpoints were removed — they let any authenticated user mint or
+// drain their own credits (no amount validation, no admin gate). Real credit grants
+// flow through the AdMob SSV callback and Flutterwave webhook/verify; deductions
+// happen server-side via `subscription.spendCredits` inside the AI/PDF controllers.
 
 // @desc    Get transaction history
 // @route   GET /api/billing/transactions
@@ -391,6 +339,11 @@ const entitlementFor = (user) => {
     minutesRemaining: Math.floor((li.secondsRemaining || 0) / 60),
     secondsRemaining: li.secondsRemaining || 0,
     freeTasteRemainingSec: tier === "free" ? freeTasteRemaining : 0,
+    // Credit balances: the resettable per-tier allowance, the persistent wallet,
+    // and the combined total the user can actually spend.
+    planCredits: tier !== "free" ? user.subscription?.creditsRemaining || 0 : 0,
+    walletCredits: user.credits || 0,
+    availableCredits: subscription.availableCredits(user),
     // Per-tier cap on a single interview's length — the intro slider's upper bound.
     maxSessionSec: subscription.maxSessionSecForTier(user),
     model: subscription.modelForUser(user),

@@ -83,6 +83,19 @@ const adWatchLimiter = rateLimit({
   },
 });
 
+// Checkout-Specific Rate Limiting. Each call mints a pending Payment row +
+// hits Flutterwave; cap per IP so the endpoint can't be spammed to flood the
+// Payment collection or the provider. A real buyer needs only a handful.
+const checkoutLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    message: "Too many checkout attempts. Please wait a few minutes and try again.",
+  },
+});
+
 // Logger configuration for HTTP requests
 app.use(
   morgan("combined", {
@@ -123,6 +136,7 @@ app.use("/api/coach", aiLimiter, require("./routes/coach.routes")); // CV Builde
 app.use("/api/cv", require("./routes/cv.routes"));
 app.use("/api/pdf", require("./routes/pdf.routes"));
 app.use("/api/billing/watch-ad", adWatchLimiter);
+app.use("/api/billing/checkout", checkoutLimiter);
 app.use("/api/billing", require("./routes/billing.routes"));
 app.use("/api/feedback", require("./routes/feedback.routes"));
 app.use("/api/ai-feedback", require("./routes/aiFeedback.routes"));

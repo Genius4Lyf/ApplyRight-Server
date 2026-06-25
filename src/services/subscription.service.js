@@ -40,6 +40,28 @@ const modelForUser = (user) =>
   getEffectiveTier(user) === "pro" ? "gpt-realtime" : "gpt-realtime-mini";
 
 /**
+ * How the live interview panel is delivered for this user's tier:
+ *  - "solo"         → single interviewer (free; today's behaviour)
+ *  - "single-voice" → 3-person panel role-played in ONE session/voice with named
+ *                     hand-offs (paid tiers)
+ *  - "multi-voice"  → 3 distinct real voices via sequential segments (Premium only)
+ * Both paid tiers (plus + pro) get the "single-voice" panel: ONE continuous
+ * realtime session that role-plays all 3 interviewers. This is deliberate — a
+ * single session shares the whole conversation, so the panel actually LISTENS to
+ * the candidate's earlier answers, references them, paces itself (no per-person
+ * stopwatch cuts) and has zero reconnect breaks. The tiles on screen still show
+ * who's speaking via the set_active_speaker tool. Distinct real voices require
+ * separate sessions, which breaks that continuity, so we trade voice timbre for a
+ * genuinely conversational panel. Premium still runs the sharper model
+ * (modelForUser). Free stays solo. "multi-voice" code is retained but unused.
+ */
+const panelModeForUser = (user) => {
+  const eff = getEffectiveTier(user);
+  if (eff === "free") return "solo";
+  return "single-voice"; // plus + pro
+};
+
+/**
  * Hard cap (seconds) on a single live interview for this user's effective tier,
  * clamped by the global REALTIME_MAX_SESSION_SEC backstop. The intro slider uses
  * this (further bounded by the user's remaining balance) to let paid users pick a
@@ -99,6 +121,9 @@ const grantEntitlement = async (payment) => {
           // No rollover: a new subscription REPLACES the minute balance.
           "liveInterview.secondsRemaining": minutesSec,
           "liveInterview.periodExpiresAt": expiresAt,
+          // No rollover: a new subscription REPLACES the per-tier credit allowance.
+          // The persistent `credits` wallet (ad/referral/top-up) is untouched.
+          "subscription.creditsRemaining": item.credits || 0,
         },
       }
     );
@@ -108,8 +133,22 @@ const grantEntitlement = async (payment) => {
       { _id: payment.userId },
       { $inc: { "downloads.passRemaining": item.downloads || 0 } }
     );
+  } else if (item.purpose === "credit") {
+    // Credit top-up: add to the PERSISTENT wallet (never reset). Money already
+    // recorded in Payment; log a positive Transaction so it shows as bought credits.
+    await User.updateOne(
+      { _id: payment.userId },
+      { $inc: { credits: item.credits || 0 } }
+    );
+    await Transaction.create({
+      userId: payment.userId,
+      amount: item.credits || 0,
+      type: "purchase",
+      description: `Bought ${item.credits || 0} credits (${item.label || item.id})`,
+      status: "completed",
+    });
   } else {
-    // Top-up: add minutes only, leave tier/expiry untouched.
+    // Minute top-up: add minutes only, leave tier/expiry untouched.
     await User.updateOne(
       { _id: payment.userId },
       { $inc: { "liveInterview.secondsRemaining": minutesSec } }
@@ -126,12 +165,12 @@ const grantEntitlement = async (payment) => {
 const downloadStatus = (user) => {
   const unlimited = isPaidActive(user);
   const passRemaining = user?.downloads?.passRemaining || 0;
-  const freeAvailable = !user?.downloads?.freeDownloadUsed;
+  // Free downloads removed — web users pay ₦500/CV (single pass) or subscribe.
   return {
     unlimited,
     passRemaining,
-    freeAvailable,
-    canDownload: unlimited || passRemaining > 0 || freeAvailable,
+    freeAvailable: false,
+    canDownload: unlimited || passRemaining > 0,
   };
 };
 
@@ -144,17 +183,12 @@ const downloadStatus = (user) => {
 const consumeDownload = async (user) => {
   if (isPaidActive(user)) return { ok: true, method: "subscription" };
 
+  // No more free downloads — a purchased ₦500 pass is the only non-subscription path.
   const pass = await User.updateOne(
     { _id: user._id, "downloads.passRemaining": { $gte: 1 } },
     { $inc: { "downloads.passRemaining": -1 } }
   );
   if (pass.modifiedCount === 1) return { ok: true, method: "pass" };
-
-  const free = await User.updateOne(
-    { _id: user._id, "downloads.freeDownloadUsed": { $ne: true } },
-    { $set: { "downloads.freeDownloadUsed": true } }
-  );
-  if (free.modifiedCount === 1) return { ok: true, method: "free" };
 
   return { ok: false };
 };
@@ -170,51 +204,82 @@ const refundDownload = async (user, method) => {
 };
 
 /**
- * Charge `cost` credits unless the user has an active paid tier (then it's free /
- * "unlimited"). Always records a Transaction so usage analytics stay intact.
- * Mirrors the atomic, balance-guarded deduction used across the controllers.
+ * Total credits a user can spend right now = the active-tier allowance (the
+ * resettable bucket; 0 once expired) + the persistent wallet. This is the number
+ * every credit gate checks and the UI should show.
+ */
+const tierCreditsActive = (user) =>
+  isPaidActive(user) ? Math.max(0, user?.subscription?.creditsRemaining || 0) : 0;
+
+const availableCredits = (user) => tierCreditsActive(user) + Math.max(0, user?.credits || 0);
+
+/**
+ * Atomically spend `cost` credits, drawing from the per-tier allowance FIRST
+ * (use-it-or-lose-it, since it resets) then the persistent wallet. Records ONE
+ * Transaction for the total. Returns insufficient (no charge) when the combined
+ * balance can't cover the cost. Mutates the in-memory `user` to match the DB.
  * @returns {Promise<{ charged, skipped, insufficient, remainingCredits }>}
  */
-const chargeOrSkip = async (user, cost, txMeta = {}) => {
+const spendCredits = async (user, cost, txMeta = {}) => {
   const type = txMeta.type || "usage";
   const description = txMeta.description || "AI usage";
 
-  if (isPaidActive(user)) {
-    await Transaction.create({
-      userId: user._id,
-      amount: 0,
-      type,
-      description: `${description} (covered by ${getEffectiveTier(user)} plan)`,
-      status: "completed",
-    });
-    return { charged: false, skipped: true, insufficient: false, remainingCredits: user.credits };
+  if (!cost || cost <= 0) {
+    return { charged: false, skipped: true, insufficient: false, remainingCredits: availableCredits(user) };
+  }
+  if (availableCredits(user) < cost) {
+    return { charged: false, skipped: false, insufficient: true, remainingCredits: availableCredits(user) };
   }
 
-  const dec = await User.updateOne(
-    { _id: user._id, credits: { $gte: cost } },
-    { $inc: { credits: -cost } }
-  );
-  if (dec.modifiedCount === 0) {
-    return { charged: false, skipped: false, insufficient: true, remainingCredits: user.credits };
+  const fromTier = Math.min(cost, tierCreditsActive(user));
+  const fromWallet = cost - fromTier;
+
+  // Build a guarded atomic update. Only touch the tier bucket when we're actually
+  // drawing from it (a missing field wouldn't satisfy a $gte:0 guard for free users).
+  const filter = { _id: user._id, credits: { $gte: fromWallet } };
+  const inc = { credits: -fromWallet };
+  if (fromTier > 0) {
+    filter["subscription.creditsRemaining"] = { $gte: fromTier };
+    inc["subscription.creditsRemaining"] = -fromTier;
   }
-  user.credits -= cost;
+  const dec = await User.updateOne(filter, { $inc: inc });
+  if (dec.modifiedCount === 0) {
+    // Lost a race or balance shifted — treat as insufficient, no charge.
+    return { charged: false, skipped: false, insufficient: true, remainingCredits: availableCredits(user) };
+  }
+
+  if (fromTier > 0 && user.subscription) {
+    user.subscription.creditsRemaining = (user.subscription.creditsRemaining || 0) - fromTier;
+  }
+  user.credits = (user.credits || 0) - fromWallet;
+
   await Transaction.create({
     userId: user._id,
     amount: -cost,
     type,
-    description,
+    description: fromTier > 0 ? `${description} (${fromTier} plan + ${fromWallet} wallet)` : description,
     status: "completed",
   });
-  return { charged: true, skipped: false, insufficient: false, remainingCredits: user.credits };
+  return { charged: true, skipped: false, insufficient: false, remainingCredits: availableCredits(user) };
 };
+
+/**
+ * Back-compat wrapper. Previously skipped the charge for paid tiers ("unlimited");
+ * now EVERYONE spends credits — paid users simply draw from their tier allowance
+ * first (see spendCredits). Kept as the name used across the charge sites.
+ */
+const chargeOrSkip = (user, cost, txMeta = {}) => spendCredits(user, cost, txMeta);
 
 module.exports = {
   getEffectiveTier,
   isPaidActive,
   hasPaidAccess,
   modelForUser,
+  panelModeForUser,
   maxSessionSecForTier,
   grantEntitlement,
+  availableCredits,
+  spendCredits,
   chargeOrSkip,
   downloadStatus,
   consumeDownload,

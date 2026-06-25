@@ -3,7 +3,6 @@ const aiService = require("../services/ai.service");
 const subscription = require("../services/subscription.service");
 const Resume = require("../models/Resume");
 const DraftCV = require("../models/DraftCV");
-const Transaction = require("../models/Transaction");
 const fs = require("fs");
 
 const UPLOAD_CREATE_COST = 15;
@@ -119,17 +118,16 @@ const uploadAndCreateDraft = async (req, res) => {
 
   const user = req.user;
   const filePath = req.file.path;
-  // Active paid tiers get unlimited text prep (no upload charge).
-  const paid = subscription.isPaidActive(user);
 
-  // 1. Check credits BEFORE doing any expensive work
-  if (!paid && user.credits < UPLOAD_CREATE_COST) {
+  // 1. Check credits BEFORE doing any expensive work. Paid tiers draw from their
+  // per-period allowance first, then the wallet (combined available balance).
+  if (subscription.availableCredits(user) < UPLOAD_CREATE_COST) {
     cleanupUploadedFile(filePath);
     return res.status(403).json({
       message: "Insufficient credits",
       code: "INSUFFICIENT_CREDITS",
       required: UPLOAD_CREATE_COST,
-      current: user.credits,
+      current: subscription.availableCredits(user),
     });
   }
 
@@ -157,11 +155,12 @@ const uploadAndCreateDraft = async (req, res) => {
       targetJob: null,
     });
 
-    // 5. Deduct credits only after all AI work succeeds (skipped for paid tiers)
-    if (!paid) {
-      user.credits -= UPLOAD_CREATE_COST;
-      await user.updateOne({ credits: user.credits });
-    }
+    // 5. Deduct credits only after all AI work succeeds. spendCredits draws from
+    // the tier allowance first, then the wallet, and records the Transaction.
+    const charge = await subscription.spendCredits(user, UPLOAD_CREATE_COST, {
+      type: "usage",
+      description: "Create CV from uploaded resume",
+    });
 
     // 6. Save Resume record
     const resume = await Resume.create({
@@ -228,16 +227,7 @@ const uploadAndCreateDraft = async (req, res) => {
     // 9. Compute ATS readiness score
     const atsReadiness = computeATSReadiness(extractedData, draft);
 
-    // 10. Record transaction for audit trail (amount 0 when covered by a paid tier)
-    await Transaction.create({
-      userId: user._id,
-      amount: paid ? 0 : -UPLOAD_CREATE_COST,
-      type: "usage",
-      description: paid
-        ? "Create CV from uploaded resume (covered by plan)"
-        : "Create CV from uploaded resume",
-      status: "completed",
-    });
+    // 10. (Transaction is recorded inside spendCredits above.)
 
     // 11. Cleanup temp file
     cleanupUploadedFile(filePath);
@@ -246,7 +236,7 @@ const uploadAndCreateDraft = async (req, res) => {
       message: "Resume parsed and optimized successfully",
       draftId: draft._id,
       resumeId: resume._id,
-      remainingCredits: user.credits,
+      remainingCredits: charge.remainingCredits,
       atsReadiness,
     });
   } catch (error) {

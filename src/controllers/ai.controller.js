@@ -384,16 +384,17 @@ const generateSkills = async (req, res) => {
   try {
     const user = await require("../models/User").findById(req.user.id);
 
-    // Active paid tiers get unlimited text prep — skip the balance check.
-    if (!subscription.isPaidActive(user) && user.credits < SKILLS_COST) {
+    // Everyone spends credits now; paid tiers draw from their allowance first.
+    if (subscription.availableCredits(user) < SKILLS_COST) {
       return res.status(403).json({
         message: "Insufficient credits",
         code: "INSUFFICIENT_CREDITS",
         required: SKILLS_COST,
-        current: user.credits,
+        current: subscription.availableCredits(user),
       });
     }
 
+    // Paid tiers still get the richer output (e.g. STAR talking points).
     const isPaid = subscription.isPaidActive(user);
 
     const suggestions = await require("../services/ai.service").generateSkillsFromContext(
@@ -414,14 +415,14 @@ const generateSkills = async (req, res) => {
         message: "Insufficient credits",
         code: "INSUFFICIENT_CREDITS",
         required: SKILLS_COST,
-        current: user.credits,
+        current: subscription.availableCredits(user),
       });
     }
 
     res.json({
       suggestions,
       isPaid,
-      remainingCredits: user.credits,
+      remainingCredits: subscription.availableCredits(user),
     });
   } catch (error) {
     console.error("Skills Gen Error:", error);
@@ -506,13 +507,13 @@ const getJobKeywords = async (req, res) => {
       // New/changed JD → verify credits before spending.
       const User = require("../models/User");
       const user = await User.findById(req.user.id);
-      // Active paid tiers get unlimited text prep — skip the balance check.
-      if (!subscription.isPaidActive(user) && user.credits < JD_KEYWORDS_COST) {
+      // Everyone spends credits now; paid tiers draw from their allowance first.
+      if (subscription.availableCredits(user) < JD_KEYWORDS_COST) {
         return res.status(403).json({
           message: "Insufficient credits",
           code: "INSUFFICIENT_CREDITS",
           required: JD_KEYWORDS_COST,
-          current: user.credits,
+          current: subscription.availableCredits(user),
         });
       }
 
@@ -539,7 +540,7 @@ const getJobKeywords = async (req, res) => {
           message: "Insufficient credits",
           code: "INSUFFICIENT_CREDITS",
           required: JD_KEYWORDS_COST,
-          current: user.credits,
+          current: subscription.availableCredits(user),
         });
       }
 
@@ -548,7 +549,7 @@ const getJobKeywords = async (req, res) => {
         aiKeywordsHash: jdHash,
         source: "jd-ai",
         charged: charge.charged,
-        remainingCredits: user.credits,
+        remainingCredits: subscription.availableCredits(user),
       });
     }
 

@@ -18,7 +18,7 @@ const FREE_TASTE_SEC = 300; // 5 minutes
 // absolute backstop and is applied on top of these in maxSessionSecForTier.
 const MAX_SESSION_SEC_BY_TIER = {
   free: FREE_TASTE_SEC, // 5 min — the whole taste in one go
-  plus: 600, // 10 min
+  plus: 900, // 15 min — both paid tiers get a full 15-min session
   pro: 900, // 15 min (Premium)
 };
 
@@ -33,6 +33,7 @@ const CATALOG = {
     tier: "plus",
     model: "mini",
     minutes: 15,
+    credits: 150, // text-AI/CV/prep allowance; resets each period (no roll-over)
     periodDays: 7,
   },
   monthly_pro: {
@@ -44,6 +45,7 @@ const CATALOG = {
     tier: "plus",
     model: "mini",
     minutes: 50,
+    credits: 500,
     periodDays: 30,
   },
   monthly_premium: {
@@ -55,13 +57,14 @@ const CATALOG = {
     tier: "pro",
     model: "full",
     minutes: 45,
+    credits: 1000,
     periodDays: 30,
   },
-  // CV Agent plans — for people who create CVs for clients. Unlimited CV tailoring
-  // + unlimited downloads (isPaidActive), NO live interview minutes (minutes: 0).
-  // Map to "plus" so they count as paid. weekly / monthly / yearly cycles.
-  // (The dedicated agent role + CV-only dashboard are a future build — see
-  // CV-AGENT-PLAN.md.)
+  // CV Agent plans — for people who create CVs for clients. Each grants a pool of
+  // CV credits (for tailoring) + UNLIMITED downloads (isPaidActive skips the ₦500
+  // download charge), and NO live interview minutes (minutes: 0). Map to "plus" so
+  // they count as paid. weekly / monthly / yearly cycles. Drives the agent role +
+  // earnings dashboard (/agent).
   agent_weekly: {
     id: "agent_weekly",
     label: "Small Wins",
@@ -71,6 +74,7 @@ const CATALOG = {
     tier: "plus",
     model: "mini", // unused — 0 interview minutes
     minutes: 0,
+    credits: 250, // reseller CV allowance (no interview minutes)
     periodDays: 7,
   },
   agent_monthly: {
@@ -82,6 +86,7 @@ const CATALOG = {
     tier: "plus",
     model: "mini",
     minutes: 0,
+    credits: 1200,
     periodDays: 30,
   },
   agent_yearly: {
@@ -93,7 +98,26 @@ const CATALOG = {
     tier: "plus",
     model: "mini",
     minutes: 0,
+    credits: 18000,
     periodDays: 365,
+  },
+  // Credit top-up packs — bought when the credit balance runs low. Added to the
+  // PERSISTENT wallet (never reset), unlike the per-tier allowance.
+  credits_500: {
+    id: "credits_500",
+    label: "75 Credits",
+    purpose: "credit",
+    amountNgn: 500,
+    amountUsd: 0.75,
+    credits: 75,
+  },
+  credits_1000: {
+    id: "credits_1000",
+    label: "150 Credits",
+    purpose: "credit",
+    amountNgn: 1000,
+    amountUsd: 1.5,
+    credits: 150,
   },
   topup_5: {
     id: "topup_5",

@@ -99,36 +99,56 @@ describe("subscription.service", () => {
       expect(r).toEqual({ ok: true, method: "pass" });
     });
 
-    it("falls back to the free lifetime download", async () => {
-      User.updateOne
-        .mockResolvedValueOnce({ modifiedCount: 0 }) // no pass
-        .mockResolvedValueOnce({ modifiedCount: 1 }); // free taste consumed
+    it("offers NO free download — a free user with no pass is blocked", async () => {
+      User.updateOne.mockResolvedValueOnce({ modifiedCount: 0 }); // no pass
       const user = { _id: "u1", downloads: { passRemaining: 0, freeDownloadUsed: false } };
       const r = await subscription.consumeDownload(user);
-      expect(r).toEqual({ ok: true, method: "free" });
+      expect(r.ok).toBe(false);
+      // The free-download fallback is gone: only the pass decrement is attempted.
+      expect(User.updateOne).toHaveBeenCalledTimes(1);
     });
 
     it("blocks when nothing is available", async () => {
-      User.updateOne
-        .mockResolvedValueOnce({ modifiedCount: 0 }) // no pass
-        .mockResolvedValueOnce({ modifiedCount: 0 }); // free already used
-      const user = { _id: "u1", downloads: { passRemaining: 0, freeDownloadUsed: true } };
+      User.updateOne.mockResolvedValueOnce({ modifiedCount: 0 }); // no pass
+      const user = { _id: "u1", downloads: { passRemaining: 0 } };
       const r = await subscription.consumeDownload(user);
       expect(r.ok).toBe(false);
     });
   });
 
   describe("chargeOrSkip", () => {
-    it("skips the charge for an active paid tier but records usage", async () => {
+    it("charges an active paid tier from its per-period allowance first (not the wallet)", async () => {
+      User.updateOne.mockResolvedValue({ modifiedCount: 1 });
       const future = new Date(Date.now() + 100000);
-      const user = { _id: "u1", credits: 5, subscription: { tier: "plus", expiresAt: future } };
+      const user = {
+        _id: "u1",
+        credits: 5,
+        subscription: { tier: "plus", expiresAt: future, creditsRemaining: 100 },
+      };
       const r = await subscription.chargeOrSkip(user, 10, { description: "grade" });
-      expect(r.skipped).toBe(true);
-      expect(r.insufficient).toBe(false);
-      expect(User.updateOne).not.toHaveBeenCalled();
+      expect(r.charged).toBe(true);
+      expect(r.skipped).toBe(false);
+      // Drawn entirely from the tier allowance; the persistent wallet is untouched.
+      expect(user.subscription.creditsRemaining).toBe(90);
+      expect(user.credits).toBe(5);
       expect(Transaction.create).toHaveBeenCalledWith(
-        expect.objectContaining({ amount: 0, type: "usage" })
+        expect.objectContaining({ amount: -10, type: "usage" })
       );
+    });
+
+    it("falls through to the wallet once the tier allowance is exhausted", async () => {
+      User.updateOne.mockResolvedValue({ modifiedCount: 1 });
+      const future = new Date(Date.now() + 100000);
+      const user = {
+        _id: "u1",
+        credits: 20,
+        subscription: { tier: "plus", expiresAt: future, creditsRemaining: 4 },
+      };
+      const r = await subscription.chargeOrSkip(user, 10, { description: "grade" });
+      expect(r.charged).toBe(true);
+      // 4 from the tier bucket, the remaining 6 from the wallet.
+      expect(user.subscription.creditsRemaining).toBe(0);
+      expect(user.credits).toBe(14);
     });
 
     it("charges a free user atomically", async () => {

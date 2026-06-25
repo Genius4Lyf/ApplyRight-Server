@@ -67,13 +67,6 @@ const deepScan = async (req, res) => {
     if (draft.userId.toString() !== req.user.id) {
       return res.status(403).json({ message: "Not authorized to scan this CV" });
     }
-    // Job-seekers only: CVs an agent files under a client don't get the coach.
-    if (draft.clientId) {
-      return res.status(403).json({
-        code: "AGENT_CV",
-        message: "The ATS Coach is available on your own job-search CVs.",
-      });
-    }
 
     // A JD pasted into the scan field is the single source of truth — persist it
     // to the draft's target job so the keyword panel and ATS bullet suggestions
@@ -189,11 +182,6 @@ const guide = async (req, res) => {
     let draft;
     if (draftId === "new") {
       draft = cvData || {};
-      if (draft.clientId) {
-        return res
-          .status(403)
-          .json({ code: "AGENT_CV", message: "The ATS Coach is for your own CVs." });
-      }
     } else {
       if (!mongoose.Types.ObjectId.isValid(draftId)) {
         return res.status(400).json({ message: "Invalid draftId format" });
@@ -204,11 +192,6 @@ const guide = async (req, res) => {
       }
       if (draft.userId.toString() !== req.user.id) {
         return res.status(403).json({ message: "Not authorized" });
-      }
-      if (draft.clientId) {
-        return res
-          .status(403)
-          .json({ code: "AGENT_CV", message: "The ATS Coach is for your own CVs." });
       }
     }
 

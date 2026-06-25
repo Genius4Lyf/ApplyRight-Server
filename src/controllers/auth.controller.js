@@ -12,8 +12,11 @@ const generateReferralCode = () => {
 };
 
 const generateToken = (id) => {
+  // 7d (was 30d) shrinks the replay window for a stolen token. There's no
+  // refresh-token flow yet, so going shorter would force frequent re-logins;
+  // proper fix is short-lived access + refresh rotation (tracked for later).
   return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: "30d",
+    expiresIn: "7d",
   });
 };
 

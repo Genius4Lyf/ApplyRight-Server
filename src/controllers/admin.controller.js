@@ -516,6 +516,39 @@ exports.updateUserPlan = async (req, res, next) => {
   }
 };
 
+// @desc    Toggle the "unlock all interviewers" override for a user (support grant)
+// @route   PUT /api/v1/admin/users/:id/interview-unlock
+// @access  Private/Admin
+exports.updateUserInterviewUnlock = async (req, res) => {
+  try {
+    const { unlock } = req.body;
+    if (typeof unlock !== "boolean") {
+      return res
+        .status(400)
+        .json({ success: false, message: "`unlock` must be true or false" });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    user.unlockAllInterviewers = unlock;
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      data: { _id: user._id, email: user.email, unlockAllInterviewers: user.unlockAllInterviewers },
+      message: unlock
+        ? "All interviewers unlocked for this user"
+        : "Interviewer unlock removed for this user",
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
 // @desc    Delete user
 // @route   DELETE /api/v1/admin/users/:id
 // @access  Private/Admin

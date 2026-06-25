@@ -48,6 +48,10 @@ const userSchema = new mongoose.Schema(
       source: { type: String, enum: ["flutterwave", "admin", "none"], default: "none" },
       currentPeriodStart: { type: Date, default: null },
       expiresAt: { type: Date, default: null }, // null => no active subscription
+      // Per-tier credit allowance for text-AI/CV/prep. Set on each grant (REPLACE,
+      // no roll-over); spent BEFORE the persistent `credits` wallet; ignored once
+      // the subscription expires. The wallet (free + ad + referral + top-up) persists.
+      creditsRemaining: { type: Number, default: 0 },
     },
     // Live (voice) interview minute balance. Minutes expire each period (no
     // rollover): a new subscription REPLACES secondsRemaining; top-ups $inc it.
@@ -63,6 +67,10 @@ const userSchema = new mongoose.Schema(
         reservedSec: { type: Number, default: 0 },
         startedAt: { type: Date, default: null },
         mode: { type: String, enum: ["free", "paid", null], default: null },
+        // Multi-voice panel (Premium) mints one realtime session PER seat under
+        // this single reservation. Counts mints so a client can't spin up
+        // unbounded paid OpenAI sessions (cost guard); see mintRealtimeSegment.
+        segmentsMinted: { type: Number, default: 0 },
       },
     },
     // CV PDF downloads. Free users get one clean download (lifetime taste); after
@@ -114,6 +122,13 @@ const userSchema = new mongoose.Schema(
       todayDate: { type: Date, default: null },
     },
     hasEverPurchased: {
+      type: Boolean,
+      default: false,
+    },
+    // Support-grantable override: when true, ALL interview-loop interviewers are
+    // unlocked for this user (bypasses the per-round 65% gate). Set by an admin
+    // when a user reaches out to support. Does not affect minutes/credits.
+    unlockAllInterviewers: {
       type: Boolean,
       default: false,
     },

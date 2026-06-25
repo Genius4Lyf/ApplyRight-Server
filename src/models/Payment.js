@@ -48,7 +48,7 @@ const paymentSchema = new mongoose.Schema(
     },
     purpose: {
       type: String,
-      enum: ["subscription", "topup", "download"],
+      enum: ["subscription", "topup", "download", "credit"],
       required: true,
     },
     planId: {

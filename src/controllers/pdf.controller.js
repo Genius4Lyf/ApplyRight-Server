@@ -24,7 +24,7 @@ exports.generateCvPdf = async (req, res) => {
       if (!consumed.ok) {
         return res.status(402).json({
           message:
-            "You've used your free download. Pay ₦500 to download this CV, or go unlimited with a plan.",
+            "Pay ₦500 to download this CV as an ATS-ready PDF, or go unlimited with a plan.",
           code: "NEED_DOWNLOAD",
         });
       }

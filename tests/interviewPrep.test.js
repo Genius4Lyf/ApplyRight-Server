@@ -130,7 +130,11 @@ describe("Interview Prep API", () => {
     // (chargeOrSkip skips the credit charge). Use an active-subscription user.
     const mockPaidUser = {
       ...mockUser,
-      subscription: { tier: "plus", expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) },
+      subscription: {
+        tier: "plus",
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        creditsRemaining: 50,
+      },
     };
     const authPaid = () => {
       User.findById.mockReturnValue({
@@ -141,7 +145,8 @@ describe("Interview Prep API", () => {
       });
     };
 
-    it("should grade answer for a paid user without charging credits", async () => {
+    it("should grade answer for a paid user, charging from the tier allowance", async () => {
+      mockPaidUser.subscription.creditsRemaining = 50;
       authPaid();
       const mockAIResult = {
         score: 85,
@@ -174,13 +179,13 @@ describe("Interview Prep API", () => {
       expect(Array.isArray(res.body.attempts)).toBe(true);
       expect(res.body.attempts[res.body.attempts.length - 1].score).toEqual(85);
       expect(mockApplication.interviewPrep.jobQuestions[0].attempts.length).toBeGreaterThan(0);
-      // Paid tier: chargeOrSkip records a 0-amount usage Transaction and never
-      // decrements credits (the balance-guarded $inc must NOT be called).
-      expect(User.updateOne).not.toHaveBeenCalledWith(
-        { _id: mockUserId, credits: { $gte: 1 } },
-        { $inc: { credits: -1 } }
+      // Paid tier now spends credits — drawn from the per-period allowance first.
+      expect(User.updateOne).toHaveBeenCalledWith(
+        expect.objectContaining({ "subscription.creditsRemaining": { $gte: 1 } }),
+        expect.objectContaining({
+          $inc: expect.objectContaining({ "subscription.creditsRemaining": -1 }),
+        })
       );
-      expect(res.body.remainingCredits).toEqual(10); // unchanged
       expect(Transaction.create).toHaveBeenCalled();
       expect(mockApplication.save).toHaveBeenCalled();
     });
@@ -321,10 +326,14 @@ describe("Interview Prep API", () => {
     });
 
     describe("POST /api/interview-prep/:applicationId/grade-story", () => {
-      // Story grading is paid-only (unlimited for paid). Authenticate a paid user.
+      // Story grading is paid-only; now also spends credits. Authenticate a paid user.
       const mockPaidUser = {
         ...mockUser,
-        subscription: { tier: "plus", expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) },
+        subscription: {
+          tier: "plus",
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          creditsRemaining: 50,
+        },
       };
       beforeEach(() => {
         User.findById.mockReturnValue({
@@ -335,7 +344,8 @@ describe("Interview Prep API", () => {
         });
       });
 
-      it("should grade a story for a paid user (no credit charge) and set confidence", async () => {
+      it("should grade a story for a paid user (charging credits) and set confidence", async () => {
+        mockPaidUser.subscription.creditsRemaining = 50;
         mockApplication.interviewPrep.stories = [
           { id: "st1", title: "Led migration", situation: "s", task: "t", action: "a", result: "r" },
         ];
@@ -363,10 +373,12 @@ describe("Interview Prep API", () => {
         expect(res.statusCode).toEqual(200);
         expect(res.body.score).toEqual(80);
         expect(res.body.confidence).toEqual("ready"); // score > 75
-        // Paid tier: no balance-guarded credit decrement.
-        expect(User.updateOne).not.toHaveBeenCalledWith(
-          { _id: mockUserId, credits: { $gte: 1 } },
-          { $inc: { credits: -1 } }
+        // Paid tier now spends credits — drawn from the per-period allowance first.
+        expect(User.updateOne).toHaveBeenCalledWith(
+          expect.objectContaining({ "subscription.creditsRemaining": { $gte: 1 } }),
+          expect.objectContaining({
+            $inc: expect.objectContaining({ "subscription.creditsRemaining": -1 }),
+          })
         );
         expect(mockApplication.interviewPrep.stories[0].confidence).toEqual("ready");
       });

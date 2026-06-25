@@ -9,6 +9,8 @@ router.post("/tts", protect, interviewPrepController.synthesizeTts);
 router.get("/", protect, interviewPrepController.list);
 router.get("/:applicationId", protect, interviewPrepController.getOne);
 router.get("/:applicationId/linked-cv", protect, interviewPrepController.getLinkedCV);
+// Uploaded resume text (for "View CV" when there's no ApplyRight-generated CV).
+router.get("/:applicationId/resume-text", protect, interviewPrepController.getResumeText);
 
 // Legacy single-string notes endpoint. Kept as a compat shim — the controller
 // folds the incoming string into the first note in the new array shape.
@@ -76,6 +78,11 @@ router.post(
   interviewPrepController.conversationTurn
 );
 
+// "Who's likely to interview you" panel preview (HR + 2 JD-derived interviewers).
+// Open to all tiers so the prep screen can show it as an upsell teaser; running
+// the panel live is gated by the minute economy in createRealtimeSession.
+router.get("/:applicationId/panel", protect, interviewPrepController.getInterviewPanel);
+
 // Realtime voice interview: mint a short-lived OpenAI ephemeral client secret;
 // the browser does the WebRTC handshake directly with OpenAI. Gated by live-
 // minute balance in the controller (free 5-min taste vs paid minutes), NOT by
@@ -84,6 +91,15 @@ router.post(
   "/:applicationId/realtime-session",
   protect,
   interviewPrepController.createRealtimeSession
+);
+
+// Premium multi-voice panel: mint the next seat's realtime session (its own
+// voice) under the SAME reservation. Gated to Premium + a live reservation in
+// the controller; reserves no new minutes.
+router.post(
+  "/:applicationId/realtime-segment",
+  protect,
+  interviewPrepController.mintRealtimeSegment
 );
 
 // Assess a finished conversational interview from its transcript (AI grade,

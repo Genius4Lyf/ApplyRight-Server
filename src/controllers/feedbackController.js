@@ -172,52 +172,12 @@ exports.getAllFeedbacks = async (req, res, next) => {
   }
 };
 
-// @desc    Promote user to admin (Secret endpoint)
-// @route   POST /api/v1/feedback/promote
-// @access  Private
-exports.promoteToAdmin = async (req, res, next) => {
-  try {
-    const { secretKey } = req.body;
+// NOTE: The `POST /api/v1/feedback/promote` (promoteToAdmin) endpoint was removed.
+// It was guarded only by `protect` and fell back to a hardcoded secret
+// ("applyright_admin_2026") committed in source, letting ANY authenticated user
+// self-promote to admin. Admin accounts are created via the dedicated
+// `register-secret-admin` flow gated by ADMIN_SECRET_KEY in auth.controller.js.
 
-    // Simple secret key check - in production use env var
-    const ADMIN_SECRET = process.env.ADMIN_SECRET || "applyright_admin_2026";
-
-    if (secretKey !== ADMIN_SECRET) {
-      return res.status(401).json({
-        success: false,
-        error: "Invalid secret key",
-      });
-    }
-
-    const user = await User.findById(req.user.id);
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: "User not found",
-      });
-    }
-
-    user.role = "admin";
-    await user.save();
-
-    res.status(200).json({
-      success: true,
-      data: {
-        id: user._id,
-        firstName: user.firstName,
-        email: user.email,
-        role: user.role,
-      },
-    });
-  } catch (error) {
-    console.error("Promote admin error:", error);
-    res.status(500).json({
-      success: false,
-      error: "Server Error",
-    });
-  }
-};
 // @desc    Toggle feedback featured status
 // @route   PUT /api/v1/feedback/:id/feature
 // @access  Private/Admin

@@ -336,6 +336,9 @@ exports.getOne = async (req, res) => {
         application: {
           ...application,
           source: "application",
+          // Support-granted loop override (read from the user) so the UI can show
+          // all interviewers unlocked.
+          unlockAllInterviewers: !!req.user.unlockAllInterviewers,
           interviewPrep: {
             ...prep,
             skillsWithEvidence,
@@ -361,6 +364,7 @@ exports.getOne = async (req, res) => {
       jobTitle: draft.title || "CV draft",
       jobCompany: "",
       draftCVId: draft._id,
+      unlockAllInterviewers: !!req.user.unlockAllInterviewers,
       interviewPrep: { ...prep, skillsWithEvidence, userNotes: normalizeNotes(prep.userNotes) },
     };
     return res.json({ application: draftAsApplication });
@@ -587,6 +591,33 @@ exports.updateSkillConfidence = async (req, res) => {
  * skill names (with-evidence) AND the draft has not been updated since the
  * last save. If the draft is newer, we want the user to re-pull.
  */
+// Return the candidate's UPLOADED resume text for this application, if any — so
+// the prep page's "View CV" can show the upload when there's no ApplyRight-
+// generated CV. Read-only, ownership-checked.
+exports.getResumeText = async (req, res) => {
+  try {
+    const application = await Application.findById(req.params.applicationId).select(
+      "userId resumeId"
+    );
+    if (!application) return res.status(404).json({ message: "Application not found" });
+    if (application.userId.toString() !== req.user.id) {
+      return res.status(401).json({ message: "User not authorized" });
+    }
+    if (!application.resumeId) return res.status(200).json({ hasResume: false, rawText: "" });
+    const Resume = require("../models/Resume");
+    const resume = await Resume.findById(application.resumeId).select("rawText createdAt");
+    const rawText = (resume && resume.rawText) || "";
+    return res.status(200).json({
+      hasResume: !!rawText.trim(),
+      rawText,
+      uploadedAt: resume?.createdAt || null,
+    });
+  } catch (error) {
+    console.error("[InterviewPrep] getResumeText failed:", error.message);
+    res.status(500).json({ message: "Failed to load the uploaded resume" });
+  }
+};
+
 exports.getLinkedCV = async (req, res) => {
   try {
     const { applicationId: id } = req.params;
@@ -908,10 +939,11 @@ exports.gradeAnswer = async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const GRADE_COST = 1;
-    // Active paid tiers get unlimited text prep — skip the balance check for them.
-    if (!subscription.isPaidActive(user) && user.credits < GRADE_COST) {
+    // Paid-only route (requireTier); now also spends credits from the tier
+    // allowance first, then the wallet.
+    if (subscription.availableCredits(user) < GRADE_COST) {
       return res.status(403).json({
-        message: "Insufficient credits to grade response. Watch an ad to earn credits.",
+        message: "Insufficient credits to grade response. Buy credits or watch an ad to earn more.",
         code: "INSUFFICIENT_CREDITS",
       });
     }
@@ -1002,7 +1034,7 @@ exports.gradeAnswer = async (req, res) => {
       refinedAnswer: aiResult.refinedAnswer,
       confidence: autoConfidence,
       attempts,
-      remainingCredits: user.credits,
+      remainingCredits: subscription.availableCredits(user),
     });
   } catch (error) {
     console.error("[InterviewPrep] gradeAnswer failed:", error.message);
@@ -1042,10 +1074,10 @@ exports.generateFollowUp = async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const FOLLOWUP_COST = 1;
-    // Active paid tiers get unlimited text prep — skip the balance check.
-    if (!subscription.isPaidActive(user) && user.credits < FOLLOWUP_COST) {
+    // Paid-only route (requireTier); now also spends credits (tier allowance first).
+    if (subscription.availableCredits(user) < FOLLOWUP_COST) {
       return res.status(403).json({
-        message: "Insufficient credits for a follow-up. Watch an ad to earn credits.",
+        message: "Insufficient credits for a follow-up. Buy credits or watch an ad to earn more.",
         code: "INSUFFICIENT_CREDITS",
       });
     }
@@ -1063,7 +1095,7 @@ exports.generateFollowUp = async (req, res) => {
 
     if (!aiResult.followUp) {
       // Nothing usable produced — don't charge.
-      return res.status(200).json({ followUp: "", remainingCredits: user.credits });
+      return res.status(200).json({ followUp: "", remainingCredits: subscription.availableCredits(user) });
     }
 
     // Charge (or skip for an active paid tier).
@@ -1078,7 +1110,7 @@ exports.generateFollowUp = async (req, res) => {
       });
     }
 
-    res.status(200).json({ followUp: aiResult.followUp, remainingCredits: user.credits });
+    res.status(200).json({ followUp: aiResult.followUp, remainingCredits: subscription.availableCredits(user) });
   } catch (error) {
     console.error("[InterviewPrep] generateFollowUp failed:", error.message);
     if (error.name === "AIUnavailableError" || error.code === "AI_UNAVAILABLE") {
@@ -1165,11 +1197,140 @@ exports.conversationTurn = async (req, res) => {
  * slider sends a requestedSec (paid only) and a wrapUp toggle; the wrap-up window
  * draws from the same reservation so it is billed too. SECURITY: never log the secret.
  */
+// Return the cached interview roster, generating + persisting it once on a miss.
+// The roster is JD-derived (NOT style-driven) and includes a per-seat description,
+// so it's generated a single time per application and reused for the prep preview,
+// the "pick your interviewer" chooser, and the live session. Regenerates only if
+// missing or stale (pre-description cache). Degrades to a deterministic fallback
+// inside ai.service, so this never throws on AI being unavailable.
+const loadOrGeneratePanel = async (application, jobMeta, fit, _style, meta = {}) => {
+  const cached = application.interviewPrep?.panel;
+  const hasDescriptions =
+    Array.isArray(cached?.seats) &&
+    cached.seats.length >= 2 &&
+    cached.seats.every((s) => s && s.description);
+  if (hasDescriptions) return cached.seats;
+
+  const aiService = require("../services/ai.service");
+  const seats = await aiService.buildInterviewPanel(jobMeta, fit, "", meta);
+  application.interviewPrep = application.interviewPrep || {};
+  application.interviewPrep.panel = { generatedAt: new Date(), seats };
+  await application.save();
+  return seats;
+};
+
+// Interview LOOP gating: you unlock the next interviewer by reaching this score
+// on the current one (the "almost there" band) — encouraging, not a hard wall.
+// HR (seat 0) is always open; seat i needs seat i-1 passed. Kept here so the
+// backend enforces it (anti-bypass) and the frontend mirrors the same rule.
+const INTERVIEW_PASS_SCORE = 65;
+const seatUnlocked = (seatIndex, rounds = [], unlockAll = false) => {
+  if (unlockAll) return true; // support-granted override: all interviewers open
+  if (!Number.isInteger(seatIndex) || seatIndex <= 0) return true; // HR / first always open
+  const prev = (Array.isArray(rounds) ? rounds : []).find((r) => r && r.seatIndex === seatIndex - 1);
+  return !!prev && typeof prev.score === "number" && prev.score >= INTERVIEW_PASS_SCORE;
+};
+
+// Split a reservation's total seconds across N panel seats (multi-voice). Each
+// seat runs as its own realtime session capped to its slice, so the SUM of caps
+// equals reservedSec — total OpenAI exposure stays bounded by what we reserved,
+// no matter how the client paces the handoffs. The LAST seat carries the wrap-up
+// grace (it delivers the closing). Computed identically in createRealtimeSession
+// (seat 0) and mintRealtimeSegment (seats 1..N-1) so budgets line up.
+const REALTIME_GRACE_DEFAULT = 90;
+const panelSegmentBudgets = (reservedSec, n, wrapUpOn) => {
+  const base = Math.floor(reservedSec / n);
+  return Array.from({ length: n }, (_, i) => {
+    const seg = i < n - 1 ? base : reservedSec - base * (n - 1); // last seat gets the remainder
+    const isLast = i === n - 1;
+    const graceSec =
+      isLast && wrapUpOn
+        ? Math.min(Number(process.env.REALTIME_GRACE_SEC) || REALTIME_GRACE_DEFAULT, seg)
+        : 0;
+    return { seatIndex: i, maxSessionSec: seg, mainSec: seg - graceSec, graceSec, isLast };
+  });
+};
+
+// Build the jobMeta + fit pair used for both panel generation and realtime
+// instructions, from a populated Application. Mirrors the inline build in
+// createRealtimeSession so the preview endpoint stays in sync.
+const panelInputsFromApplication = (application) => {
+  const jobMeta = {
+    jobTitle: application.jobTitle || application.jobId?.title || "",
+    company: application.jobCompany || application.jobId?.company || "",
+    jobDescription: application.jobId?.description || application.jobDescription || "",
+  };
+  const fa = application.fitAnalysis || {};
+  const mustHaveNames = (arr) =>
+    (Array.isArray(arr) ? arr : [])
+      .filter((s) => s && s.importance === "must_have" && s.name)
+      .map((s) => s.name);
+  const fit = {
+    matchedMustHaves: mustHaveNames(fa.matchedSkills),
+    missingMustHaves: mustHaveNames(fa.missingSkills),
+    experienceNote: fa.experienceAnalysis?.match === false ? fa.experienceAnalysis?.feedback || "" : "",
+    seniorityNote: fa.seniorityAnalysis?.match === false ? fa.seniorityAnalysis?.feedback || "" : "",
+  };
+  return { jobMeta, fit };
+};
+
+/**
+ * GET /:applicationId/panel — the "who's likely to interview you" preview.
+ * PAID tiers get the real 3-person panel (HR + 2 JD-derived seats), generated +
+ * cached. FREE tier gets a GENERIC teaser (no AI call, no cost) so the prep
+ * screen can show a blurred upsell without us paying generation for non-buyers.
+ */
+exports.getInterviewPanel = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const ALLOWED_STYLES = ["balanced", "screening", "technical", "behavioral"];
+    const style = ALLOWED_STYLES.includes(req.query.style) ? req.query.style : "balanced";
+
+    const application = await Application.findById(id).populate("jobId");
+    if (!application) return res.status(404).json({ message: "Application not found" });
+    if (application.userId.toString() !== req.user.id) {
+      return res.status(401).json({ message: "User not authorized" });
+    }
+
+    const subscription = require("../services/subscription.service");
+    const aiService = require("../services/ai.service");
+    const UserModel = require("../models/User");
+    const user = await UserModel.findById(req.user.id);
+
+    const { jobMeta, fit } = panelInputsFromApplication(application);
+
+    // Free tier → generic teaser (no AI spend). Paid → real, cached panel.
+    if (subscription.panelModeForUser(user) === "solo") {
+      return res
+        .status(200)
+        .json({ panel: aiService.interviewPanelTeaser(jobMeta.jobTitle), style, teaser: true });
+    }
+
+    const seats = await loadOrGeneratePanel(application, jobMeta, fit, style, {
+      userId: req.user.id,
+      applicationId: application._id,
+    });
+    res.status(200).json({ panel: seats, style, teaser: false });
+  } catch (error) {
+    console.error("[InterviewPrep] getInterviewPanel failed:", error.message);
+    res.status(500).json({ message: "Failed to load the interview panel" });
+  }
+};
+
 exports.createRealtimeSession = async (req, res) => {
   try {
     const { applicationId: id } = req.params;
-    const { questionSpine, timeOfDay, candidateName, voice, style, requestedSec, wrapUp } =
-      req.body || {};
+    const {
+      questionSpine,
+      timeOfDay,
+      candidateName,
+      voice,
+      style,
+      requestedSec,
+      wrapUp,
+      challenge,
+      interviewerSeatIndex, // pick-a-role: which roster seat runs this 1:1 round
+    } = req.body || {};
 
     const application = await Application.findById(id).populate("jobId");
     if (!application) return res.status(404).json({ message: "Application not found" });
@@ -1185,6 +1346,14 @@ exports.createRealtimeSession = async (req, res) => {
       userId: req.user.id,
       applicationId: application._id,
     });
+    // Is this interview grounded in the candidate's CV? (Has real experience or a
+    // summary to reference.) When false, the interviewer can't reference their
+    // background — the client warns the user so they can attach a CV/resume.
+    const cvGrounded = !!(
+      candidateContext &&
+      ((Array.isArray(candidateContext.experience) && candidateContext.experience.length > 0) ||
+        (typeof candidateContext.summary === "string" && candidateContext.summary.trim()))
+    );
     const jobMeta = {
       jobTitle: application.jobTitle || application.jobId?.title || "",
       company: application.jobCompany || application.jobId?.company || "",
@@ -1233,28 +1402,34 @@ exports.createRealtimeSession = async (req, res) => {
       });
     }
 
-    // Per-tier length cap. Paid users may request a shorter length (intro slider);
-    // free is fixed at its taste (requestedSec ignored). reservedSec = the full
-    // budget we'll bill against — main interview + (optional) wrap-up live inside it.
+    // The intro slider sets the TOTAL session length (the main interview PLUS the
+    // wrap-up) — 5–15 min for paid, capped by their remaining balance. Free has no
+    // slider (fixed 5-min taste). The wrap-up is carved out of the session (so the
+    // host always gets to close), leaving the rest for the actual interview.
     const planCap = subscription.maxSessionSecForTier(user);
-    const wantSec =
-      eff !== "free" && Number(requestedSec) > 0 ? Math.round(Number(requestedSec)) : planCap;
-    const reservedSec = Math.max(0, Math.min(planCap, avail, wantSec));
+    const budgetCap = Math.max(0, Math.min(planCap, avail));
+
+    // Wrap-up window (default on). Toggle off => hard cut at time-up.
+    const wrapUpOn = wrapUp !== false; // default true when omitted
+    const graceWanted = wrapUpOn ? Number(process.env.REALTIME_GRACE_SEC) || 90 : 0;
+
+    // reservedSec = the whole session the user picked (the OpenAI hard cap),
+    // bounded by the per-tier cap and their balance.
+    const sessionWant =
+      eff !== "free" && Number(requestedSec) > 0 ? Math.round(Number(requestedSec)) : budgetCap;
+    const reservedSec = Math.max(0, Math.min(budgetCap, sessionWant));
+
+    // Carve the wrap-up out of the session, but never let it eat the whole thing
+    // (keep >= 60s of actual interview when there's room). The client runs main
+    // then grace inside reservedSec; reconciliation bills the actual duration.
+    const graceSec = Math.max(0, Math.min(graceWanted, Math.max(0, reservedSec - 60)));
+    const mainSec = Math.max(0, reservedSec - graceSec);
     if (reservedSec <= 0) {
       return res.status(402).json({
         message: "Could not reserve interview minutes. Please try again.",
         code: "NO_MINUTES",
       });
     }
-
-    // Wrap-up window (default on). It draws from the SAME reservation, so the
-    // client must run main+grace within reservedSec; reconciliation then bills
-    // whatever was actually used (no unbilled grace leak). Toggle off => hard cut.
-    const wrapUpOn = wrapUp !== false; // default true when omitted
-    const graceSec = wrapUpOn
-      ? Math.min(Number(process.env.REALTIME_GRACE_SEC) || 90, reservedSec)
-      : 0;
-    const mainSec = reservedSec - graceSec;
 
     const reservationId = require("crypto").randomUUID();
     const startedAt = new Date();
@@ -1268,7 +1443,13 @@ exports.createRealtimeSession = async (req, res) => {
         {
           $inc: { "liveInterview.freeTasteUsedSec": reservedSec },
           $set: {
-            "liveInterview.activeReservation": { reservationId, reservedSec, startedAt, mode: "free" },
+            "liveInterview.activeReservation": {
+              reservationId,
+              reservedSec,
+              startedAt,
+              mode: "free",
+              segmentsMinted: 1,
+            },
           },
         }
       );
@@ -1278,7 +1459,13 @@ exports.createRealtimeSession = async (req, res) => {
         {
           $inc: { "liveInterview.secondsRemaining": -reservedSec },
           $set: {
-            "liveInterview.activeReservation": { reservationId, reservedSec, startedAt, mode: "paid" },
+            "liveInterview.activeReservation": {
+              reservationId,
+              reservedSec,
+              startedAt,
+              mode: "paid",
+              segmentsMinted: 1,
+            },
           },
         }
       );
@@ -1291,6 +1478,174 @@ exports.createRealtimeSession = async (req, res) => {
     }
 
     const ALLOWED_STYLES = ["balanced", "screening", "technical", "behavioral"];
+    const safeStyle = ALLOWED_STYLES.includes(style) ? style : "balanced";
+    const ALLOWED_CHALLENGE = ["gentle", "realistic", "tough"];
+    const safeChallenge = ALLOWED_CHALLENGE.includes(challenge) ? challenge : "realistic";
+
+    // Panel: paid tiers are interviewed by a 3-person panel (HR + 2 JD-derived).
+    // Load-or-generate+cache the panel for this style so the prep-screen preview
+    // and this live session show the SAME people. Free tier = solo (no panel).
+    const panelMode = subscription.panelModeForUser(user);
+    let panelSeats = [];
+    if (panelMode !== "solo") {
+      panelSeats = await loadOrGeneratePanel(application, jobMeta, fit, safeStyle, {
+        userId: req.user.id,
+        applicationId: application._id,
+      });
+    }
+
+    // PICK-A-ROLE (paid): the candidate chose ONE roster interviewer to run this
+    // round 1:1, in that interviewer's own voice. A focused single session — no
+    // panel, no segments, no tools. This is the unit of the interview "loop".
+    const seatIdx = Number(interviewerSeatIndex);
+    if (
+      panelMode !== "solo" &&
+      Number.isInteger(seatIdx) &&
+      seatIdx >= 0 &&
+      seatIdx < panelSeats.length
+    ) {
+      // Loop gating: refuse a locked interviewer (defense-in-depth — the UI also
+      // prevents it). Refund the just-made reservation so no minutes are lost.
+      if (!seatUnlocked(seatIdx, application.interviewPrep?.rounds, user.unlockAllInterviewers)) {
+        await UserModel.updateOne(
+          { _id: user._id, "liveInterview.activeReservation.reservationId": reservationId },
+          {
+            $inc: { "liveInterview.secondsRemaining": reservedSec },
+            $set: { "liveInterview.activeReservation": {} },
+          }
+        ).catch(() => {});
+        return res.status(403).json({
+          message: `Pass the previous interview (${INTERVIEW_PASS_SCORE}%) to unlock this interviewer.`,
+          code: "INTERVIEWER_LOCKED",
+        });
+      }
+      const chosen = panelSeats[seatIdx];
+      const ivInstructions = aiService.buildRealtimeInstructions(
+        candidateContext,
+        jobMeta,
+        Array.isArray(questionSpine) ? questionSpine : [],
+        Math.max(1, Math.round(mainSec / 60)),
+        {
+          timeOfDay: typeof timeOfDay === "string" ? timeOfDay : "",
+          candidateName: typeof candidateName === "string" ? candidateName.slice(0, 40) : "",
+          fit,
+          style: safeStyle,
+          challenge: safeChallenge,
+          interviewer: { name: chosen.name, role: chosen.role, focus: chosen.focus },
+        }
+      );
+      const ivModel = subscription.modelForUser(user);
+      let ivSession;
+      try {
+        ivSession = await realtime.mintRealtimeSession({
+          instructions: ivInstructions,
+          voice: chosen.voice, // the chosen interviewer's own voice
+          model: ivModel,
+          maxSessionSec: reservedSec,
+        });
+      } catch (mintErr) {
+        await UserModel.updateOne(
+          { _id: user._id, "liveInterview.activeReservation.reservationId": reservationId },
+          {
+            $inc: { "liveInterview.secondsRemaining": reservedSec },
+            $set: { "liveInterview.activeReservation": {} },
+          }
+        ).catch(() => {});
+        throw mintErr;
+      }
+      return res.status(200).json({
+        clientSecret: ivSession.clientSecret,
+        expiresAt: ivSession.expiresAt,
+        model: ivSession.model,
+        voice: ivSession.voice,
+        mainSec,
+        graceSec,
+        maxSessionSec: ivSession.maxSessionSec,
+        reservationId,
+        reservedSec,
+        // Echo the chosen interviewer so the UI shows who's interviewing this round.
+        interviewer: { seatIndex: seatIdx, name: chosen.name, role: chosen.role, focus: chosen.focus },
+        panelMode: "single-interviewer",
+        cvGrounded,
+      });
+    }
+
+    // MULTI-VOICE (Premium): run the panel as one realtime session PER seat. Mint
+    // ONLY seat 0 (HR) now; the client calls /realtime-segment for seats 1..N-1
+    // under this SAME reservation. Each session is capped to its slice so total
+    // OpenAI exposure never exceeds reservedSec (panelSegmentBudgets).
+    if (panelMode === "multi-voice" && panelSeats.length >= 2) {
+      const N = panelSeats.length;
+      const budgets = panelSegmentBudgets(reservedSec, N, wrapUpOn);
+      const seg0 = budgets[0];
+      const seat0 = panelSeats[0];
+
+      const seg0Instructions = aiService.buildRealtimeInstructions(
+        candidateContext,
+        jobMeta,
+        Array.isArray(questionSpine) ? questionSpine : [],
+        Math.max(1, Math.round(seg0.mainSec / 60)),
+        {
+          timeOfDay: typeof timeOfDay === "string" ? timeOfDay : "",
+          candidateName: typeof candidateName === "string" ? candidateName.slice(0, 40) : "",
+          fit,
+          style: safeStyle,
+          challenge: safeChallenge,
+          panel: panelSeats,
+          panelMode,
+          segment: { index: 0, isFirst: true, isLast: N === 1 },
+        }
+      );
+
+      const model = subscription.modelForUser(user);
+      let seg0Session;
+      try {
+        seg0Session = await realtime.mintRealtimeSession({
+          instructions: seg0Instructions,
+          voice: seat0.voice,
+          model,
+          maxSessionSec: seg0.maxSessionSec,
+          // Seat 0 hands off to seat 1 via the tool (unless it's a 1-seat panel).
+          enableHandoff: N > 1,
+        });
+      } catch (mintErr) {
+        // Multi-voice is paid-only → release the paid reservation on mint failure.
+        await UserModel.updateOne(
+          { _id: user._id, "liveInterview.activeReservation.reservationId": reservationId },
+          {
+            $inc: { "liveInterview.secondsRemaining": reservedSec },
+            $set: { "liveInterview.activeReservation": {} },
+          }
+        ).catch(() => {});
+        throw mintErr;
+      }
+
+      return res.status(200).json({
+        clientSecret: seg0Session.clientSecret,
+        expiresAt: seg0Session.expiresAt,
+        model: seg0Session.model,
+        voice: seg0Session.voice,
+        mainSec: seg0.mainSec,
+        graceSec: seg0.graceSec,
+        maxSessionSec: seg0Session.maxSessionSec,
+        reservationId,
+        reservedSec,
+        panel: panelSeats,
+        panelMode,
+        cvGrounded,
+        // Per-seat plan the client drives: it mints seats 1..N-1 via
+        // /realtime-segment as each prior seat's time runs out.
+        segments: budgets.map((b) => ({
+          seatIndex: b.seatIndex,
+          name: panelSeats[b.seatIndex].name,
+          role: panelSeats[b.seatIndex].role,
+          voice: panelSeats[b.seatIndex].voice,
+          mainSec: b.mainSec,
+          graceSec: b.graceSec,
+        })),
+      });
+    }
+
     const instructions = aiService.buildRealtimeInstructions(
       candidateContext,
       jobMeta,
@@ -1300,7 +1655,10 @@ exports.createRealtimeSession = async (req, res) => {
         timeOfDay: typeof timeOfDay === "string" ? timeOfDay : "",
         candidateName: typeof candidateName === "string" ? candidateName.slice(0, 40) : "",
         fit,
-        style: ALLOWED_STYLES.includes(style) ? style : "balanced",
+        style: safeStyle,
+        challenge: safeChallenge,
+        panel: panelSeats,
+        panelMode,
       }
     );
 
@@ -1316,6 +1674,9 @@ exports.createRealtimeSession = async (req, res) => {
         voice,
         model,
         maxSessionSec: reservedSec,
+        // Single-voice panel: the model drives the on-screen "who's speaking"
+        // highlight by calling set_active_speaker as it switches between panelists.
+        enableSpeakerTool: panelMode === "single-voice" && panelSeats.length >= 2,
       });
     } catch (mintErr) {
       const refund =
@@ -1345,6 +1706,11 @@ exports.createRealtimeSession = async (req, res) => {
       // Echoed back to assess-interview so we reconcile the right reservation.
       reservationId,
       reservedSec,
+      // The interview panel (empty for free/solo). Lets the UI show the 3
+      // interviewers ("who's likely to interview you") on the connecting screen.
+      panel: panelSeats,
+      panelMode,
+      cvGrounded,
     });
   } catch (error) {
     // Log only the message — never the secret or the OpenAI response body.
@@ -1363,6 +1729,140 @@ exports.createRealtimeSession = async (req, res) => {
 };
 
 /**
+ * POST /:applicationId/realtime-segment — mint the NEXT panel seat's realtime
+ * session for a Premium MULTI-VOICE interview. Runs UNDER the reservation already
+ * created by createRealtimeSession — it reserves NO new minutes, it only mints
+ * another short-lived OpenAI session with that seat's distinct voice. Guarded so a
+ * client can't open unbounded paid sessions on one reservation (cost control).
+ */
+exports.mintRealtimeSegment = async (req, res) => {
+  try {
+    const { applicationId: id } = req.params;
+    const { reservationId, seatIndex, timeOfDay, candidateName, style, questionSpine, challenge } =
+      req.body || {};
+
+    const application = await Application.findById(id).populate("jobId");
+    if (!application) return res.status(404).json({ message: "Application not found" });
+    if (application.userId.toString() !== req.user.id) {
+      return res.status(401).json({ message: "User not authorized" });
+    }
+
+    const subscription = require("../services/subscription.service");
+    const aiService = require("../services/ai.service");
+    const realtime = require("../services/realtime.service");
+    const UserModel = require("../models/User");
+    const { buildInterviewCandidateContext } = require("./analysis.controller");
+
+    const user = await UserModel.findById(req.user.id);
+    if (subscription.panelModeForUser(user) !== "multi-voice") {
+      return res
+        .status(403)
+        .json({ message: "The multi-voice panel is a Premium feature.", code: "TIER_REQUIRED" });
+    }
+
+    // Must run under the live reservation minted by createRealtimeSession.
+    const ar = user?.liveInterview?.activeReservation;
+    if (!ar || !ar.reservationId || ar.reservationId !== reservationId || ar.mode !== "paid") {
+      return res
+        .status(409)
+        .json({ message: "No active interview reservation.", code: "NO_RESERVATION" });
+    }
+
+    const panelSeats = application.interviewPrep?.panel?.seats || [];
+    const N = panelSeats.length;
+    const idx = Math.round(Number(seatIndex));
+    if (!Number.isInteger(idx) || idx < 1 || idx >= N) {
+      return res.status(400).json({ message: "Invalid panel seat." });
+    }
+
+    // Cost guard: cap total mints per reservation (seat 0 already counts as 1).
+    // Allow up to N + 1 to tolerate one reconnect retry; beyond that we refuse.
+    const guard = await UserModel.updateOne(
+      {
+        _id: user._id,
+        "liveInterview.activeReservation.reservationId": reservationId,
+        "liveInterview.activeReservation.segmentsMinted": { $lt: N + 1 },
+      },
+      { $inc: { "liveInterview.activeReservation.segmentsMinted": 1 } }
+    );
+    if (guard.modifiedCount === 0) {
+      return res
+        .status(409)
+        .json({ message: "Interview segment limit reached.", code: "SEGMENT_LIMIT" });
+    }
+
+    const reservedSec = ar.reservedSec || 0;
+    // wrapUp isn't persisted on the reservation; assume on (the default). It only
+    // affects the LAST seat's split, which is the seat that delivers the closing.
+    const budgets = panelSegmentBudgets(reservedSec, N, true);
+    const seg = budgets[idx];
+    const seat = panelSeats[idx];
+
+    const { jobMeta, fit } = panelInputsFromApplication(application);
+    const candidateContext = await buildInterviewCandidateContext(application, {
+      userId: req.user.id,
+      applicationId: application._id,
+    });
+    const ALLOWED_STYLES = ["balanced", "screening", "technical", "behavioral"];
+    const safeStyle = ALLOWED_STYLES.includes(style) ? style : "balanced";
+    const ALLOWED_CHALLENGE = ["gentle", "realistic", "tough"];
+    const safeChallenge = ALLOWED_CHALLENGE.includes(challenge) ? challenge : "realistic";
+
+    const instructions = aiService.buildRealtimeInstructions(
+      candidateContext,
+      jobMeta,
+      Array.isArray(questionSpine) ? questionSpine : [],
+      Math.max(1, Math.round(seg.mainSec / 60)),
+      {
+        timeOfDay: typeof timeOfDay === "string" ? timeOfDay : "",
+        candidateName: typeof candidateName === "string" ? candidateName.slice(0, 40) : "",
+        fit,
+        style: safeStyle,
+        challenge: safeChallenge,
+        panel: panelSeats,
+        panelMode: "multi-voice",
+        segment: { index: idx, isFirst: false, isLast: idx === N - 1 },
+      }
+    );
+
+    const model = subscription.modelForUser(user);
+    const session = await realtime.mintRealtimeSession({
+      instructions,
+      voice: seat.voice,
+      model,
+      maxSessionSec: seg.maxSessionSec,
+      // Non-final seats hand off to the next interviewer via the tool.
+      enableHandoff: idx < N - 1,
+    });
+
+    res.status(200).json({
+      clientSecret: session.clientSecret,
+      expiresAt: session.expiresAt,
+      model: session.model,
+      voice: session.voice,
+      mainSec: seg.mainSec,
+      graceSec: seg.graceSec,
+      maxSessionSec: session.maxSessionSec,
+      seatIndex: idx,
+      name: seat.name,
+      role: seat.role,
+    });
+  } catch (error) {
+    console.error("[InterviewPrep] mintRealtimeSegment failed:", error.message);
+    if (
+      error.code === "REALTIME_UNAVAILABLE" ||
+      error.code === "AI_UNAVAILABLE" ||
+      error.name === "AIUnavailableError"
+    ) {
+      return res
+        .status(503)
+        .json({ message: "The next interviewer is temporarily unavailable.", code: "REALTIME_UNAVAILABLE" });
+    }
+    res.status(500).json({ message: "Failed to start the next interviewer" });
+  }
+};
+
+/**
  * Assess a completed CONVERSATIONAL interview from its transcript and persist the
  * result as this prep's last session. Grounded in the candidate's CV + the job.
  * Replaces the old self-rating for conversational/realtime runs. Content-only
@@ -1375,7 +1875,8 @@ exports.createRealtimeSession = async (req, res) => {
 exports.assessInterview = async (req, res) => {
   try {
     const { applicationId: id } = req.params;
-    const { transcript, durationSec, plannedSec, reservationId } = req.body || {};
+    const { transcript, durationSec, plannedSec, reservationId, interviewerSeatIndex } =
+      req.body || {};
 
     const application = await Application.findById(id).populate("jobId");
     if (!application) return res.status(404).json({ message: "Application not found" });
@@ -1390,6 +1891,7 @@ exports.assessInterview = async (req, res) => {
     // client can only reduce the bill, never exceed the reservation.
     if (reservationId) {
       const UserModel = require("../models/User");
+      const Transaction = require("../models/Transaction");
       const u = await UserModel.findById(req.user.id);
       const ar = u?.liveInterview?.activeReservation;
       if (ar && ar.reservationId === reservationId) {
@@ -1405,14 +1907,19 @@ exports.assessInterview = async (req, res) => {
           { ...refundInc, $set: { "liveInterview.activeReservation": {} } }
         );
         if (recon.modifiedCount === 1) {
-          const eff = require("../services/subscription.service").getEffectiveTier(u);
-          await Transaction.create({
-            userId: u._id,
-            amount: 0, // money/credits don't move here — usage record for analytics
-            type: "usage",
-            description: `Live interview ${usedSec}s (${eff})`,
-            status: "completed",
-          });
+          // Usage record for analytics only — never let it break the score.
+          try {
+            const eff = require("../services/subscription.service").getEffectiveTier(u);
+            await Transaction.create({
+              userId: u._id,
+              amount: 0, // money/credits don't move here
+              type: "usage",
+              description: `Live interview ${usedSec}s (${eff})`,
+              status: "completed",
+            });
+          } catch (txErr) {
+            console.error("[InterviewPrep] usage transaction skipped:", txErr.message);
+          }
         }
       }
     }
@@ -1479,16 +1986,72 @@ exports.assessInterview = async (req, res) => {
     application.markModified("interviewPrep.interviewHistory");
     await application.save();
 
+    // Interview LOOP round (pick-a-role) — persisted in an ISOLATED, guarded write
+    // AFTER the core score save, with its own atomic ops, so any problem here can
+    // NEVER block the score itself (the response still returns 200). Upsert by
+    // seat: drop the old round for this seat, then add the new one.
+    let roundsOut = (application.interviewPrep.rounds || []).map((r) =>
+      typeof r.toObject === "function" ? r.toObject() : r
+    );
+    try {
+      const seatIdx = Number(interviewerSeatIndex);
+      const seats = application.interviewPrep.panel?.seats || [];
+      if (Number.isInteger(seatIdx) && seatIdx >= 0 && seatIdx < seats.length) {
+        const seat = seats[seatIdx];
+        const round = {
+          seatIndex: seatIdx,
+          name: seat.name,
+          role: seat.role,
+          completedAt,
+          score: assessment.overallScore,
+          readiness: assessment.readiness,
+          durationSec: Number.isFinite(durationSec) ? Math.round(durationSec) : undefined,
+          // Own deep copy so we never share a reference with lastInterviewSession.
+          assessment: JSON.parse(JSON.stringify(assessment)),
+        };
+        await Application.updateOne(
+          { _id: application._id },
+          { $pull: { "interviewPrep.rounds": { seatIndex: seatIdx } } }
+        );
+        await Application.updateOne(
+          { _id: application._id },
+          { $push: { "interviewPrep.rounds": round } }
+        );
+        const fresh = await Application.findById(application._id)
+          .select("interviewPrep.rounds")
+          .lean();
+        roundsOut = fresh?.interviewPrep?.rounds || roundsOut;
+      }
+    } catch (roundErr) {
+      console.error("[InterviewPrep] loop round persist skipped:", roundErr.message);
+    }
+
     res.status(200).json({
       assessment,
       lastInterviewSession: application.interviewPrep.lastInterviewSession,
+      rounds: roundsOut,
     });
   } catch (error) {
-    console.error("[InterviewPrep] assessInterview failed:", error.message);
-    if (error.name === "AIUnavailableError" || error.code === "AI_UNAVAILABLE") {
-      return res
-        .status(503)
-        .json({ message: "The interview assessor is temporarily unavailable.", code: "AI_UNAVAILABLE" });
+    // Log name + code + message so a recurring failure (e.g. Gemini quota/rate
+    // limit vs a save error) is diagnosable from the server logs.
+    console.error(
+      "[InterviewPrep] assessInterview failed:",
+      error.name,
+      error.code || error.status || "",
+      error.message
+    );
+    const msg = String(error.message || "").toLowerCase();
+    const isRateLimited =
+      error.status === 429 ||
+      error.code === 429 ||
+      /quota|rate limit|too many requests|resource_exhausted|429/.test(msg);
+    if (error.name === "AIUnavailableError" || error.code === "AI_UNAVAILABLE" || isRateLimited) {
+      return res.status(503).json({
+        message: isRateLimited
+          ? "The interview assessor is busy (AI rate limit) — wait a moment and re-run."
+          : "The interview assessor is temporarily unavailable.",
+        code: "AI_UNAVAILABLE",
+      });
     }
     res.status(500).json({ message: "Failed to assess the interview" });
   }
@@ -1533,10 +2096,10 @@ exports.gradeStoryAnswer = async (req, res) => {
     const GRADE_COST = 1;
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    // Active paid tiers get unlimited text prep — skip the balance check.
-    if (!subscription.isPaidActive(user) && user.credits < GRADE_COST) {
+    // Paid-only route (requireTier); now also spends credits (tier allowance first).
+    if (subscription.availableCredits(user) < GRADE_COST) {
       return res.status(403).json({
-        message: "Insufficient credits to grade response. Watch an ad to earn credits.",
+        message: "Insufficient credits to grade response. Buy credits or watch an ad to earn more.",
         code: "INSUFFICIENT_CREDITS",
       });
     }
@@ -1582,7 +2145,7 @@ exports.gradeStoryAnswer = async (req, res) => {
       starBreakdown: aiResult.starBreakdown,
       refinedAnswer: aiResult.refinedAnswer,
       confidence: autoConfidence,
-      remainingCredits: user.credits,
+      remainingCredits: subscription.availableCredits(user),
     });
   } catch (error) {
     console.error("[InterviewPrep] gradeStoryAnswer failed:", error.message);

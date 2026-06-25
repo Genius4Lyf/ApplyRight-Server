@@ -17,8 +17,6 @@ router.post("/verify", protect, billingController.verifyPaymentRedirect);
 router.get("/entitlement", protect, billingController.getEntitlement);
 
 router.get("/balance", protect, billingController.getBalance);
-router.post("/add", protect, billingController.addCredits);
-router.post("/usage", protect, billingController.deductCredits);
 router.get("/transactions", protect, billingController.getTransactions);
 router.post("/watch-ad", protect, billingController.watchAd);
 router.get("/ad-stats", protect, billingController.getWatchStats);

@@ -38,47 +38,107 @@ const buildTruncation = () => {
   };
 };
 
-const buildSessionConfig = (instructions, model, voice) => {
+// Tool a panel interviewer calls the moment they've finished their portion, so
+// the CLIENT can hand the floor to the next interviewer's (already pre-connected)
+// voice seamlessly — instead of cutting on a stopwatch. Only attached for
+// non-final panel seats.
+const HANDOFF_TOOL = {
+  type: "function",
+  name: "hand_off_to_next",
+  description:
+    "Call this the MOMENT you have finished your portion of the panel interview AND have just spoken your brief, natural hand-off line to the candidate (naming the next interviewer). This passes the floor to the next interviewer. Do NOT call it until you are genuinely done with your own questions, and never mid-way through the candidate's answer.",
+  parameters: { type: "object", properties: {}, required: [] },
+};
+
+// Single-voice panel: the model plays all interviewers in one continuous session.
+// It calls this whenever a DIFFERENT panelist takes the floor so the candidate's
+// screen highlights who is currently talking. UI-only — the conversation never
+// blocks on it.
+const SET_SPEAKER_TOOL = {
+  type: "function",
+  name: "set_active_speaker",
+  description:
+    "Call this whenever the focus of the interview moves to a different panel member — i.e. when you (the HR host) start relaying a question on a colleague's behalf, pass that colleague's FIRST NAME; when you return to your own HR questions, pass the HR host's first name. This highlights who the current question belongs to on the candidate's screen. Call it right before you ask that question.",
+  parameters: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description: "First name of the panel member whose question is now being asked",
+      },
+    },
+    required: ["name"],
+  },
+};
+
+const buildSessionConfig = (
+  instructions,
+  model,
+  voice,
+  { enableHandoff = false, enableSpeakerTool = false } = {}
+) => {
   // Optional voice playback speed (e.g. 1.1 for a snappier, less-draggy delivery).
   // Only included when REALTIME_SPEED is set, so we never risk a 400 by default.
   const output = { voice };
   const speed = Number(process.env.REALTIME_SPEED);
   if (Number.isFinite(speed) && speed > 0) output.speed = speed;
 
-  return {
-    session: {
-      type: "realtime",
-      model,
-      instructions,
-      truncation: buildTruncation(),
-      audio: {
-        input: {
-          // Transcribe the candidate's speech so the client can collect a transcript
-          // for end-of-interview AI grading (audio never reaches our backend).
-          transcription: { model: "whisper-1" },
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 600,
-          },
+  const session = {
+    type: "realtime",
+    model,
+    instructions,
+    truncation: buildTruncation(),
+    audio: {
+      input: {
+        // Transcribe the candidate's speech so the client can collect a transcript
+        // for end-of-interview AI grading (audio never reaches our backend).
+        transcription: { model: "whisper-1" },
+        turn_detection: {
+          type: "server_vad",
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 600,
         },
-        output,
       },
+      output,
     },
   };
+  const tools = [];
+  if (enableHandoff) tools.push(HANDOFF_TOOL);
+  if (enableSpeakerTool) tools.push(SET_SPEAKER_TOOL);
+  if (tools.length) {
+    session.tools = tools;
+    session.tool_choice = "auto";
+  }
+
+  return { session };
 };
 
 // Legacy (flat) shape — only tried if the nested shape 400s, to absorb API drift.
 // Keeps transcription so end-of-interview grading still works on the fallback path.
-const buildLegacySessionConfig = (instructions, model, voice) => ({
+const buildLegacySessionConfig = (
+  instructions,
   model,
   voice,
-  instructions,
-  modalities: ["audio", "text"],
-  input_audio_transcription: { model: "whisper-1" },
-  turn_detection: { type: "server_vad" },
-});
+  { enableHandoff = false, enableSpeakerTool = false } = {}
+) => {
+  const cfg = {
+    model,
+    voice,
+    instructions,
+    modalities: ["audio", "text"],
+    input_audio_transcription: { model: "whisper-1" },
+    turn_detection: { type: "server_vad" },
+  };
+  const tools = [];
+  if (enableHandoff) tools.push(HANDOFF_TOOL);
+  if (enableSpeakerTool) tools.push(SET_SPEAKER_TOOL);
+  if (tools.length) {
+    cfg.tools = tools;
+    cfg.tool_choice = "auto";
+  }
+  return cfg;
+};
 
 /**
  * Mint an ephemeral client secret for a single realtime session.
@@ -93,6 +153,8 @@ const mintRealtimeSession = async ({
   voice: requestedVoice,
   model: modelOverride,
   maxSessionSec: maxSessionSecOverride,
+  enableHandoff = false,
+  enableSpeakerTool = false,
 }) => {
   // Dedicated realtime key so live-interview spend is tracked on its own OpenAI
   // account. Falls back to the shared key if a separate one isn't configured.
@@ -122,13 +184,17 @@ const mintRealtimeSession = async ({
 
   let data;
   try {
-    const res = await post(buildSessionConfig(instructions, model, voice));
+    const res = await post(
+      buildSessionConfig(instructions, model, voice, { enableHandoff, enableSpeakerTool })
+    );
     data = res.data;
   } catch (err) {
     // One-shot fallback to the legacy flat shape on a 400 (schema drift).
     if (err.response?.status === 400) {
       try {
-        const res = await post(buildLegacySessionConfig(instructions, model, voice));
+        const res = await post(
+          buildLegacySessionConfig(instructions, model, voice, { enableHandoff, enableSpeakerTool })
+        );
         data = res.data;
       } catch {
         throw new RealtimeUnavailableError("Failed to create realtime session");

@@ -7,6 +7,7 @@ const {
   updateUserRole,
   updateUserTier,
   updateUserPlan,
+  updateUserInterviewUnlock,
   deleteUser,
   getAllTransactions,
   getUserDetails,
@@ -31,6 +32,7 @@ router.get("/users/:id", admin, getUserDetails);
 router.put("/users/:id/role", admin, updateUserRole);
 router.put("/users/:id/tier", admin, updateUserTier);
 router.put("/users/:id/plan", admin, updateUserPlan);
+router.put("/users/:id/interview-unlock", admin, updateUserInterviewUnlock);
 router.delete("/users/:id", admin, deleteUser);
 
 // Job Searches

@@ -46,28 +46,35 @@ const COSTS = {
  * Does NOT deduct — call deductCredits only after AI work succeeds.
  */
 const checkCredits = (user, cost) => {
-  // Active paid tiers get unlimited text prep — never blocked on balance.
-  if (subscription.isPaidActive(user)) return;
-  if (user.credits < cost) {
-    const err = new Error("Insufficient credits");
-    err.code = "INSUFFICIENT_CREDITS";
-    err.required = cost;
-    err.current = user.credits;
-    throw err;
-  }
+  // Paid tiers draw from their per-period allowance first, then the wallet —
+  // so the gate is the COMBINED available balance, not just the wallet.
+  if (subscription.availableCredits(user) >= cost) return;
+  const err = new Error("Insufficient credits");
+  err.code = "INSUFFICIENT_CREDITS";
+  err.required = cost;
+  err.current = subscription.availableCredits(user);
+  throw err;
 };
 
 /**
- * Helper: Deduct credits atomically and return the new balance.
+ * Helper: Deduct credits atomically and return the new combined balance.
  * Call this only after AI work has succeeded so users are never charged
- * for failed or unavailable AI calls. Active paid tiers are not charged.
+ * for failed or unavailable AI calls. Paid tiers spend their per-period
+ * allowance first, then the wallet (see subscription.spendCredits).
  */
 const deductCredits = async (user, cost) => {
-  checkCredits(user, cost);
-  if (subscription.isPaidActive(user)) return user.credits; // unlimited, no charge
-  user.credits -= cost;
-  await user.updateOne({ credits: user.credits });
-  return user.credits;
+  const res = await subscription.spendCredits(user, cost, {
+    type: "usage",
+    description: "AI usage",
+  });
+  if (res.insufficient) {
+    const err = new Error("Insufficient credits");
+    err.code = "INSUFFICIENT_CREDITS";
+    err.required = cost;
+    err.current = res.remainingCredits;
+    throw err;
+  }
+  return res.remainingCredits;
 };
 
 /**

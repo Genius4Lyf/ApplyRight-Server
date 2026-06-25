@@ -338,6 +338,42 @@ const applicationSchema = new mongoose.Schema(
       // backward-compatible without a destructive migration. Use Mixed so
       // either shape persists on save.
       userNotes: mongoose.Schema.Types.Mixed,
+      // Cached interview roster (paid). HR is always seat 0; seats 1-2 are
+      // AI-derived from the JD. Generated ONCE per application and cached so the
+      // prep preview, the "pick your interviewer" chooser, and the live interview
+      // all show the SAME people (and we don't re-pay generation each load). Each
+      // seat carries a `description` of what that interview is like (the role
+      // determines the interview TYPE — no separate style picker).
+      panel: {
+        generatedForStyle: { type: String }, // legacy; no longer used for caching
+        generatedAt: { type: Date },
+        seats: [
+          {
+            seat: Number,
+            name: String,
+            role: String,
+            focus: String,
+            voice: String,
+            description: String, // 1-2 sentences: what this interview will be like
+          },
+        ],
+      },
+      // Interview LOOP progress: the latest result per roster seat (keyed by
+      // seatIndex). Powers the loop board + combined readiness across rounds.
+      rounds: [
+        {
+          seatIndex: Number,
+          name: String,
+          role: String,
+          completedAt: Date,
+          score: Number, // 0-100
+          readiness: { type: String, enum: ["needs_work", "almost", "ready"] },
+          durationSec: Number,
+          // Full rubric from this round, so the Reviews tab can show what this
+          // interviewer scored + said (summary, strengths, gaps, dimensions).
+          assessment: mongoose.Schema.Types.Mixed,
+        },
+      ],
     },
     // Bundle-level warnings surfaced when one stage of the all-in-one
     // generation pipeline was skipped for a non-error reason (e.g. interview
