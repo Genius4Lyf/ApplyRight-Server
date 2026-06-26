@@ -88,6 +88,16 @@ const applicationSchema = new mongoose.Schema(
       overallFeedback: String,
       recommendation: String,
       mode: String, // 'AI' or 'Standard'
+      // Verbatim-quote-backed observations from the resume (Slice 2a) — each quote
+      // is validated to exist in the resume before saving, so feedback reads
+      // bespoke instead of generic. Empty when AI is off or finds nothing to quote.
+      evidence: [
+        {
+          quote: String,
+          issue: String,
+          fix: String,
+        },
+      ],
       matchedSkills: [
         {
           name: String,

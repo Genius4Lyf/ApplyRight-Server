@@ -387,6 +387,54 @@ const detectRedFlags = (draft = {}) => {
     }
   }
 
+  // 7. Unfilled placeholders left from AI bullet suggestions (e.g. "[X]%", "[N]").
+  //    Applying ATS bullets without replacing these is a real credibility hit —
+  //    the History suggestions modal already warns users to swap them for real
+  //    numbers, so catch the ones that slipped through.
+  const PLACEHOLDER = /\[(?:x|n|number|amount|value|metric|\$|%|\d{1,3})\]/i;
+  const placeholderHits = allBullets.filter((b) => PLACEHOLDER.test(b));
+  if (placeholderHits.length > 0) {
+    flags.push({
+      label: "Unfilled placeholders",
+      detail: `${placeholderHits.length} bullet${placeholderHits.length > 1 ? "s" : ""} still contain placeholders like "[X]%" or "[N]". Replace them with your real numbers before applying — recruiters and ATS notice.`,
+      severity: "high",
+    });
+  }
+
+  // 8. Page markers / parsing artifacts (e.g. "-- 1 of 3 --", "Page 1 of 3") left
+  //    after pasting from a PDF export — noise that confuses ATS parsers.
+  const PAGE_MARKER = /--+\s*\d+\s+of\s+\d+\s*--+|\bpage\s+\d+\s+of\s+\d+\b/i;
+  const summaryText = draft.professionalSummary || "";
+  if (allBullets.some((b) => PAGE_MARKER.test(b)) || PAGE_MARKER.test(summaryText)) {
+    flags.push({
+      label: "Page markers in your text",
+      detail: `Text like "1 of 3" or "Page 2 of 3" looks pasted from a PDF. Remove these — they clutter the CV and confuse ATS parsers.`,
+      severity: "medium",
+    });
+  }
+
+  // 9. Duplicate skills (case-insensitive) — pad the list and read careless.
+  const skillNames = (draft.skills || [])
+    .map((s) => (typeof s === "string" ? s : s?.name))
+    .filter(Boolean);
+  const seenSkill = new Set();
+  const dupSkills = [];
+  for (const n of skillNames) {
+    const key = n.trim().toLowerCase();
+    if (seenSkill.has(key)) {
+      if (!dupSkills.some((d) => d.toLowerCase() === key)) dupSkills.push(n);
+    } else {
+      seenSkill.add(key);
+    }
+  }
+  if (dupSkills.length > 0) {
+    flags.push({
+      label: "Duplicate skills",
+      detail: `"${dupSkills.slice(0, 3).join('", "')}" appear${dupSkills.length === 1 ? "s" : ""} more than once in your skills. Remove the repeats — a tight, deduped list reads stronger.`,
+      severity: "low",
+    });
+  }
+
   return flags;
 };
 

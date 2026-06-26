@@ -24,6 +24,25 @@ const WEIGHTS = {
   overall: 0.10,
 };
 
+// Human-friendly names for the detected domains (extraction.service.domainKeywords
+// keys) — used in the repositioning recommendation when a domain mismatch fires.
+const DOMAIN_LABELS = {
+  healthcare: "healthcare",
+  technology: "software/technology",
+  finance: "finance & accounting",
+  engineering: "engineering",
+  education: "education",
+  legal: "legal",
+  sales: "sales",
+  marketing: "marketing",
+  hr: "human resources",
+  logistics: "logistics & supply chain",
+  creative: "creative & design",
+  oil_gas: "oil & gas",
+  customer_service: "customer service",
+  admin: "administration",
+};
+
 // ─── Seniority Levels (ordinal ranking) ───
 const SENIORITY_RANK = {
   intern: 0,
@@ -464,6 +483,20 @@ const computeFitScore = ({ candidateData, jobData }) => {
 
   // ─── Action Plan ───
   const actionPlan = generateActionPlan(skillsResult, experienceResult, educationResult, seniorityResult);
+
+  // Domain mismatch → strategic repositioning advice. We already detect and
+  // penalise the mismatch above; turn that signal into the single most valuable
+  // sentence of the report instead of just silently docking points. Prepended so
+  // it leads the plan (it's the highest-leverage move for a cross-domain applicant).
+  if (domainPenalty > 0) {
+    const candLabel = DOMAIN_LABELS[candidateDomain.primary] || candidateDomain.primary;
+    const jobLabel = DOMAIN_LABELS[jobDomain.primary] || jobDomain.primary;
+    actionPlan.unshift({
+      task: `Your experience reads as ${candLabel}, but this role is in ${jobLabel}. Reposition rather than restart: lead with your most transferable, ${jobLabel}-relevant achievements, mirror the job's language, and move ${candLabel}-specific work into a secondary "Additional Experience" section so the top of your CV speaks to this role. Only claim experience you genuinely have.`,
+      importance: "must_have",
+      category: "repositioning",
+    });
+  }
 
   return {
     fitScore: Math.min(100, Math.max(0, fitScore)),

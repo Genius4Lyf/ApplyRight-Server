@@ -369,6 +369,7 @@ const analyzeFit = async (req, res) => {
       overallFeedback: aiResult.overallFeedback || "Analysis complete.",
       recommendation: aiResult.recommendation,
       mode: aiResult.mode,
+      evidence: aiResult.evidence || [],
       matchedSkills: aiResult.matchedSkills || [],
       missingSkills: aiResult.missingSkills || [],
       experienceAnalysis: {
@@ -800,6 +801,17 @@ const buildMarkdownFromDraft = (draft) => {
       lines.push(`${edu.school}${edu.graduationDate ? ` | ${edu.graduationDate}` : ""}`);
       lines.push("");
     }
+  }
+
+  // Certifications & Training (after Education)
+  const certs = (draft.certifications || []).filter((c) => c && (c.name || "").trim());
+  if (certs.length > 0) {
+    lines.push("## Certifications");
+    for (const cert of certs) {
+      const meta = [cert.issuer, cert.date].filter((p) => (p || "").trim()).join(", ");
+      lines.push(`- **${cert.name.trim()}**${meta ? ` — ${meta}` : ""}`);
+    }
+    lines.push("");
   }
 
   // Projects

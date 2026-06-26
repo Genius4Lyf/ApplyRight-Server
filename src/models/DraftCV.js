@@ -45,6 +45,17 @@ const draftCVSchema = new mongoose.Schema(
       ],
       aiKeywordsHash: String,
     },
+    // Cached "Auto-fill skills" generation. Keyed by a hash of the inputs the
+    // generation depends on (education + experience + projects + target job), so
+    // re-opening the modal or re-clicking returns the same set for free instead
+    // of re-charging the user (and re-hitting the AI). Regenerated only when the
+    // underlying profile actually changes. `bestForRole` is the deterministic
+    // JD-match set (names) used to drive the paid "Best for this role" picks.
+    skillsGenCache: {
+      hash: String,
+      suggestions: mongoose.Schema.Types.Mixed, // [{ category, skills[], skillsDetailed? }]
+      bestForRole: [String],
+    },
     personalInfo: {
       fullName: String,
       email: String,
@@ -80,6 +91,16 @@ const draftCVSchema = new mongoose.Schema(
         school: String,
         graduationDate: String,
         description: String,
+      },
+    ],
+    // Certifications & training — a structural section the builder previously
+    // lacked (Education only). High value for licence-gated trades/operations/
+    // healthcare roles. Rendered into the CV markdown after Education.
+    certifications: [
+      {
+        name: String,
+        issuer: String,
+        date: String,
       },
     ],
     skills: [

@@ -377,15 +377,90 @@ const generateSummaries = async (req, res) => {
 // @desc    Generate categorized skills from profile context
 // @route   POST /api/ai/generate-skills
 // @access  Private
+// Deterministic "Best for this role": of the generated skills, which ones align
+// with the target job's keywords (synonym + fuzzy match via the normalizer — no
+// AI call, no cost). Returns the matching generated skill NAMES. Empty when there
+// is no job description to rank against, which drives the "add a target job" UI.
+const scoreBestForRole = (skillNames, { description = "", aiKeywords = [] } = {}) => {
+  if (!Array.isArray(skillNames) || skillNames.length === 0) return [];
+
+  const { compareSkills, normalizeSkill } = require("../services/skillNormalizer.service");
+
+  // Prefer the richer cached AI keywords; else derive deterministically from the
+  // JD text (same extraction the free keyword baseline uses).
+  let jdKeywords =
+    Array.isArray(aiKeywords) && aiKeywords.length
+      ? aiKeywords
+      : description
+        ? require("../services/extraction.service")
+            .extractRequirements(description)
+            .skills.map((s) => ({
+              name: s.name,
+              importance: s.importance >= 4 ? "must_have" : "nice_to_have",
+            }))
+        : [];
+  if (!jdKeywords.length) return [];
+
+  // compareSkills(candidate, required): `matched` are JD keywords that were found
+  // among the generated skills; `matchedWith` (fuzzy) or `name` (direct) is the
+  // generated skill's canonical form.
+  const cmp = compareSkills(skillNames, jdKeywords);
+  const matchedCanon = new Set(
+    (cmp.matched || [])
+      .map((m) => (m.matchedWith || m.name || "").toLowerCase())
+      .filter(Boolean)
+  );
+  return skillNames.filter((n) => matchedCanon.has(normalizeSkill(n).canonical.toLowerCase()));
+};
+
 const generateSkills = async (req, res) => {
-  const { education, experience, projects, targetJob } = req.body;
+  const { education, experience, projects, targetJob, draftId } = req.body;
   const SKILLS_COST = 10;
 
   try {
     const user = await require("../models/User").findById(req.user.id);
+    // Paid tiers get the richer output (STAR talking points) and skip the charge.
+    const isPaid = subscription.isPaidActive(user);
 
-    // Everyone spends credits now; paid tiers draw from their allowance first.
-    if (subscription.availableCredits(user) < SKILLS_COST) {
+    // Load the draft (when saved) so the generation can be cached against the
+    // exact profile inputs — re-opening the modal or re-clicking then returns the
+    // same set for free instead of re-charging and re-hitting the AI.
+    let draft = null;
+    if (draftId && draftId !== "new") {
+      const found = await require("../models/DraftCV").findById(draftId);
+      if (found && found.userId.toString() === req.user.id) draft = found;
+    }
+
+    // Hash of everything the generation depends on (whitespace/case-insensitive
+    // on the JD so trivial edits don't bust the cache).
+    const inputHash = require("crypto")
+      .createHash("sha256")
+      .update(
+        JSON.stringify({
+          education: education || [],
+          experience: experience || [],
+          projects: projects || [],
+          targetJob: (targetJob || "").trim().toLowerCase().replace(/\s+/g, " "),
+        })
+      )
+      .digest("hex");
+
+    // Cache hit → free, no charge, no AI call.
+    if (
+      draft?.skillsGenCache?.hash === inputHash &&
+      Array.isArray(draft.skillsGenCache.suggestions)
+    ) {
+      return res.json({
+        suggestions: draft.skillsGenCache.suggestions,
+        bestForRole: draft.skillsGenCache.bestForRole || [],
+        isPaid,
+        fromCache: true,
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    // Verify credits before spending the AI call (free users only; paid skip).
+    if (!isPaid && subscription.availableCredits(user) < SKILLS_COST) {
       return res.status(403).json({
         message: "Insufficient credits",
         code: "INSUFFICIENT_CREDITS",
@@ -393,9 +468,6 @@ const generateSkills = async (req, res) => {
         current: subscription.availableCredits(user),
       });
     }
-
-    // Paid tiers still get the richer output (e.g. STAR talking points).
-    const isPaid = subscription.isPaidActive(user);
 
     const suggestions = await require("../services/ai.service").generateSkillsFromContext(
       education || [],
@@ -405,7 +477,16 @@ const generateSkills = async (req, res) => {
       isPaid
     );
 
-    // Charge (or skip for an active paid tier).
+    // Deterministic best-for-role set (prefers cached richer JD keywords).
+    const allNames = [];
+    (suggestions || []).forEach((g) => (g.skills || []).forEach((s) => allNames.push(s)));
+    const bestForRole = scoreBestForRole(allNames, {
+      description: targetJob || "",
+      aiKeywords: draft?.targetJob?.aiKeywords || [],
+    });
+
+    // Charge (or skip for an active paid tier) BEFORE caching, so a failed charge
+    // never leaves a cached result the user can re-fetch for free.
     const charge = await subscription.chargeOrSkip(user, SKILLS_COST, {
       type: "usage",
       description: "AI Skills Generation users profile context",
@@ -419,9 +500,19 @@ const generateSkills = async (req, res) => {
       });
     }
 
+    // Persist the cache on the draft so re-opens/re-clicks are free.
+    if (draft) {
+      draft.skillsGenCache = { hash: inputHash, suggestions, bestForRole };
+      draft.markModified("skillsGenCache");
+      await draft.save();
+    }
+
     res.json({
       suggestions,
+      bestForRole,
       isPaid,
+      fromCache: false,
+      charged: charge.charged,
       remainingCredits: subscription.availableCredits(user),
     });
   } catch (error) {
