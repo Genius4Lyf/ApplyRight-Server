@@ -157,9 +157,11 @@ const mintRealtimeSession = async ({
   enableSpeakerTool = false,
 }) => {
   // Dedicated realtime key so live-interview spend is tracked on its own OpenAI
-  // account. Falls back to the shared key if a separate one isn't configured.
-  const key = process.env.OPENAI_REALTIME_API_KEY || process.env.OPENAI_API_KEY;
-  if (!key) throw new RealtimeUnavailableError("OPENAI_REALTIME_API_KEY / OPENAI_API_KEY not configured");
+  // account. Intentionally does NOT fall back to OPENAI_API_KEY — the live voice
+  // must run only on the realtime key so its (much higher, per-minute audio) spend
+  // never lands on the shared text-AI key.
+  const key = process.env.OPENAI_REALTIME_API_KEY;
+  if (!key) throw new RealtimeUnavailableError("OPENAI_REALTIME_API_KEY not configured");
 
   // Caller (the tier-aware controller) may override the model per user. Default to
   // the mini speech2speech model: ~3-4x cheaper than full gpt-realtime with

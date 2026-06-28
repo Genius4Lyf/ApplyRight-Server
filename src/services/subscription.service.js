@@ -40,6 +40,15 @@ const modelForUser = (user) =>
   getEffectiveTier(user) === "pro" ? "gpt-realtime" : "gpt-realtime-mini";
 
 /**
+ * Text-AI (CV/content) model policy. CV agents are always paid (there are no free
+ * CV agents — see cv.controller's NEED_AGENT_SUB gate) → always the stronger model.
+ * Job seekers get the stronger model on ANY active paid tier (Plus or Pro); free
+ * seekers get the standard model. ai.service maps this boolean to gpt-4o vs
+ * gpt-4o-mini (respecting AI_MODEL / AI_MODEL_STRONG overrides).
+ */
+const usesStrongTextModel = (user) => user?.role === "agent" || isPaidActive(user);
+
+/**
  * How the live interview panel is delivered for this user's tier:
  *  - "solo"         → single interviewer (free; today's behaviour)
  *  - "single-voice" → 3-person panel role-played in ONE session/voice with named
@@ -275,6 +284,7 @@ module.exports = {
   isPaidActive,
   hasPaidAccess,
   modelForUser,
+  usesStrongTextModel,
   panelModeForUser,
   maxSessionSecForTier,
   grantEntitlement,

@@ -1,4 +1,8 @@
-const { generateOptimizedContent, generateInterviewQuestions } = require("../services/ai.service");
+const {
+  generateOptimizedContent,
+  generateInterviewQuestions,
+  resolveTextModel,
+} = require("../services/ai.service");
 const Application = require("../models/Application");
 const Resume = require("../models/Resume");
 const Job = require("../models/Job");
@@ -46,6 +50,7 @@ const generateApplication = async (req, res) => {
       job.description,
       {
         graduationYear: req.user.graduationYear, // Pass context
+        model: resolveTextModel(req.user), // tier-based: paid/agent → gpt-4o, free → gpt-4o-mini
       }
     );
 
@@ -182,13 +187,14 @@ const resolveJobKeywords = async ({ draftId, userId, targetJob }) => {
 // Shared by paid generation (generateBullets) and the free user's explicit
 // one-time reveal (revealAtsTaste). `real` is false when the AI service returned
 // its "Error generating…" sentinel (it does that instead of throwing).
-const generateAtsSuggestions = async ({ role, context, targetJob, draftId, userId }) => {
+const generateAtsSuggestions = async ({ role, context, targetJob, draftId, userId, model }) => {
   const aiService = require("../services/ai.service");
   const keywords = await resolveJobKeywords({ draftId, userId, targetJob });
   const ats = await aiService.generateBulletPoints(role, context, "experience", targetJob, {
     mode: "ats",
     keywords,
     count: PAID_ATS_SUGGESTIONS,
+    model,
   });
   const list = Array.isArray(ats) ? ats : [];
   const real = list.length > 0 && !/^Error generating/i.test(list[0] || "");
@@ -211,7 +217,9 @@ const generateBullets = async (req, res) => {
 
     // Summary & Project keep the original simple contract (no two-tier UI).
     if (type !== "experience") {
-      const suggestions = await aiService.generateBulletPoints(role, context, type, targetJob);
+      const suggestions = await aiService.generateBulletPoints(role, context, type, targetJob, {
+        model: resolveTextModel(req.user),
+      });
       return res.json({ suggestions, lockedCount: 0 });
     }
 
@@ -228,6 +236,7 @@ const generateBullets = async (req, res) => {
         targetJob,
         draftId,
         userId: req.user.id,
+        model: resolveTextModel(req.user),
       });
       return res.json({
         isPaid: true,
@@ -243,7 +252,9 @@ const generateBullets = async (req, res) => {
     // /ai/reveal-ats-taste), which is also where the one-time taste is consumed.
     // `atsTasteAvailable` tells the client to show the "Reveal" button (still
     // available) vs the upgrade CTA (already used).
-    const ai = await aiService.generateBulletPoints(role, context, "experience", "");
+    const ai = await aiService.generateBulletPoints(role, context, "experience", "", {
+      model: resolveTextModel(req.user),
+    });
     const aiTrimmed = (Array.isArray(ai) ? ai : []).slice(0, FREE_AI_SUGGESTIONS);
     const atsTeaser = Array.from(
       { length: PAID_ATS_SUGGESTIONS },
@@ -297,6 +308,7 @@ const revealAtsTaste = async (req, res) => {
         targetJob,
         draftId,
         userId: req.user.id,
+        model: resolveTextModel(req.user),
       });
       if (!real) {
         // Refund so the user can try again.
@@ -346,7 +358,9 @@ const generateSummaries = async (req, res) => {
 
     // Free users: generate only the first tone (cheap). Paid: all tones.
     const tonesToGenerate = isPaid ? SUMMARY_TONES : SUMMARY_TONES.slice(0, 1);
-    const generated = await aiService.generateSummaries(role, context, tonesToGenerate);
+    const generated = await aiService.generateSummaries(role, context, tonesToGenerate, {
+      model: resolveTextModel(req.user),
+    });
     const byKey = Object.fromEntries((generated || []).map((g) => [g.key, g.summary]));
 
     // Build the full ordered tone list; lock everything past the free tone for
@@ -474,7 +488,8 @@ const generateSkills = async (req, res) => {
       experience || [],
       projects || [],
       targetJob || "",
-      isPaid
+      isPaid,
+      { model: resolveTextModel(req.user) }
     );
 
     // Deterministic best-for-role set (prefers cached richer JD keywords).

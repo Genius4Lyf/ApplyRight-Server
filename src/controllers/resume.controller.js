@@ -148,12 +148,15 @@ const uploadAndCreateDraft = async (req, res) => {
     const extractedData = await aiService.extractResumeProfile(rawText);
 
     // 4. Generate structured skills
-    const structuredSkills = await aiService.generateStructuredSkills({
-      education: extractedData.education,
-      experience: extractedData.experience,
-      projects: extractedData.projects,
-      targetJob: null,
-    });
+    const structuredSkills = await aiService.generateStructuredSkills(
+      {
+        education: extractedData.education,
+        experience: extractedData.experience,
+        projects: extractedData.projects,
+        targetJob: null,
+      },
+      { model: aiService.resolveTextModel(user) }
+    );
 
     // 5. Deduct credits only after all AI work succeeds. spendCredits draws from
     // the tier allowance first, then the wallet, and records the Transaction.

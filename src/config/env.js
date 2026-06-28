@@ -12,7 +12,7 @@ const envSchema = z.object({
   JWT_EXPIRE: z.string().default("30d"),
   FRONTEND_URL: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(), // general AI features (CV, cover letters, analysis, OpenAI TTS)
-  OPENAI_REALTIME_API_KEY: z.string().optional(), // dedicated key for the live interview only, so its usage is tracked separately; falls back to OPENAI_API_KEY if unset
+  OPENAI_REALTIME_API_KEY: z.string().optional(), // dedicated key for the live interview ONLY; does NOT fall back to OPENAI_API_KEY (live voice 503s if unset)
   GEMINI_API_KEY: z.string().optional(),
   AI_PROVIDER: z.enum(["openai", "gemini"]).default("gemini"),
   // Realtime (live voice) interview — OpenAI Realtime API over WebRTC.

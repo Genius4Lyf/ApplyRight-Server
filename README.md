@@ -21,7 +21,7 @@ The backend REST API powering **ApplyRight**, an AI-driven job application assis
 ## Features
 
 - **Authentication & Authorization** — Register, login, password reset, JWT-based route protection, admin roles.
-- **AI-Powered Content Generation** — Generate and refine CV bullet points, cover letters, and professional summaries using Gemini or OpenAI (configurable via `AI_PROVIDER` env var).
+- **AI-Powered Content Generation** — Generate and refine CV bullet points, cover letters, and professional summaries. **OpenAI is the active provider** (`gpt-4o-mini` by default; Pro job-seekers and CV agents get the stronger `gpt-4o`); Gemini is a fallback. The provider is chosen by which API key is present — `AI_PROVIDER` is documentation-only and not used for selection.
 - **Resume Parsing** — Upload and parse PDF/DOCX resumes via `pdf-parse` and `mammoth`.
 - **ATS Scoring & Analysis** — Score resumes against job descriptions with keyword-match analysis and actionable improvement suggestions.
 - **PDF Export** — Server-side PDF rendering with Puppeteer for pixel-perfect CV downloads.
@@ -84,12 +84,21 @@ PORT=5000
 MONGO_URI=mongodb+srv://<user>:<password>@<cluster>.mongodb.net/Apply-Right
 JWT_SECRET=your_jwt_secret
 
-# AI — at least one key required
+# AI — at least one key required. Provider is chosen by KEY PRESENCE
+# (OPENAI_API_KEY wins → OpenAI; else GEMINI_API_KEY → Gemini).
 OPENAI_API_KEY=sk-...
 GEMINI_API_KEY=AI...
 
-# Which AI provider to use: "gemini" or "openai"
-AI_PROVIDER=gemini
+# Dedicated key for the live voice interview ONLY (no fallback to OPENAI_API_KEY).
+OPENAI_REALTIME_API_KEY=sk-...
+
+# AI_PROVIDER is documentation-only — NOT used to select the provider.
+AI_PROVIDER=openai
+
+# Optional model overrides (OpenAI): default text + the stronger model for
+# Pro/agent CV generation.
+# AI_MODEL=gpt-4o-mini
+# AI_MODEL_STRONG=gpt-4o
 
 ADMIN_SECRET_KEY=your_admin_secret
 

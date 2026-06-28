@@ -9,7 +9,18 @@ let activeProvider = "mock"; // 'openai', 'gemini', or 'mock'
 // Default model — gpt-4o-mini supports JSON mode and is significantly better at
 // instruction-following than gpt-3.5-turbo at a comparable price point.
 const MODEL = process.env.AI_MODEL || "gpt-4o-mini";
+// Stronger model reserved for the headline CV generation (the optimized CV itself),
+// where quality matters most. Everything else stays on the cheaper default MODEL.
+// OpenAI-only — applies when OpenAI is the active provider.
+const STRONG_MODEL = process.env.AI_MODEL_STRONG || "gpt-4o";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+
+// Resolve the OpenAI text model for a given user: the stronger model (gpt-4o) for
+// paid job seekers + CV agents, the standard model (gpt-4o-mini) for free users.
+// Policy lives in subscription.service; names live here. Lazy-require avoids any
+// load-order coupling. Gemini (fallback provider) ignores this — it uses GEMINI_MODEL.
+const resolveTextModel = (user) =>
+  require("./subscription.service").usesStrongTextModel(user) ? STRONG_MODEL : MODEL;
 
 // Initialize Clients.
 // OpenAI wins when its key is present (the working provider here); Gemini is the
@@ -145,11 +156,14 @@ const callJSON = async ({ system, user, temperature = 0.2, meta = {} }) => {
     throw new AIUnavailableError();
   }
 
+  // Per-request OpenAI model (tier-based — see resolveTextModel). Defaults to the
+  // standard model when the caller doesn't specify one.
+  const openaiModel = meta.model || MODEL;
   const start = Date.now();
   const baseLog = {
     operation: meta.operation || "unknown",
     provider: activeProvider,
-    model: activeProvider === "openai" ? MODEL : GEMINI_MODEL,
+    model: activeProvider === "openai" ? openaiModel : GEMINI_MODEL,
     userId: meta.userId,
     applicationId: meta.applicationId,
     systemPrompt: system,
@@ -159,7 +173,7 @@ const callJSON = async ({ system, user, temperature = 0.2, meta = {} }) => {
   try {
     if (activeProvider === "openai") {
       const response = await openai.chat.completions.create({
-        model: MODEL,
+        model: openaiModel,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
@@ -220,11 +234,13 @@ const callText = async ({ system, user, temperature = 0.4, meta = {} }) => {
     throw new AIUnavailableError();
   }
 
+  // Per-request OpenAI model (tier-based — see resolveTextModel).
+  const openaiModel = meta.model || MODEL;
   const start = Date.now();
   const baseLog = {
     operation: meta.operation || "unknown",
     provider: activeProvider,
-    model: activeProvider === "openai" ? MODEL : GEMINI_MODEL,
+    model: activeProvider === "openai" ? openaiModel : GEMINI_MODEL,
     userId: meta.userId,
     applicationId: meta.applicationId,
     systemPrompt: system,
@@ -234,7 +250,7 @@ const callText = async ({ system, user, temperature = 0.4, meta = {} }) => {
   try {
     if (activeProvider === "openai") {
       const response = await openai.chat.completions.create({
-        model: MODEL,
+        model: openaiModel,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
@@ -924,9 +940,13 @@ Alexander James
 
   try {
     console.log("Beginning Parallel Generation: CV & Cover Letter...");
+    // Tier-based model resolved by the controller and passed through userContext.
+    const model = userContext.model;
     const [cvResult, clResult] = await Promise.all([
-      generateCV(resumeText, jobDescription || "General Professional Role"),
-      jobDescription ? generateCoverLetter(resumeText, jobDescription) : Promise.resolve(null),
+      generateCV(resumeText, jobDescription || "General Professional Role", model),
+      jobDescription
+        ? generateCoverLetter(resumeText, jobDescription, { model })
+        : Promise.resolve(null),
     ]);
 
     console.log("Parallel Generation Complete.");
@@ -944,7 +964,7 @@ Alexander James
   }
 };
 
-const generateCV = async (resumeText, jobDescription) => {
+const generateCV = async (resumeText, jobDescription, model = MODEL) => {
   const prompt = `
     You are an ATS-optimization engine for ApplyRight.
     Your job is to convert unstructured user career data into a clean, ATS-compliant CV using a strict pipeline.
@@ -1008,7 +1028,8 @@ const generateCV = async (resumeText, jobDescription) => {
     let resultText = "";
     if (activeProvider === "openai") {
       const response = await openai.chat.completions.create({
-        model: MODEL,
+        // Tier-based: paid seekers + agents get the stronger model, free get mini.
+        model,
         messages: [{ role: "user", content: prompt }],
       });
       resultText = response.choices[0].message.content;
@@ -2538,6 +2559,7 @@ Return JSON matching exactly:
 };
 
 const generateBulletPoints = async (role, context, type = "experience", targetJob = "", options = {}) => {
+  const model = options.model || MODEL; // tier-based (resolveTextModel)
   if (activeProvider === "mock") {
     return ["Developed a feature using React.", "Optimized backend performance."];
   }
@@ -2739,7 +2761,7 @@ OUTPUT STRICT JSON ONLY:
     let resultText = "";
     if (activeProvider === "openai") {
       const response = await openai.chat.completions.create({
-        model: MODEL,
+        model,
         messages: [{ role: "user", content: prompt }],
       });
       resultText = response.choices[0].message.content;
@@ -2770,7 +2792,8 @@ OUTPUT STRICT JSON ONLY:
 // call. `tones` is [{ key, label, guidance }]. Returns [{ key, summary }] in the
 // same order. Grounded entirely in the candidate's own CV (never the JD), and
 // truth-locked: no invented skills, titles, or metrics.
-const generateSummaries = async (role, context, tones = []) => {
+const generateSummaries = async (role, context, tones = [], options = {}) => {
+  const model = options.model || MODEL; // tier-based (resolveTextModel)
   if (!Array.isArray(tones) || tones.length === 0) return [];
 
   if (activeProvider === "mock") {
@@ -2805,7 +2828,7 @@ OUTPUT STRICT JSON ONLY (a "summaries" object keyed by the tone keys above):
     let resultText = "";
     if (activeProvider === "openai") {
       const response = await openai.chat.completions.create({
-        model: MODEL,
+        model,
         messages: [{ role: "user", content: prompt }],
       });
       resultText = response.choices[0].message.content;
@@ -2833,7 +2856,8 @@ OUTPUT STRICT JSON ONLY (a "summaries" object keyed by the tone keys above):
   }
 };
 
-const generateSkillsFromContext = async (education, experience, projects, targetJob = "", isPaid = false) => {
+const generateSkillsFromContext = async (education, experience, projects, targetJob = "", isPaid = false, options = {}) => {
+  const model = options.model || MODEL; // tier-based (resolveTextModel)
   if (activeProvider === "mock") {
     return mockSkillsGeneration();
   }
@@ -2939,7 +2963,7 @@ const generateSkillsFromContext = async (education, experience, projects, target
     let resultText = "";
     if (activeProvider === "openai") {
       const response = await openai.chat.completions.create({
-        model: MODEL,
+        model,
         messages: [{ role: "user", content: prompt }],
       });
       resultText = response.choices[0].message.content;
@@ -3095,6 +3119,7 @@ Return JSON matching exactly:
 };
 
 module.exports = {
+  resolveTextModel,
   analyzeProfile,
   extractJobRequirements,
   inferRoleKeywords,
