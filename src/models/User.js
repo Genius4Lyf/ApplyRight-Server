@@ -125,6 +125,16 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Login activity (set on each successful login). lastLoginAt is for quick
+    // per-user display; DAU/WAU/MAU time-series come from the LoginEvent model.
+    lastLoginAt: {
+      type: Date,
+      default: null,
+    },
+    loginCount: {
+      type: Number,
+      default: 0,
+    },
     // Support-grantable override: when true, ALL interview-loop interviewers are
     // unlocked for this user (bypasses the per-round 65% gate). Set by an admin
     // when a user reaches out to support. Does not affect minutes/credits.

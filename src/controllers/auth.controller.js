@@ -270,6 +270,17 @@ const loginUser = async (req, res, next) => {
         user.referralCode = newReferralCode;
       }
 
+      // Record login activity for active-user analytics. Fire-and-forget: a
+      // logging failure must never block or fail the login itself.
+      const loginAt = new Date();
+      const LoginEvent = require("../models/LoginEvent");
+      user
+        .updateOne({ $set: { lastLoginAt: loginAt }, $inc: { loginCount: 1 } })
+        .catch((e) => console.error("[login] activity update failed:", e.message));
+      LoginEvent.create({ userId: user._id, role: user.role, createdAt: loginAt }).catch((e) =>
+        console.error("[login] LoginEvent create failed:", e.message)
+      );
+
       res.json({
         _id: user.id,
         email: user.email,

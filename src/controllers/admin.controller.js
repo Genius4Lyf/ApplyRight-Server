@@ -359,6 +359,49 @@ exports.getRevenueStats = async (req, res) => {
         (liveSecondsFull / 60) * (EST_COST_NGN_PER_MIN.full || 0)
     );
 
+    // Most popular subscription plan, ranked by number of successful purchases
+    // (all-time) — answers "which plan do users buy the most?".
+    const planPopularityRaw = await Payment.aggregate([
+      { $match: { status: "successful", purpose: "subscription" } },
+      { $group: { _id: "$planId", count: { $sum: 1 }, revenue: { $sum: "$amountNgn" } } },
+      { $sort: { count: -1 } },
+    ]);
+    const planPopularity = planPopularityRaw.map((r) => ({
+      planId: r._id,
+      label: CATALOG[r._id]?.label || r._id,
+      count: r.count,
+      revenue: r.revenue,
+    }));
+    const mostPopularPlan = planPopularity[0] || null;
+
+    // Live-minute top-ups (users buying MORE interview time) — all-time successful.
+    const topupAgg = await Payment.aggregate([
+      { $match: { status: "successful", purpose: "topup" } },
+      {
+        $group: {
+          _id: null,
+          count: { $sum: 1 },
+          revenue: { $sum: "$amountNgn" },
+          minutes: { $sum: "$minutesGranted" },
+          buyers: { $addToSet: "$userId" },
+        },
+      },
+    ]);
+    const topupStats = topupAgg.length
+      ? {
+          count: topupAgg[0].count,
+          revenue: topupAgg[0].revenue,
+          minutes: topupAgg[0].minutes,
+          buyers: topupAgg[0].buyers.length,
+        }
+      : { count: 0, revenue: 0, minutes: 0, buyers: 0 };
+
+    // Subscriptions expiring within the next 7 days (churn-watch / renewal nudge).
+    const in7days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const expiringSoon = await User.countDocuments({
+      "subscription.expiresAt": { $gt: now, $lte: in7days },
+    });
+
     res.status(200).json({
       success: true,
       data: {
@@ -367,6 +410,10 @@ exports.getRevenueStats = async (req, res) => {
         totalTopupRevenue,
         revenueOverTime,
         revenueByPlan,
+        planPopularity,
+        mostPopularPlan,
+        topupStats,
+        expiringSoon,
         activeSubsByTier,
         activeSubsTotal,
         newConversions,
@@ -391,22 +438,56 @@ exports.getRevenueStats = async (req, res) => {
 exports.getAllUsers = async (req, res, next) => {
   try {
     const pageSize = 10;
-    const page = Number(req.query.page) || 1;
+    // Accept both `page` and the older `pageNumber` the frontend used to send.
+    const page = Number(req.query.page || req.query.pageNumber) || 1;
+    const { keyword, plan, tier, status, sortBy, sortDir } = req.query;
+    const now = new Date();
 
-    const keyword = req.query.keyword
-      ? {
-          $or: [
-            { firstName: { $regex: req.query.keyword, $options: "i" } },
-            { lastName: { $regex: req.query.keyword, $options: "i" } },
-            { email: { $regex: req.query.keyword, $options: "i" } },
-          ],
-        }
-      : {};
+    // Build the filter. `$and` collects sub-clauses that each carry their own
+    // `$or` (keyword search, free-status check) so they don't overwrite one another.
+    const filter = {};
+    const and = [];
 
-    const count = await User.countDocuments({ ...keyword });
-    const users = await User.find({ ...keyword })
+    if (keyword) {
+      and.push({
+        $or: [
+          { firstName: { $regex: keyword, $options: "i" } },
+          { lastName: { $regex: keyword, $options: "i" } },
+          { email: { $regex: keyword, $options: "i" } },
+        ],
+      });
+    }
+
+    // plan = lifetime template unlock (free/paid). tier = subscription tier.
+    if (plan && ["free", "paid"].includes(plan)) filter.plan = plan;
+    if (tier && ["free", "plus", "pro"].includes(tier)) filter["subscription.tier"] = tier;
+
+    // status filters on the live subscription, using expiresAt as the source of truth.
+    if (status === "active") {
+      filter["subscription.expiresAt"] = { $gt: now };
+    } else if (status === "free") {
+      and.push({
+        $or: [
+          { "subscription.expiresAt": null },
+          { "subscription.expiresAt": { $lte: now } },
+        ],
+      });
+    }
+
+    if (and.length) filter.$and = and;
+
+    const dir = sortDir === "asc" ? 1 : -1;
+    const sortMap = {
+      joined: { createdAt: dir },
+      credits: { credits: dir },
+      expiry: { "subscription.expiresAt": dir },
+    };
+    const sort = sortMap[sortBy] || { createdAt: -1 };
+
+    const count = await User.countDocuments(filter);
+    const users = await User.find(filter)
       .select("-password")
-      .sort({ createdAt: -1 })
+      .sort(sort)
       .limit(pageSize)
       .skip(pageSize * (page - 1));
 
@@ -619,12 +700,19 @@ exports.getUserDetails = async (req, res, next) => {
 
     const transactions = await Transaction.find({ userId: req.params.id }).sort({ createdAt: -1 });
 
+    // Real-money payments (NGN) live in the Payment model, separate from credit
+    // Transactions. Surface them so the admin sees subscriptions, top-ups,
+    // download passes and failed checkouts for this user.
+    const Payment = require("../models/Payment");
+    const payments = await Payment.find({ userId: req.params.id }).sort({ createdAt: -1 });
+
     res.status(200).json({
       success: true,
       data: {
         user,
         stats,
         transactions,
+        payments,
       },
     });
   } catch (err) {
@@ -773,6 +861,172 @@ exports.updateSettings = async (req, res) => {
     }
 
     res.status(200).json({ success: true, data: newSettings });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
+// @desc    Engagement & adoption analytics (logins, AI feature use, live
+//          interview usage, conversion funnel) — all derived from data we
+//          already store (LoginEvent, AICallLog, Transaction, User, DraftCV).
+// @route   GET /api/v1/admin/engagement
+// @access  Private/Admin
+exports.getEngagementStats = async (req, res) => {
+  try {
+    const LoginEvent = require("../models/LoginEvent");
+    const AICallLog = require("../models/AICallLog");
+    const DraftCV = require("../models/DraftCV");
+
+    const now = new Date();
+    const DAY = 24 * 60 * 60 * 1000;
+    const dayAgo = new Date(now - DAY);
+    const weekAgo = new Date(now - 7 * DAY);
+    const monthAgo = new Date(now - 30 * DAY);
+
+    // --- Active users (distinct logins in window) ---
+    const distinctLoginUsers = async (since) => {
+      const r = await LoginEvent.aggregate([
+        { $match: { createdAt: { $gte: since }, role: { $ne: "admin" } } },
+        { $group: { _id: "$userId" } },
+        { $count: "n" },
+      ]);
+      return r.length ? r[0].n : 0;
+    };
+    const [dau, wau, mau] = await Promise.all([
+      distinctLoginUsers(dayAgo),
+      distinctLoginUsers(weekAgo),
+      distinctLoginUsers(monthAgo),
+    ]);
+
+    // Active users per day over the last 14 days (distinct users each day).
+    const activeOverTime = await LoginEvent.aggregate([
+      { $match: { createdAt: { $gte: new Date(now - 14 * DAY) }, role: { $ne: "admin" } } },
+      {
+        $group: {
+          _id: {
+            day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            user: "$userId",
+          },
+        },
+      },
+      { $group: { _id: "$_id.day", users: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
+    ]);
+
+    // --- AI feature adoption (last 30 days): calls + distinct users per op ---
+    const adoptionRaw = await AICallLog.aggregate([
+      { $match: { createdAt: { $gte: monthAgo } } },
+      { $group: { _id: "$operation", calls: { $sum: 1 }, users: { $addToSet: "$userId" } } },
+      { $project: { operation: "$_id", calls: 1, users: { $size: "$users" }, _id: 0 } },
+      { $sort: { calls: -1 } },
+    ]);
+
+    // --- Live interview usage (from the "Live interview Ns (tier)" usage txns) ---
+    const liveTxns = await Transaction.find({
+      type: "usage",
+      description: { $regex: /^Live interview \d+s/ },
+    }).select("description userId");
+    let sessions = 0;
+    let totalSec = 0;
+    let proSec = 0;
+    let miniSec = 0;
+    const liveUsers = new Set();
+    for (const t of liveTxns) {
+      const m = /^Live interview (\d+)s \((\w+)\)/.exec(t.description || "");
+      if (!m) continue;
+      const sec = Number(m[1]) || 0;
+      sessions += 1;
+      totalSec += sec;
+      if (m[2] === "pro") proSec += sec;
+      else miniSec += sec;
+      if (t.userId) liveUsers.add(String(t.userId));
+    }
+    const liveUsage = {
+      sessions,
+      totalMinutes: Math.round(totalSec / 60),
+      avgMinutes: sessions ? Number((totalSec / 60 / sessions).toFixed(1)) : 0,
+      proMinutes: Math.round(proSec / 60),
+      miniMinutes: Math.round(miniSec / 60),
+      distinctUsers: liveUsers.size,
+    };
+
+    // --- Conversion funnel + churn (all-time, non-admin) ---
+    const nonAdmin = { role: { $ne: "admin" } };
+    const [signups, createdCvUsers, createdAppUsers, paidEver, activePaid, churned] =
+      await Promise.all([
+        User.countDocuments(nonAdmin),
+        DraftCV.distinct("userId").then((a) => a.length),
+        Application.distinct("userId").then((a) => a.length),
+        User.countDocuments({ ...nonAdmin, hasEverPurchased: true }),
+        User.countDocuments({ ...nonAdmin, "subscription.expiresAt": { $gt: now } }),
+        // Ever paid but no longer in an active period = lapsed/churned.
+        User.countDocuments({
+          ...nonAdmin,
+          hasEverPurchased: true,
+          $or: [
+            { "subscription.expiresAt": null },
+            { "subscription.expiresAt": { $lte: now } },
+          ],
+        }),
+      ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        activeUsers: { dau, wau, mau },
+        activeOverTime: activeOverTime.map((d) => ({ name: d._id, users: d.users })),
+        featureAdoption: adoptionRaw,
+        liveUsage,
+        funnel: { signups, createdCv: createdCvUsers, createdApplication: createdAppUsers, paid: paidEver },
+        subscriptions: { activePaid, churned },
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
+// @desc    Real-money payments ledger (NGN), with status/purpose filters.
+// @route   GET /api/v1/admin/payments
+// @access  Private/Admin
+exports.getPayments = async (req, res) => {
+  try {
+    const Payment = require("../models/Payment");
+    const pageSize = 15;
+    const page = Number(req.query.page) || 1;
+    const { status, purpose } = req.query;
+
+    const filter = {};
+    if (status && status !== "all") filter.status = status;
+    if (purpose && purpose !== "all") filter.purpose = purpose;
+
+    const count = await Payment.countDocuments(filter);
+    const payments = await Payment.find(filter)
+      .populate("userId", "firstName lastName email")
+      .sort({ createdAt: -1 })
+      .limit(pageSize)
+      .skip(pageSize * (page - 1));
+
+    // Status breakdown for the current filter (count + revenue per status).
+    const summaryRaw = await Payment.aggregate([
+      { $match: filter },
+      { $group: { _id: "$status", count: { $sum: 1 }, revenue: { $sum: "$amountNgn" } } },
+    ]);
+    const summary = summaryRaw.reduce(
+      (acc, r) => ({ ...acc, [r._id]: { count: r.count, revenue: r.revenue } }),
+      {}
+    );
+
+    res.status(200).json({
+      success: true,
+      payments,
+      summary,
+      page,
+      pages: Math.ceil(count / pageSize),
+      total: count,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: "Server Error" });

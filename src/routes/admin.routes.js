@@ -14,6 +14,8 @@ const {
   getSettings,
   updateSettings,
   getJobSearches,
+  getEngagementStats,
+  getPayments,
   generateReportScreenshot,
 } = require("../controllers/admin.controller");
 const NotificationController = require("../controllers/notification.controller");
@@ -26,6 +28,8 @@ router.use(protect);
 // Admin Only Routes
 router.get("/stats", admin, getDashboardStats);
 router.get("/revenue", admin, getRevenueStats);
+router.get("/engagement", admin, getEngagementStats);
+router.get("/payments", admin, getPayments);
 router.get("/users", admin, getAllUsers);
 router.get("/transactions", admin, getAllTransactions);
 router.get("/users/:id", admin, getUserDetails);
