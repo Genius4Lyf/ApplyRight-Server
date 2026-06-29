@@ -1387,10 +1387,17 @@ exports.createRealtimeSession = async (req, res) => {
     const user = await UserModel.findById(req.user.id);
     const eff = subscription.getEffectiveTier(user);
     const li = user.liveInterview || {};
-    const avail =
-      eff === "free"
-        ? Math.max(0, FREE_TASTE_SEC - (li.freeTasteUsedSec || 0))
-        : Math.max(0, li.secondsRemaining || 0);
+    // The minute economy is INDEPENDENT of the tier enum: any user (even free
+    // tier) can hold purchased minutes — a subscription allowance, a top-up, or a
+    // ₦600 Practice Pass — in liveInterview.secondsRemaining. We spend PURCHASED
+    // minutes first and fall back to the lifetime free taste only when there are
+    // none. The reservation `mode` ("paid" vs "free") records which source funded
+    // this session, and assessInterview keys the scorecard gate off it (paid
+    // minutes always unlock the score, even for a free-tier Practice Pass buyer).
+    const paidAvail = Math.max(0, li.secondsRemaining || 0);
+    const freeAvail = Math.max(0, FREE_TASTE_SEC - (li.freeTasteUsedSec || 0));
+    const useFreeTaste = paidAvail <= 0; // only when there are no purchased minutes
+    const avail = useFreeTaste ? freeAvail : paidAvail;
 
     if (avail <= 0) {
       return res.status(402).json({
@@ -1415,8 +1422,10 @@ exports.createRealtimeSession = async (req, res) => {
 
     // reservedSec = the whole session the user picked (the OpenAI hard cap),
     // bounded by the per-tier cap and their balance.
+    // A length was picked via the slider only when spending purchased minutes
+    // (the slider is hidden for the fixed free taste). Honor it; else use the cap.
     const sessionWant =
-      eff !== "free" && Number(requestedSec) > 0 ? Math.round(Number(requestedSec)) : budgetCap;
+      !useFreeTaste && Number(requestedSec) > 0 ? Math.round(Number(requestedSec)) : budgetCap;
     const reservedSec = Math.max(0, Math.min(budgetCap, sessionWant));
 
     // Carve the wrap-up out of the session, but never let it eat the whole thing
@@ -1437,7 +1446,7 @@ exports.createRealtimeSession = async (req, res) => {
     // Atomic reservation: the guard ensures two concurrent sessions can't both
     // spend the same balance (mirrors the credit-deduction $gte guard pattern).
     let reserved;
-    if (eff === "free") {
+    if (useFreeTaste) {
       reserved = await UserModel.updateOne(
         { _id: user._id, "liveInterview.freeTasteUsedSec": { $lte: FREE_TASTE_SEC - reservedSec } },
         {
@@ -1679,10 +1688,11 @@ exports.createRealtimeSession = async (req, res) => {
         enableSpeakerTool: panelMode === "single-voice" && panelSeats.length >= 2,
       });
     } catch (mintErr) {
-      const refund =
-        eff === "free"
-          ? { $inc: { "liveInterview.freeTasteUsedSec": -reservedSec } }
-          : { $inc: { "liveInterview.secondsRemaining": reservedSec } };
+      // Refund the SAME bucket we reserved from (paid minutes vs free taste), not
+      // by tier — a free-tier Practice Pass session reserves from secondsRemaining.
+      const refund = useFreeTaste
+        ? { $inc: { "liveInterview.freeTasteUsedSec": -reservedSec } }
+        : { $inc: { "liveInterview.secondsRemaining": reservedSec } };
       await UserModel.updateOne(
         { _id: user._id, "liveInterview.activeReservation.reservationId": reservationId },
         { ...refund, $set: { "liveInterview.activeReservation": {} } }
@@ -1889,14 +1899,23 @@ exports.assessInterview = async (req, res) => {
     // updateOne is guarded on the reservation id, so a double-submit can't refund
     // twice. usedSec is clamped to what we reserved — the trust boundary: the
     // client can only reduce the bill, never exceed the reservation.
+    // Which source funded this session — "free" (lifetime taste) vs "paid"
+    // (subscription / top-up / Practice Pass minutes). Captured from the
+    // reservation so the scorecard gate below can tell a free taste from a paid
+    // Practice Pass run even though both are "free" tier. null = no live
+    // reservation matched (e.g. a re-run after the reservation was cleared).
+    let reservationMode = null;
+    let sessionUsedSec = null; // billed seconds (clamped to the reservation)
     if (reservationId) {
       const UserModel = require("../models/User");
       const Transaction = require("../models/Transaction");
       const u = await UserModel.findById(req.user.id);
       const ar = u?.liveInterview?.activeReservation;
       if (ar && ar.reservationId === reservationId) {
+        reservationMode = ar.mode || "paid";
         const reservedSec = ar.reservedSec || 0;
         const usedSec = Math.max(0, Math.min(Math.round(Number(durationSec) || 0), reservedSec));
+        sessionUsedSec = usedSec;
         const refund = reservedSec - usedSec;
         const refundInc =
           ar.mode === "free"
@@ -1922,6 +1941,54 @@ exports.assessInterview = async (req, res) => {
           }
         }
       }
+    }
+
+    // Scorecard gate. A FREE-TASTE session is practice-only — no AI scorecard (the
+    // grading call is the costliest gpt-4o pass of the whole session) — and that
+    // locked scorecard IS the upsell. A session funded by PURCHASED minutes
+    // (subscription / top-up / ₦600 Practice Pass) always gets the scorecard, even
+    // for a free-tier user. Key off the reservation mode captured above; when no
+    // reservation matched (a re-run after it was cleared), fall back to the
+    // effective tier — paid subscribers keep their score; a free-tier user re-run
+    // stays locked. Minutes were already reconciled, so the taste is still metered.
+    let scorecardLocked;
+    if (reservationMode) {
+      scorecardLocked = reservationMode === "free";
+    } else {
+      const subscription = require("../services/subscription.service");
+      const UserModel = require("../models/User");
+      const u3 = await UserModel.findById(req.user.id);
+      scorecardLocked = !u3 || subscription.getEffectiveTier(u3) === "free";
+    }
+    if (scorecardLocked) {
+      return res.status(200).json({
+        assessment: null,
+        analysisLocked: true,
+        code: "ANALYSIS_LOCKED",
+        message: "Upgrade to a paid plan to unlock your full AI interview scorecard.",
+      });
+    }
+
+    // Minimum-length gate. The AI grading call is the costliest part of a session,
+    // so we only run it once the candidate has done a substantial interview — this
+    // stops "End & review" being tapped repeatedly on near-empty sessions to burn
+    // credits. Minutes were already reconciled above (time used is still charged);
+    // we just decline the expensive score. Uses the billed (clamped) duration when
+    // a reservation matched, else the client-reported duration as a floor.
+    const { MIN_REVIEW_SEC } = require("../config/catalog");
+    const reviewSec =
+      sessionUsedSec != null ? sessionUsedSec : Math.max(0, Math.round(Number(durationSec) || 0));
+    if (reviewSec < MIN_REVIEW_SEC) {
+      return res.status(200).json({
+        assessment: null,
+        tooShort: true,
+        code: "REVIEW_TOO_SHORT",
+        minSeconds: MIN_REVIEW_SEC,
+        usedSeconds: reviewSec,
+        message: `A scored review needs at least ${Math.round(
+          MIN_REVIEW_SEC / 60
+        )} minutes of interview — the minutes you used have been counted.`,
+      });
     }
 
     const aiService = require("../services/ai.service");

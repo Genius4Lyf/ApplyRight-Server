@@ -6,7 +6,7 @@ const adReward = require("../services/adReward.service");
 const admobSsv = require("../services/admobSsv.service");
 const flutterwave = require("../services/flutterwave.service");
 const subscription = require("../services/subscription.service");
-const { getItem, FREE_TASTE_SEC } = require("../config/catalog");
+const { getItem, FREE_TASTE_SEC, MIN_REVIEW_SEC } = require("../config/catalog");
 const { isFreeTemplate, TEMPLATE_UNLOCK_COST } = require("../config/templates");
 const env = require("../config/env");
 const logger = require("../utils/logger");
@@ -346,6 +346,9 @@ const entitlementFor = (user) => {
     availableCredits: subscription.availableCredits(user),
     // Per-tier cap on a single interview's length — the intro slider's upper bound.
     maxSessionSec: subscription.maxSessionSecForTier(user),
+    // Minimum interview length before the AI scorecard ("review") unlocks. The UI
+    // uses this to gate the End & review action; below it, ending only exits.
+    minReviewSec: MIN_REVIEW_SEC,
     model: subscription.modelForUser(user),
     downloads: {
       unlimited: dl.unlimited,

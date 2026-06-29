@@ -12,14 +12,26 @@
 // Free tier's one-time live-interview taste (seconds). Lifetime, never resets.
 const FREE_TASTE_SEC = 300; // 5 minutes
 
+// Minimum interview length (seconds) before the AI scorecard ("review") is run.
+// The grading call is the costly part of a session, so we only spend it once the
+// candidate has done a substantial interview — this stops "End & review" from
+// being tapped repeatedly on near-empty sessions to burn AI credits. Sessions
+// shorter than this still have their minutes metered (reconciled), they just don't
+// get the expensive score. Shared by the assess gate (server) + the UI gate.
+const MIN_REVIEW_SEC = 8 * 60; // 8 minutes
+
 // Per-tier hard cap on a single live interview's length (seconds). Paid users
 // pick any length up to this cap (and up to their remaining balance) via the
 // intro slider; free is fixed at its taste. REALTIME_MAX_SESSION_SEC remains the
 // absolute backstop and is applied on top of these in maxSessionSecForTier.
 const MAX_SESSION_SEC_BY_TIER = {
-  free: FREE_TASTE_SEC, // 5 min — the whole taste in one go
-  plus: 900, // 15 min — both paid tiers get a full 15-min session
-  pro: 900, // 15 min (Premium)
+  // 10 min — lets a free-tier Practice Pass holder spend their full 10-min pass in
+  // ONE session (the recommended length). The free TASTE itself is still bounded to
+  // 5 min by the 300s taste balance (budgetCap = min(cap, balance)), so this only
+  // unlocks the longer session once minutes have been purchased.
+  free: 600,
+  plus: 900, // 15 min — Weekly/Monthly Pro
+  pro: 1200, // 20 min — Premium gets the longest sessions as a tier perk
 };
 
 // model: "mini" -> gpt-realtime-mini, "full" -> gpt-realtime (see subscription.service.modelForUser)
@@ -28,7 +40,7 @@ const CATALOG = {
     id: "weekly_pro",
     label: "Starter Pack",
     purpose: "subscription",
-    amountNgn: 3000,
+    amountNgn: 3500,
     amountUsd: 4,
     tier: "plus",
     model: "mini",
@@ -40,7 +52,7 @@ const CATALOG = {
     id: "monthly_pro",
     label: "Level Up",
     purpose: "subscription",
-    amountNgn: 9000,
+    amountNgn: 9500,
     amountUsd: 12,
     tier: "plus",
     model: "mini",
@@ -119,6 +131,23 @@ const CATALOG = {
     amountUsd: 1.5,
     credits: 150,
   },
+  // Practice Pass — the cheap, one-off entry above the free taste. A free-tier
+  // user buys this to run ONE full 10-min scored mock interview (the recommended
+  // session length; solo + mini model, like the free taste, but WITH the full AI
+  // scorecard — the scorecard is the value). purpose "topup" → grantEntitlement
+  // adds the minutes to liveInterview balance, tier stays free. The minute economy
+  // is tier-independent, so the buyer can actually spend these (createRealtimeSession
+  // draws purchased minutes first) and the scorecard unlocks because the session is
+  // paid-minutes, not free-taste. ~₦450 cost → ~55% margin. Repurchasable. Sits
+  // below weekly_pro in the upgrade ladder.
+  practice_pass: {
+    id: "practice_pass",
+    label: "Practice Pass",
+    purpose: "topup",
+    amountNgn: 1000,
+    amountUsd: 1.5,
+    minutes: 10,
+  },
   topup_5: {
     id: "topup_5",
     label: "5 min top-up",
@@ -148,11 +177,14 @@ const CATALOG = {
 };
 
 // Estimated all-in OpenAI cost per live minute, in NGN, for the admin
-// margin guardrail (audio in/out + transcription, caching ON). Tune from the
-// real OpenAI usage dashboard. Keyed by the catalog model field.
+// margin guardrail (audio in/out + transcription + the post-session grading
+// call). Calibrated from a real measurement: a 10-min `mini` session = $0.29
+// all-in ≈ ₦450 → ~₦45/min, rounded up to ₦50 for FX/talky-user buffer. `full`
+// measured ~₦52/min earlier; held at ₦80 for safety. Tune from the OpenAI
+// usage dashboard. Keyed by the catalog model field.
 const EST_COST_NGN_PER_MIN = {
-  mini: 100,
-  full: 180,
+  mini: 50,
+  full: 80,
 };
 
 const getItem = (planId) => CATALOG[planId] || null;
@@ -160,6 +192,7 @@ const getItem = (planId) => CATALOG[planId] || null;
 module.exports = {
   CATALOG,
   FREE_TASTE_SEC,
+  MIN_REVIEW_SEC,
   MAX_SESSION_SEC_BY_TIER,
   EST_COST_NGN_PER_MIN,
   getItem,
