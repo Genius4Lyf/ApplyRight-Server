@@ -248,17 +248,45 @@ const serializeInterviewPrep = (application) => {
  */
 const analyzeFit = async (req, res) => {
   try {
-    const { jobId, resumeId } = req.body;
+    const { jobId, resumeId, draftCVId } = req.body;
     const userId = req.user._id;
     const user = req.user;
 
-    const resume = await Resume.findById(resumeId);
-    if (!resume) {
-      return res.status(404).json({ message: "Resume not found" });
+    if (!resumeId && !draftCVId) {
+      return res.status(400).json({ message: "Select a saved CV or upload a resume first." });
+    }
+
+    // Resolve the source CV text. Two sources:
+    //  - resumeId  → an uploaded Resume, use its rawText
+    //  - draftCVId → a CV built in ApplyRight, serialize the draft to markdown
+    // Ownership is verified on the saved-CV path so a user can't analyze
+    // someone else's draft.
+    let resume = null; // only set in upload mode (also reused by create-from-upload)
+    let draft = null; // only set in saved-CV mode
+    let cvText = "";
+    if (draftCVId) {
+      draft = await DraftCV.findOne({ _id: draftCVId, userId });
+      if (!draft) {
+        return res.status(404).json({ message: "Saved CV not found" });
+      }
+      cvText = buildMarkdownFromDraft(draft);
+    } else {
+      resume = await Resume.findById(resumeId);
+      if (!resume) {
+        return res.status(404).json({ message: "Resume not found" });
+      }
+      cvText = resume.rawText;
     }
 
     // ── Create from Upload (no job) ──
     if (!jobId) {
+      // A saved CV is already a structured draft, so "create from upload" only
+      // applies to an uploaded resume.
+      if (!resume) {
+        return res
+          .status(400)
+          .json({ message: "Add a job description to analyze a saved CV." });
+      }
       checkCredits(user, COSTS.CREATE_FROM_UPLOAD);
 
       const meta = { userId };
@@ -349,7 +377,7 @@ const analyzeFit = async (req, res) => {
 
     // ── New Pipeline: Extract → Score → Feedback ──
     // applicationId not yet known until upsert below; pass it along after.
-    const aiResult = await aiService.analyzeProfile(resume.rawText, job.description, {
+    const aiResult = await aiService.analyzeProfile(cvText, job.description, {
       userId,
       model: aiService.resolveTextModel(user),
     });
@@ -398,14 +426,17 @@ const analyzeFit = async (req, res) => {
 
     const actionPlan = aiResult.actionPlan || [];
 
-    // Save or update Application — analysis fields only
-    let application = await Application.findOne({ userId, jobId, resumeId });
+    // Save or update Application — analysis fields only. Key the upsert off
+    // whichever CV source was used so re-analyzing the same CV+job updates the
+    // existing application instead of piling up duplicates.
+    const cvRef = draftCVId ? { draftCVId } : { resumeId };
+    let application = await Application.findOne({ userId, jobId, ...cvRef });
 
     if (!application) {
       application = new Application({
         userId,
         jobId,
-        resumeId,
+        ...cvRef,
         fitScore,
         fitAnalysis,
         actionPlan,
@@ -704,10 +735,19 @@ const generateApplicationCV = async (req, res) => {
       });
     }
 
-    const [resume, job] = await Promise.all([
-      Resume.findById(application.resumeId),
+    const [resumeDoc, job] = await Promise.all([
+      application.resumeId ? Resume.findById(application.resumeId) : null,
       Job.findById(application.jobId),
     ]);
+
+    // Source CV may be an uploaded Resume (rawText) or a saved DraftCV. The
+    // pipeline only reads `resume.rawText`, so for a draft we hand it a
+    // lightweight object carrying the markdown-serialized draft.
+    let resume = resumeDoc;
+    if (!resume && application.draftCVId) {
+      const draft = await DraftCV.findById(application.draftCVId);
+      if (draft) resume = { rawText: buildMarkdownFromDraft(draft) };
+    }
 
     if (!resume || !job) {
       return res.status(404).json({ message: "Resume or Job not found" });
