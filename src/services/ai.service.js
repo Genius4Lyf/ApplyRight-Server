@@ -588,12 +588,19 @@ const reviewSection = (hi, step, gaps = {}) => {
       return flaw(
         `${hi}good start with ${w.roles} role. If you've held more, add them — most CVs read stronger with 2+.`
       );
-    if ((w.bullets || 0) > 0 && (w.quantifiedRatio || 0) < 0.3)
-      return flaw(
-        `${hi}solid roles, but only ${w.quantified}/${w.bullets} bullets have a number. Add metrics (%, ₦, time saved) so recruiters see the impact.`
-      );
     if ((w.rolesWithEnoughBullets || 0) < (w.roles || 0))
       return flaw(`${hi}some roles are a little thin — aim for 2-3 punchy bullets each.`);
+    // Quantification is a LADDER, not a wall — so the fix→recheck loop converges.
+    // Hard-flag ONLY when there's not a single number anywhere; once the user has
+    // added some, confirm and let them move on (the score still rewards more).
+    if ((w.bullets || 0) > 0 && (w.quantified || 0) === 0)
+      return flaw(
+        `${hi}none of your bullets have a number yet — add a metric or two (%, ₦, time saved, volume) so recruiters see your impact.`
+      );
+    if ((w.bullets || 0) > 0 && (w.quantifiedRatio || 0) < 0.3)
+      return win(
+        `${hi}nice — you've quantified ${w.quantified} of ${w.bullets} bullets${forRole}. A couple more numbers would make it even stronger, but this is good to move on. ✓`
+      );
     return win(`${hi}this is strong — ${w.roles} roles with quantified bullets that speak${forRole ? forRole : " to recruiters"}.${onward}`);
   }
   if (step === "skills") {
@@ -686,6 +693,7 @@ Decide what to do from whether there is a "THE USER JUST TOLD YOU" line:
   - If this is a fill-in section (contact details, education): VERIFY it. If everything's present, confirm warmly (tone: "win"). If something's missing, name EXACTLY what's missing and why it matters (tone: "progress").
   - Otherwise: give ONE short, warm pointer on what to focus on here, aimed at the target role when one is shown (tone: "start").
 - It says they FINISHED / want a review / made changes (recheck) → REVIEW this section against what the target role needs. If it's strong, confirm specifically what's good AND tell them they're good to move on to the next step (tone: "win"). If there's a problem, point out the ONE main flaw concretely and how they can fix it themselves — do NOT offer to fix it for them (tone: "progress").
+  IMPORTANT — RECOGNISE PROGRESS AND LET THEM FINISH: the user has just acted on your last advice. If the section now meets the basics, CONFIRM it (tone "win") and send them onward — do NOT manufacture a new, smaller flaw each pass; that traps them in a loop. Only raise a flaw for a REAL, material gap. For WORK HISTORY specifically: if at least one bullet already contains a number (quantifiedRatio > 0), treat quantification as SATISFIED — confirm (tone "win"); you may add "a couple more numbers would strengthen it" as a gentle optional aside, but NEVER as a blocking flaw. Raise quantification as the flaw ONLY when NO bullet has a number (quantifiedRatio is 0). Never tell the user to add a number to a bullet that already has a "[placeholder]"; those are theirs to fill, not a flaw to re-flag.
 - It says they'll LEAVE IT AS IS / ignore → acknowledge gracefully, no nagging, move on (tone: "win").
 - Target Job — they will ONLY trigger you here by telling you about the job description (never assume it on your own):
   - If they ADDED or UPDATED the description → READ the targetJobDescription, then: (1) acknowledge it warmly, (2) give 2-3 KEY TAKEAWAYS — the most important things this role wants (key skills, focus areas, seniority), drawn ONLY from the description (never invented), and (3) promise to guide them, section by section, to build a CV tailored to it. tone: "win".
@@ -2788,6 +2796,93 @@ OUTPUT STRICT JSON ONLY:
   }
 };
 
+// SURGICAL bullet improvement for the CV Coach. Unlike generateBulletPoints (which
+// regenerates a whole fresh set), this KEEPS bullets that are already strong exactly
+// as written and rewrites ONLY the ones that genuinely weaken the candidate with
+// recruiters/ATS (passive openers, buzzwords, first-person, vague/no-outcome, or a
+// clearly-missed must-have keyword the candidate truly matches). Truth-locked: a
+// weak-but-true bullet becomes a strong-but-true one, never fiction; metrics use
+// [X]-style placeholders, never invented numbers. Returns ONE entry per input
+// bullet, IN ORDER: { keep:boolean, text, reason }. When the role has no bullets,
+// it proposes a few fresh starters (all keep:false). Throws AIUnavailableError when
+// no AI is configured (callJSON) so the user is never charged for nothing.
+const improveBullets = async (role, bullets = [], options = {}) => {
+  const model = options.model || MODEL; // tier-based (resolveTextModel)
+  const keywords = Array.isArray(options.keywords) ? options.keywords : [];
+  const mustHave = keywords
+    .filter((k) => k && k.importance === "must_have")
+    .map((k) => k.name)
+    .filter(Boolean);
+  const niceToHave = keywords
+    .filter((k) => k && k.importance !== "must_have")
+    .map((k) => k.name)
+    .filter(Boolean);
+  const clean = bullets
+    .map((b) => String(b || "").replace(/^[•\-*\s]+/, "").trim())
+    .filter(Boolean);
+
+  const kwBlock = `MUST-HAVE: ${mustHave.length ? mustHave.join(", ") : "none provided"}\nNICE-TO-HAVE: ${niceToHave.length ? niceToHave.join(", ") : "none provided"}`;
+
+  let system;
+  let user;
+  if (clean.length === 0) {
+    system =
+      "You are an expert resume writer and ATS optimization specialist. Write strong, truthful, ATS-parseable work-history bullets. NEVER invent specific numbers, tools, certifications, or scope; use [X]-style placeholders only where a metric is genuinely natural. Output STRICT JSON.";
+    user = `ROLE: "${role}"
+
+This role has NO bullets yet. Propose 4 strong starter bullets — each leads with a strong action verb, mirrors the target job's vocabulary ONLY where genuinely plausible for this role, and quantifies with [X]-style placeholders only where natural (never an invented number).
+
+TARGET JOB KEYWORDS:
+${kwBlock}
+
+OUTPUT STRICT JSON: { "bullets": [ { "keep": false, "text": "<bullet>", "reason": "<≤8 words>" } ] } with exactly 4 items.`;
+  } else {
+    system =
+      "You are an expert resume writer, technical recruiter, and ATS optimization specialist performing a SURGICAL edit of ONE work-history role's bullets. PRIME DIRECTIVE: KEEP bullets that are already strong EXACTLY as written — never reword a good bullet. Rewrite ONLY the bullets that genuinely weaken the candidate. Truth is non-negotiable: a weak-but-true bullet becomes a strong-but-true bullet, never fiction. Output STRICT JSON.";
+    user = `ROLE: "${role}"
+
+TARGET JOB KEYWORDS:
+${kwBlock}
+
+CURRENT BULLETS (in order):
+${clean.map((b, i) => `${i + 1}. ${b}`).join("\n")}
+
+For EACH bullet decide:
+- KEEP (keep:true, return "text" UNCHANGED) if it already leads with a strong action verb, states a concrete action/result or scope, is truthful and ATS-parseable, and is not filler.
+- REWRITE (keep:false) ONLY if it has a real weakness: passive/duty opener ("Responsible for", "Helped", "Worked on", "Assisted"), buzzwords/filler ("team player", "hard worker"), first-person pronouns ("I", "my", "me"), vague with no outcome, OR it clearly misses a MUST-HAVE keyword the candidate's real work genuinely involves. When rewriting: lead with a strong verb, mirror the job's exact terminology ONLY where truthful, and quantify with a [X]-style placeholder ONLY where a metric is natural for this role — NEVER invent a concrete number, tool, certification, or scope.
+
+Be conservative: when a bullet is already fine, KEEP it. Do not rewrite just to reword.
+
+OUTPUT STRICT JSON — exactly one entry per input bullet, SAME ORDER:
+{ "bullets": [ { "keep": true|false, "text": "<unchanged original if keep, else the rewrite>", "reason": "<≤8 words: why kept, or what you fixed>" } ] }`;
+  }
+
+  const data = await callJSON({
+    system,
+    user,
+    temperature: 0.3,
+    meta: { ...(options.meta || {}), model, operation: "coachImproveBullets" },
+  });
+  const out = Array.isArray(data?.bullets) ? data.bullets : [];
+
+  // No bullets → fresh starters (all rewrites). Cap defensively.
+  if (clean.length === 0) {
+    return out
+      .slice(0, 6)
+      .map((o) => ({ keep: false, text: String(o?.text || "").trim(), reason: String(o?.reason || "").trim() }))
+      .filter((o) => o.text);
+  }
+
+  // Align strictly to the inputs (defensive: the model must return one per bullet,
+  // in order). A missing/blank entry falls back to keeping the original untouched.
+  return clean.map((orig, i) => {
+    const o = out[i] || {};
+    const text = String(o.text || "").trim() || orig;
+    const keep = o.keep === true || text === orig;
+    return { keep, text: keep ? orig : text, reason: String(o.reason || "").trim() };
+  });
+};
+
 // Generate one professional-summary variation PER requested tone, in a single
 // call. `tones` is [{ key, label, guidance }]. Returns [{ key, summary }] in the
 // same order. Grounded entirely in the candidate's own CV (never the JD), and
@@ -3149,6 +3244,7 @@ module.exports = {
   extractResumeProfile,
   extractJobMetadata,
   generateBulletPoints,
+  improveBullets,
   generateSummaries,
   generateSkillsFromContext,
   generateStructuredSkills,

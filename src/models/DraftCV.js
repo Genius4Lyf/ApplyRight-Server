@@ -70,6 +70,10 @@ const draftCVSchema = new mongoose.Schema(
     },
     experience: [
       {
+        // Stable per-entry id the builder assigns (uuid). Declared here so it
+        // survives Mongoose strict-mode saves — the ATS coach keys role-targeted
+        // rewrites/red-flags off it, and it lets drag-reorder persist across reloads.
+        _sortId: String,
         title: String,
         company: String,
         startDate: String,
@@ -80,6 +84,7 @@ const draftCVSchema = new mongoose.Schema(
     ],
     projects: [
       {
+        _sortId: String, // see experience._sortId
         title: String,
         link: String,
         description: String, // Bullet points

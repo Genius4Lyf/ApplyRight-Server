@@ -302,28 +302,44 @@ const BUZZWORDS = [
 
 /**
  * Detect resume issues a recruiter would flag — deterministic only (no AI).
- * Returns an array of { label, detail, severity: "high"|"medium"|"low" }.
+ * Returns an array of { label, detail, severity: "high"|"medium"|"low", affected }
+ * where `affected` is [{ section: "experience"|"project", sortId, title }] for the
+ * role/project entries that triggered a per-entry flag (empty for CV-wide flags).
+ * The coach panel uses `affected` to offer a "Rewrite this role" fix on each finding.
  */
 const detectRedFlags = (draft = {}) => {
   const flags = [];
   const exp = draft.experience || [];
   const projects = draft.projects || [];
 
-  const allBullets = [...exp, ...projects].flatMap((e) =>
-    (e.description || "").split("\n").map((b) => b.trim()).filter(Boolean)
-  );
+  // Per-entry view so a flag can point at the exact role/project it came from.
+  // Keyed by the stable _sortId the builder assigns (survives reorder/delete).
+  const entries = [
+    ...exp.map((e) => ({ section: "experience", sortId: e._sortId, title: e.title || "A role", entry: e })),
+    ...projects.map((p) => ({ section: "project", sortId: p._sortId, title: p.title || "A project", entry: p })),
+  ].map((x) => ({
+    ...x,
+    bullets: (x.entry.description || "").split("\n").map((b) => b.trim()).filter(Boolean),
+  }));
+
+  // Strip an entry down to the { section, sortId, title } the UI needs.
+  const ref = ({ section, sortId, title }) => ({ section, sortId, title });
+
+  const allBullets = entries.flatMap((x) => x.bullets);
   const bulletText = allBullets.join("\n").toLowerCase();
 
   // 1. Weak / passive bullet openers
-  const weakHits = allBullets.filter((b) => {
+  const isWeak = (b) => {
     const lower = b.replace(/^[•\-*\s]+/, "").toLowerCase();
     return WEAK_OPENERS.some((w) => lower.startsWith(w));
-  });
+  };
+  const weakHits = allBullets.filter(isWeak);
   if (weakHits.length > 0) {
     flags.push({
       label: "Passive bullet openers",
       detail: `${weakHits.length} bullet${weakHits.length > 1 ? "s" : ""} start with phrases like "Responsible for" or "Helped". Lead with a strong action verb (Led, Built, Delivered) instead.`,
       severity: weakHits.length >= 3 ? "high" : "medium",
+      affected: entries.filter((x) => x.bullets.some(isWeak)).map(ref),
     });
   }
 
@@ -336,6 +352,10 @@ const detectRedFlags = (draft = {}) => {
         label: "Few quantified results",
         detail: `Only ${quantified}/${allBullets.length} bullets include a number. Recruiters scan for measurable impact — add metrics (%, ₦, time saved, volume).`,
         severity: ratio === 0 ? "high" : "medium",
+        // Target the entries that have bullets but no numbers at all.
+        affected: entries
+          .filter((x) => x.bullets.length > 0 && !x.bullets.some((b) => /\d/.test(b)))
+          .map(ref),
       });
     }
   }
@@ -347,26 +367,32 @@ const detectRedFlags = (draft = {}) => {
       label: "Generic buzzwords",
       detail: `Phrases like "${foundBuzz.slice(0, 3).join('", "')}" add no signal. Replace them with concrete evidence of the trait.`,
       severity: "low",
+      affected: entries
+        .filter((x) => foundBuzz.some((w) => x.bullets.join("\n").toLowerCase().includes(w)))
+        .map(ref),
     });
   }
 
   // 4. First-person pronouns in bullets (resume convention is implied subject)
-  const pronounHits = allBullets.filter((b) => /\b(i|my|me)\b/i.test(b.replace(/^[•\-*\s]+/, "")));
+  const hasPronoun = (b) => /\b(i|my|me)\b/i.test(b.replace(/^[•\-*\s]+/, ""));
+  const pronounHits = allBullets.filter(hasPronoun);
   if (pronounHits.length > 1) {
     flags.push({
       label: "First-person pronouns",
       detail: `${pronounHits.length} bullets use "I" / "my". Resume bullets conventionally drop the pronoun (e.g. "Led a team" not "I led a team").`,
       severity: "low",
+      affected: entries.filter((x) => x.bullets.some(hasPronoun)).map(ref),
     });
   }
 
   // 5. Over-stuffed roles (too many bullets dilute impact)
-  const stuffed = exp.find((e) => (e.description || "").split("\n").filter((b) => b.trim()).length > 8);
-  if (stuffed) {
+  const stuffed = entries.filter((x) => x.section === "experience" && x.bullets.length > 8);
+  if (stuffed.length > 0) {
     flags.push({
       label: "Over-stuffed role",
-      detail: `"${stuffed.title || "A role"}" has 9+ bullets. Recruiters skim — keep the 4-6 strongest per role.`,
+      detail: `"${stuffed[0].title}" has 9+ bullets. Recruiters skim — keep the 4-6 strongest per role.`,
       severity: "low",
+      affected: stuffed.map(ref),
     });
   }
 
@@ -382,6 +408,7 @@ const detectRedFlags = (draft = {}) => {
         label: "Employment gap",
         detail: `There's roughly a ${gap}-year gap in your timeline. It's fine to have one — be ready to explain it, or fill it with study/freelance/volunteer work.`,
         severity: "low",
+        affected: [],
       });
       break; // one gap flag is enough
     }
@@ -398,6 +425,7 @@ const detectRedFlags = (draft = {}) => {
       label: "Unfilled placeholders",
       detail: `${placeholderHits.length} bullet${placeholderHits.length > 1 ? "s" : ""} still contain placeholders like "[X]%" or "[N]". Replace them with your real numbers before applying — recruiters and ATS notice.`,
       severity: "high",
+      affected: entries.filter((x) => x.bullets.some((b) => PLACEHOLDER.test(b))).map(ref),
     });
   }
 
@@ -410,6 +438,7 @@ const detectRedFlags = (draft = {}) => {
       label: "Page markers in your text",
       detail: `Text like "1 of 3" or "Page 2 of 3" looks pasted from a PDF. Remove these — they clutter the CV and confuse ATS parsers.`,
       severity: "medium",
+      affected: entries.filter((x) => x.bullets.some((b) => PAGE_MARKER.test(b))).map(ref),
     });
   }
 
@@ -432,6 +461,7 @@ const detectRedFlags = (draft = {}) => {
       label: "Duplicate skills",
       detail: `"${dupSkills.slice(0, 3).join('", "')}" appear${dupSkills.length === 1 ? "s" : ""} more than once in your skills. Remove the repeats — a tight, deduped list reads stronger.`,
       severity: "low",
+      affected: [],
     });
   }
 

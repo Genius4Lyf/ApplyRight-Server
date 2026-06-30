@@ -44,6 +44,24 @@ const buildJobMatch = async (draft, candidate, meta) => {
   }
 };
 
+// Resolve the target-job keyword set for ATS bullet rewrites, reusing existing
+// infrastructure and never charging here: 1) the AI keywords already cached on the
+// draft (the paid "Find more keywords" action), else 2) free deterministic
+// dictionary extraction from the JD text. Mirrors ai.controller's resolveJobKeywords
+// so coach rewrites and the History step's ATS bullets target the same keywords.
+const resolveDraftKeywords = (draft) => {
+  if (Array.isArray(draft.targetJob?.aiKeywords) && draft.targetJob.aiKeywords.length > 0) {
+    return draft.targetJob.aiKeywords;
+  }
+  const desc = (draft.targetJob?.description || "").trim();
+  if (!desc) return [];
+  const { skills = [] } = require("../services/extraction.service").extractRequirements(desc);
+  return skills.map((s) => ({
+    name: s.name,
+    importance: s.importance >= 4 ? "must_have" : "nice_to_have",
+  }));
+};
+
 // @desc    Run the CV Coach "Deep Scan" — Job Match + Career Match + recruiter
 //          red-flags. Paid (active subscription) users run it freely; free users
 //          get ONE lifetime taste, claimed atomically before any AI spend and
@@ -233,4 +251,126 @@ const guide = async (req, res) => {
   }
 };
 
-module.exports = { deepScan, guide };
+// @desc    Generate role-targeted ATS bullet rewrites for ONE work-history role or
+//          project, so the coach can turn a red-flag into a one-tap fix ("use these
+//          on your Support Rep @ Acme role"). Truthful, JD-keyword-aligned (for
+//          experience), strong-verb. Paid only — the rewrite engine is premium.
+// @route   POST /api/coach/rewrite-role
+// @access  Private (active subscription)
+const rewriteRole = async (req, res) => {
+  const { draftId, section, sortId } = req.body || {};
+  if (!draftId || !sortId || !["experience", "project"].includes(section)) {
+    return res.status(400).json({ message: "draftId, section ('experience'|'project') and sortId are required" });
+  }
+
+  try {
+    if (!mongoose.Types.ObjectId.isValid(draftId)) {
+      return res.status(400).json({ message: "Invalid draftId format" });
+    }
+    const draft = await DraftCV.findById(draftId);
+    if (!draft) {
+      return res.status(404).json({ message: "CV not found" });
+    }
+    if (draft.userId.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Not authorized to edit this CV" });
+    }
+
+    const user = await User.findById(req.user.id).select("plan subscription");
+    if (!subscription.isPaidActive(user)) {
+      return res.status(402).json({ locked: true, message: "Upgrade to rewrite your bullets for this role." });
+    }
+
+    const list = section === "experience" ? draft.experience : draft.projects;
+    const entry = (list || []).find((e) => e._sortId === sortId);
+    if (!entry) {
+      return res.status(404).json({ message: "That role is no longer in your CV. Refresh and try again." });
+    }
+
+    const title = entry.title || (section === "experience" ? "this role" : "this project");
+    const model = aiService.resolveTextModel(user); // tier-based (paid → stronger model)
+
+    // SURGICAL: only the bullets that hurt the candidate get rewritten; strong ones
+    // are kept verbatim. Experience aligns to the target job's keywords; projects are
+    // JD-blind (keyword-injection for projects is a later enhancement).
+    const bulletsIn = (entry.description || "")
+      .split("\n")
+      .map((b) => b.replace(/^[•\-*\s]+/, "").trim())
+      .filter(Boolean);
+    const keywords = section === "experience" ? resolveDraftKeywords(draft) : [];
+
+    const items = await aiService.improveBullets(title, bulletsIn, {
+      keywords,
+      model,
+      meta: { userId: req.user.id, operation: "coachRewriteRole" },
+    });
+
+    // Pair each AI decision with its original bullet (null for fresh starters when
+    // the role had no bullets). `keep:true` → unchanged; `keep:false` → improved.
+    const bullets = (Array.isArray(items) ? items : []).map((it, i) => ({
+      original: bulletsIn[i] ?? null,
+      keep: !!it.keep,
+      text: it.text || bulletsIn[i] || "",
+      reason: it.reason || "",
+    }));
+
+    if (bullets.length === 0) {
+      return res.status(502).json({ message: "Couldn't rewrite this role right now. Please try again." });
+    }
+
+    return res.json({ section, sortId, title, bullets });
+  } catch (error) {
+    if (error instanceof aiService.AIUnavailableError) {
+      return res.status(503).json({ message: "AI is not configured right now. Please try again later." });
+    }
+    console.error("Coach Rewrite Role Error:", error);
+    return res.status(500).json({ message: "Failed to rewrite this role" });
+  }
+};
+
+// @desc    Re-verify the CV after the user applies fixes — recompute the deterministic
+//          recruiter red-flags and the (cached) Job Match fit score so resolved items
+//          flip green and the score climbs. Skips the expensive Career Match AI, so
+//          paid users can recheck as often as they iterate. Paid only.
+// @route   POST /api/coach/recheck
+// @access  Private (active subscription)
+const recheck = async (req, res) => {
+  const { draftId } = req.body || {};
+  if (!draftId) {
+    return res.status(400).json({ message: "draftId is required" });
+  }
+
+  try {
+    if (!mongoose.Types.ObjectId.isValid(draftId)) {
+      return res.status(400).json({ message: "Invalid draftId format" });
+    }
+    const draft = await DraftCV.findById(draftId);
+    if (!draft) {
+      return res.status(404).json({ message: "CV not found" });
+    }
+    if (draft.userId.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Not authorized to scan this CV" });
+    }
+
+    const user = await User.findById(req.user.id).select("plan subscription");
+    if (!subscription.isPaidActive(user)) {
+      return res.status(402).json({ locked: true, message: "Upgrade to recheck your CV." });
+    }
+
+    const candidate = cvDataToCandidate(draft);
+    const meta = { userId: req.user.id, operation: "coachRecheck" };
+    // Reuses the cached extractJobRequirements for the same JD, so recheck is cheap
+    // and repeatable (no fresh AI spend when the job description is unchanged).
+    const jobMatch = await buildJobMatch(draft, candidate, meta);
+    const redFlags = detectRedFlags(draft);
+
+    return res.json({ jobMatch, redFlags });
+  } catch (error) {
+    if (error instanceof aiService.AIUnavailableError) {
+      return res.status(503).json({ message: "AI is not configured right now. Please try again later." });
+    }
+    console.error("Coach Recheck Error:", error);
+    return res.status(500).json({ message: "Failed to recheck your CV" });
+  }
+};
+
+module.exports = { deepScan, guide, rewriteRole, recheck };
