@@ -4,7 +4,7 @@ const crypto = require("crypto");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const SettingsService = require("../services/settings.service");
-const { sendWhatsAppOTP } = require("../utils/whatsapp.service");
+const { sendPasswordResetOTP } = require("../utils/email.service");
 
 const generateReferralCode = () => {
   // Basic code generation: Random 8 char alphanumeric
@@ -392,13 +392,21 @@ const updateProfile = async (req, res, next) => {
 // @route   POST /api/auth/forgotpassword
 // @access  Public
 const forgotPassword = async (req, res) => {
-  const { phone } = req.body;
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ message: "Email is required" });
+  }
 
   try {
-    const user = await User.findOne({ phone });
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
 
+    // Don't reveal whether the email exists — always respond with success.
+    // This prevents account enumeration via the reset endpoint.
     if (!user) {
-      return res.status(404).json({ message: "User with this phone number not found" });
+      return res
+        .status(200)
+        .json({ success: true, data: "If an account exists for that email, a reset code has been sent." });
     }
 
     // Generate OTP
@@ -415,13 +423,18 @@ const forgotPassword = async (req, res) => {
     });
 
     try {
-      await sendWhatsAppOTP(user.phone, otp);
-      res.status(200).json({ success: true, data: "WhatsApp OTP sent" });
+      await sendPasswordResetOTP(user.email, otp);
+      res.status(200).json({
+        success: true,
+        data: "If an account exists for that email, a reset code has been sent.",
+      });
     } catch (err) {
+      // Roll back the stored token so a failed send doesn't leave a dangling OTP
       await user.updateOne({
         $unset: { resetPasswordToken: 1, resetPasswordExpire: 1 },
       });
-      res.status(500).json({ message: "WhatsApp message could not be sent" });
+      console.error("[forgotPassword] email send failed:", err.message);
+      res.status(500).json({ message: "Reset email could not be sent. Please try again later." });
     }
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -432,11 +445,15 @@ const forgotPassword = async (req, res) => {
 // @route   POST /api/auth/resetpassword
 // @access  Public
 const resetPassword = async (req, res) => {
-  const { phone, otp, password } = req.body;
+  const { email, otp, password } = req.body;
+
+  if (!email || !otp || !password) {
+    return res.status(400).json({ message: "Email, code, and new password are required" });
+  }
 
   try {
     const user = await User.findOne({
-      phone,
+      email: email.toLowerCase().trim(),
       resetPasswordExpire: { $gt: Date.now() },
     });
 

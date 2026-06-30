@@ -38,6 +38,7 @@
     "openai": "^6.16.0",
     "pdf-parse": "^1.1.1",
     "puppeteer": "^24.36.1",
+    "resend": "^6.16.0",
     "string-similarity": "^4.0.4",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
