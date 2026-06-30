@@ -331,11 +331,16 @@ const entitlementFor = (user) => {
   const li = user.liveInterview || {};
   const freeTasteRemaining = Math.max(0, FREE_TASTE_SEC - (li.freeTasteUsedSec || 0));
   const dl = subscription.downloadStatus(user);
+  // Human-readable plan name for the UI. Only meaningful while the subscription is
+  // still active (tier !== "free"); an expired plan falls back to no label so the
+  // card reads "Free plan" rather than a stale marketing name.
+  const planItem = tier !== "free" && user.subscription?.planId ? getItem(user.subscription.planId) : null;
   return {
     tier,
     plan: user.plan,
     expiresAt: user.subscription?.expiresAt || null,
     planId: user.subscription?.planId || null,
+    planLabel: planItem?.label || null,
     minutesRemaining: Math.floor((li.secondsRemaining || 0) / 60),
     secondsRemaining: li.secondsRemaining || 0,
     freeTasteRemainingSec: tier === "free" ? freeTasteRemaining : 0,

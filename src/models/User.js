@@ -233,6 +233,14 @@ const userSchema = new mongoose.Schema(
         type: Boolean,
         default: false,
       },
+      // Notification preferences (Account hub → Notifications tab). Stored
+      // user intent; consulted by the relevant send sites as they get wired up.
+      notifications: {
+        productUpdates: { type: Boolean, default: true },
+        interviewReminders: { type: Boolean, default: true },
+        applicationNudges: { type: Boolean, default: true },
+        marketingEmails: { type: Boolean, default: false },
+      },
     },
   },
   {

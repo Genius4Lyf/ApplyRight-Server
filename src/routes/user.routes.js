@@ -8,6 +8,31 @@ const userController = require("../controllers/user.controller");
 // @access  Private
 router.get("/profile", auth, userController.getProfile);
 
+// @route   GET api/users/me/referrals
+// @desc    Referral code + invites + credits earned (Account hub)
+// @access  Private
+router.get("/me/referrals", auth, userController.getReferralStats);
+
+// @route   GET api/users/me/stats
+// @desc    Activity & progress snapshot (Account hub Overview)
+// @access  Private
+router.get("/me/stats", auth, userController.getActivityStats);
+
+// @route   PATCH api/users/me/email
+// @desc    Change account email (requires current password)
+// @access  Private
+router.patch("/me/email", auth, userController.changeEmail);
+
+// @route   PATCH api/users/me/password
+// @desc    Change account password (requires current password)
+// @access  Private
+router.patch("/me/password", auth, userController.changePassword);
+
+// @route   GET api/users/me/export
+// @desc    Download all user data as JSON
+// @access  Private
+router.get("/me/export", auth, userController.exportData);
+
 // @route   PUT api/users/profile
 // @desc    Update user profile
 // @access  Private
