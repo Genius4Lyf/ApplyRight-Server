@@ -73,7 +73,7 @@ const CATALOG = {
     periodDays: 30,
   },
   // CV Agent plans — for people who create CVs for clients. Each grants a pool of
-  // CV credits (for tailoring) + UNLIMITED downloads (isPaidActive skips the ₦500
+  // CV credits (for tailoring) + UNLIMITED downloads (isPaidActive skips the ₦750
   // download charge), and NO live interview minutes (minutes: 0). Map to "plus" so
   // they count as paid. weekly / monthly / yearly cycles. Drives the agent role +
   // earnings dashboard (/agent).
@@ -165,13 +165,13 @@ const CATALOG = {
     minutes: 15,
   },
   // One-time clean CV download (after the free first download). Priced for the
-  // reseller case: a CV agent charges their client ~₦1,000 and keeps ₦500.
+  // reseller case: a CV agent charges their client ~₦1,000 and keeps ₦250.
   download_single: {
     id: "download_single",
     label: "CV Download",
     purpose: "download",
-    amountNgn: 500,
-    amountUsd: 0.75,
+    amountNgn: 750,
+    amountUsd: 1.15,
     downloads: 1,
   },
 };
