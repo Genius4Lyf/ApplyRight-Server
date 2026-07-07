@@ -1,20 +1,4 @@
-const isProduction = process.env.NODE_ENV === "production";
-
-// In production (Render/Linux) use puppeteer-core + @sparticuz/chromium.
-// Its Chromium binary ships as a normal npm dependency, so it survives Render's
-// build -> runtime artifact upload (unlike a downloaded Chrome in a .cache dir,
-// which Render strips). Locally (Windows/macOS) use the full puppeteer package
-// with its own bundled Chromium.
-let puppeteer;
-let chromium = null;
-if (isProduction) {
-  puppeteer = require("puppeteer-core");
-  chromium = require("@sparticuz/chromium");
-  // Disable WebGL/graphics to cut memory use on constrained Render instances.
-  chromium.setGraphicsMode = false;
-} else {
-  puppeteer = require("puppeteer");
-}
+const { puppeteer, getLaunchOptions, isProduction } = require("./browser");
 
 class PdfService {
   constructor() {
@@ -23,34 +7,7 @@ class PdfService {
 
   async init() {
     if (!this.browser) {
-      let launchOptions;
-
-      if (isProduction) {
-        // @sparticuz/chromium ships args tuned for constrained/serverless
-        // environments (Render). executablePath() extracts the binary to /tmp.
-        launchOptions = {
-          headless: true,
-          args: [...chromium.args, "--font-render-hinting=none"],
-          defaultViewport: chromium.defaultViewport,
-          executablePath: await chromium.executablePath(),
-        };
-      } else {
-        // Local dev: full puppeteer with bundled Chromium (or a custom path).
-        launchOptions = {
-          headless: true,
-          args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--font-render-hinting=none",
-          ],
-          // If PUPPETEER_EXECUTABLE_PATH is provided in .env, use it.
-          ...(process.env.PUPPETEER_EXECUTABLE_PATH && {
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-          }),
-        };
-      }
+      const launchOptions = await getLaunchOptions();
 
       try {
         console.log(

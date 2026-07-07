@@ -1,8 +1,6 @@
-const puppeteer = require("puppeteer");
+const { puppeteer, getLaunchOptions } = require("./browser");
 const path = require("path");
 const fs = require("fs");
-
-const isProduction = process.env.NODE_ENV === "production";
 
 // Read logo and convert to base64 data URI
 const logoPath = path.join(__dirname, "..", "..", "public", "applyright-icon.png");
@@ -468,23 +466,7 @@ class ScreenshotService {
 
   async init() {
     if (!this.browser) {
-      const args = [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--font-render-hinting=none",
-      ];
-      if (isProduction) {
-        args.push("--single-process", "--no-zygote");
-      }
-      const launchOptions = {
-        headless: true,
-        args,
-        ...(process.env.PUPPETEER_EXECUTABLE_PATH && {
-          executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-        }),
-      };
+      const launchOptions = await getLaunchOptions();
       this.browser = await puppeteer.launch(launchOptions);
       this.browser.on("disconnected", () => {
         this.browser = null;
