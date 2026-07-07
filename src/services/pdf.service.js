@@ -1,6 +1,20 @@
-const puppeteer = require("puppeteer");
-
 const isProduction = process.env.NODE_ENV === "production";
+
+// In production (Render/Linux) use puppeteer-core + @sparticuz/chromium.
+// Its Chromium binary ships as a normal npm dependency, so it survives Render's
+// build -> runtime artifact upload (unlike a downloaded Chrome in a .cache dir,
+// which Render strips). Locally (Windows/macOS) use the full puppeteer package
+// with its own bundled Chromium.
+let puppeteer;
+let chromium = null;
+if (isProduction) {
+  puppeteer = require("puppeteer-core");
+  chromium = require("@sparticuz/chromium");
+  // Disable WebGL/graphics to cut memory use on constrained Render instances.
+  chromium.setGraphicsMode = false;
+} else {
+  puppeteer = require("puppeteer");
+}
 
 class PdfService {
   constructor() {
@@ -9,30 +23,36 @@ class PdfService {
 
   async init() {
     if (!this.browser) {
-      try {
-        const args = [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-gpu",
-          "--font-render-hinting=none",
-        ];
+      let launchOptions;
 
-        // --single-process and --no-zygote help on resource-constrained servers (Render)
-        // but cause "Navigating frame was detached" crashes on Windows/local dev
-        if (isProduction) {
-          args.push("--single-process", "--no-zygote");
-        }
-
-        const launchOptions = {
+      if (isProduction) {
+        // @sparticuz/chromium ships args tuned for constrained/serverless
+        // environments (Render). executablePath() extracts the binary to /tmp.
+        launchOptions = {
           headless: true,
-          args,
-          // If PUPPETEER_EXECUTABLE_PATH is provided in .env (e.g., local development), use it.
+          args: [...chromium.args, "--font-render-hinting=none"],
+          defaultViewport: chromium.defaultViewport,
+          executablePath: await chromium.executablePath(),
+        };
+      } else {
+        // Local dev: full puppeteer with bundled Chromium (or a custom path).
+        launchOptions = {
+          headless: true,
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--font-render-hinting=none",
+          ],
+          // If PUPPETEER_EXECUTABLE_PATH is provided in .env, use it.
           ...(process.env.PUPPETEER_EXECUTABLE_PATH && {
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
           }),
         };
+      }
 
+      try {
         console.log(
           `Launching Puppeteer (${isProduction ? "production" : "local"}) with options:`,
           JSON.stringify(launchOptions)

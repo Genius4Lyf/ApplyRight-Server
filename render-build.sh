@@ -2,18 +2,11 @@
 # exit on error
 set -o errexit
 
-npm install
+# Install production deps only. Chromium is provided by the @sparticuz/chromium
+# npm package (a normal dependency), so there is NO separate browser download
+# step and nothing lands in a .cache dir that Render would strip at runtime.
+npm install --omit=dev
 
-# Pin the browser cache INSIDE node_modules so it survives Render's
-# build -> runtime artifact upload (which strips gitignored dirs like a
-# project-root .cache but always keeps node_modules).
-# Must match cacheDirectory in .puppeteerrc.cjs.
-export PUPPETEER_CACHE_DIR="$(pwd)/node_modules/.cache/puppeteer"
-echo "==> PUPPETEER_CACHE_DIR=$PUPPETEER_CACHE_DIR"
-
-# Install the Chrome build that THIS puppeteer version expects.
-npx puppeteer browsers install chrome
-
-# Fail the build loudly if Chrome did not actually land in the cache.
-echo "==> Contents of $PUPPETEER_CACHE_DIR/chrome:"
-ls -la "$PUPPETEER_CACHE_DIR/chrome" || (echo "ERROR: Chrome was not installed into the cache dir" && exit 1)
+# Sanity check: confirm the Chromium package is present in the runtime deps.
+echo "==> Verifying @sparticuz/chromium is installed:"
+ls -d node_modules/@sparticuz/chromium || (echo "ERROR: @sparticuz/chromium not installed" && exit 1)
