@@ -1003,11 +1003,21 @@ exports.getPayments = async (req, res) => {
     if (purpose && purpose !== "all") filter.purpose = purpose;
 
     const count = await Payment.countDocuments(filter);
-    const payments = await Payment.find(filter)
+    const rawPayments = await Payment.find(filter)
       .populate("userId", "firstName lastName email")
       .sort({ createdAt: -1 })
       .limit(pageSize)
-      .skip(pageSize * (page - 1));
+      .skip(pageSize * (page - 1))
+      .lean();
+
+    // Attach the human-readable catalog label so admins see "CV Download" rather
+    // than the raw planId (download_single). Falls back to the id if the plan was
+    // renamed/removed from the catalog.
+    const { CATALOG } = require("../config/catalog");
+    const payments = rawPayments.map((p) => ({
+      ...p,
+      planLabel: CATALOG[p.planId]?.label || p.planId || "—",
+    }));
 
     // Status breakdown for the current filter (count + revenue per status).
     const summaryRaw = await Payment.aggregate([

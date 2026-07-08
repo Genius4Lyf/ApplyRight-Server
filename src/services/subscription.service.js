@@ -5,8 +5,60 @@
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const { getItem, MAX_SESSION_SEC_BY_TIER } = require("../config/catalog");
+const { sendPurchaseReceipt } = require("../utils/email.service");
+const logger = require("../utils/logger");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Human-readable "what you got" bullet lines for a purchase receipt, derived from
+ * the catalog item + purpose. Kept next to grantEntitlement so the two stay in sync
+ * whenever a purpose's grant behaviour changes.
+ */
+const receiptLinesFor = (item) => {
+  const lines = [];
+  if (item.purpose === "subscription") {
+    if (item.credits > 0) lines.push(`${item.credits.toLocaleString()} AI credits for the period`);
+    if (item.minutes > 0) lines.push(`${item.minutes} live interview minute${item.minutes === 1 ? "" : "s"}`);
+    lines.push("Unlimited CV downloads & all premium templates");
+    if (item.periodDays) lines.push(`${item.periodDays}-day access (one-time — no auto-renew)`);
+  } else if (item.purpose === "credit") {
+    lines.push(`${(item.credits || 0).toLocaleString()} credits added to your wallet`);
+  } else if (item.purpose === "download") {
+    const n = item.downloads || 0;
+    lines.push(`${n} clean CV download${n === 1 ? "" : "s"} (no watermark)`);
+  } else {
+    // topup — live interview minutes
+    lines.push(`${item.minutes || 0} live interview minute${item.minutes === 1 ? "" : "s"} added`);
+  }
+  return lines;
+};
+
+/**
+ * Fire-and-forget purchase receipt. BEST-EFFORT: any failure (Resend down,
+ * unconfigured, bad address) is logged and swallowed so it can never reverse or
+ * block the entitlement grant. Not awaited by the caller's critical path.
+ */
+const sendReceiptSafely = async (payment, item) => {
+  try {
+    const user = await User.findById(payment.userId).select("email firstName");
+    if (!user?.email) return;
+    const isSub = item.purpose === "subscription";
+    await sendPurchaseReceipt({
+      email: user.email,
+      firstName: user.firstName || "",
+      itemLabel: item.label || item.id,
+      amount: payment.currency === "USD" ? item.amountUsd : payment.amountNgn,
+      currency: payment.currency || "NGN",
+      reference: payment.flwTxRef,
+      date: payment.grantedAt || new Date(),
+      expiresAt: isSub ? new Date((payment.grantedAt || new Date()).getTime() + (item.periodDays || 0) * DAY_MS) : null,
+      included: receiptLinesFor(item),
+    });
+  } catch (err) {
+    logger.warn(`Purchase receipt email failed for payment ${payment._id}: ${err.message}`);
+  }
+};
 
 /**
  * Effective tier honoring expiry. A subscription whose expiresAt has passed is
@@ -111,6 +163,7 @@ const grantEntitlement = async (payment) => {
     }
   );
   if (claim.modifiedCount === 0) return false; // already granted
+  payment.grantedAt = now; // mirror the DB write so the receipt stamps the same time
 
   if (item.purpose === "subscription") {
     const expiresAt = new Date(now.getTime() + (item.periodDays || 0) * DAY_MS);
@@ -163,6 +216,12 @@ const grantEntitlement = async (payment) => {
       { $inc: { "liveInterview.secondsRemaining": minutesSec } }
     );
   }
+
+  // Best-effort purchase receipt. Awaited so tests/callers see it complete, but it
+  // never throws (sendReceiptSafely swallows all errors) — a mail failure must not
+  // reverse the grant we just committed.
+  await sendReceiptSafely(payment, item);
+
   return true;
 };
 
