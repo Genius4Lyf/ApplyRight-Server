@@ -69,20 +69,6 @@ const aiLimiter = rateLimit({
   },
 });
 
-// Ad Watch-Specific Rate Limiting (prevent bots spamming Monetag ad rewards).
-// Only SUCCESSFUL grants count toward the limit — failed attempts (e.g. the 60s
-// cooldown returns 429) must not snowball a user into a rate-limit lockout.
-const adWatchLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 15, // Limit each IP to 15 successful ad watches per 15 minutes
-  standardHeaders: true,
-  legacyHeaders: false,
-  skipFailedRequests: true, // don't count 4xx/5xx (cooldown, cap, errors)
-  message: {
-    message: "Too many ad requests from this IP. Please wait before watching more ads.",
-  },
-});
-
 // Checkout-Specific Rate Limiting. Each call mints a pending Payment row +
 // hits Flutterwave; cap per IP so the endpoint can't be spammed to flood the
 // Payment collection or the provider. A real buyer needs only a handful.
@@ -135,7 +121,6 @@ app.use("/api/analysis", require("./routes/analysis.routes"));
 app.use("/api/coach", aiLimiter, require("./routes/coach.routes")); // CV Builder ATS Coach (AI deep scan)
 app.use("/api/cv", require("./routes/cv.routes"));
 app.use("/api/pdf", require("./routes/pdf.routes"));
-app.use("/api/billing/watch-ad", adWatchLimiter);
 app.use("/api/billing/checkout", checkoutLimiter);
 app.use("/api/billing", require("./routes/billing.routes"));
 app.use("/api/feedback", require("./routes/feedback.routes"));

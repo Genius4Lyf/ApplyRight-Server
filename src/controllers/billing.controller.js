@@ -51,63 +51,10 @@ exports.getTransactions = async (req, res) => {
   }
 };
 
-// @desc    Watch Ad Reward (Monetag link-out on web)
-// @route   POST /api/billing/watch-ad
-// @access  Private
-exports.watchAd = async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const watchCount = await Transaction.countDocuments({
-      userId: user._id,
-      type: "ad_reward",
-      status: "completed",
-      createdAt: { $gte: today },
-    });
-
-    const result = await adReward.awardAdCredits(user, {
-      source: "monetag",
-      amount: 5,
-    });
-
-    if (!result.ok) {
-      if (result.code === "COOLDOWN") {
-        const retryAfter = Math.ceil(result.retryAfterMs / 1000);
-        res.set("Retry-After", String(retryAfter));
-        return res.status(429).json({
-          code: "COOLDOWN",
-          message: `Please wait ${retryAfter}s before watching another ad.`,
-          retryAfterMs: result.retryAfterMs,
-        });
-      }
-      if (result.code === "DAILY_CAP") {
-        return res.status(429).json({
-          code: "DAILY_CAP",
-          message: "Daily ad limit reached. Come back tomorrow!",
-        });
-      }
-      return res.status(400).json({ message: "Reward rejected" });
-    }
-
-    res.json({
-      success: true,
-      credits: result.credits,
-      added: result.added,
-      watchCount: watchCount + 1,
-      maxDaily: env.ADMOB_DAILY_CAP,
-      streak: result.streak,
-      streakBonus: result.streakBonus,
-      streakMessage: result.streakMessage,
-      type: "monetag",
-    });
-  } catch (error) {
-    logger.error(`watchAd error: ${error.message}\n${error.stack}`);
-    res.status(500).json({ message: "Server Error", detail: error.message });
-  }
-};
+// NOTE: The web-only `POST /billing/watch-ad` (watchAd) Monetag link-out reward
+// was removed — web no longer has any ads. Native Android still earns ad credits,
+// but exclusively through the AdMob Server-Side Verification callback below
+// (`admobSsv`), never this endpoint.
 
 // @desc    AdMob Server-Side Verification callback
 // @route   GET /api/billing/admob-ssv

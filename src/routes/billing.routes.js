@@ -18,7 +18,6 @@ router.get("/entitlement", protect, billingController.getEntitlement);
 
 router.get("/balance", protect, billingController.getBalance);
 router.get("/transactions", protect, billingController.getTransactions);
-router.post("/watch-ad", protect, billingController.watchAd);
 router.get("/ad-stats", protect, billingController.getWatchStats);
 router.post("/unlock-template", protect, billingController.unlockTemplate);
 
