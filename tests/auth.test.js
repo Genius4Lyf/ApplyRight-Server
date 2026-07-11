@@ -14,6 +14,9 @@ jest.mock("../src/services/settings.service", () => ({
     features: { maintenanceMode: false },
     credits: { signupBonus: 10, referralBonus: 5 },
   }),
+  getCreditCosts: jest
+    .fn()
+    .mockResolvedValue(require("../src/config/creditCosts").getDefaults()),
 }));
 
 // Mock Data
@@ -26,6 +29,9 @@ const mockUser = {
   lastName: "User",
   referralCode: "MOCKREF1",
   save: jest.fn().mockResolvedValue(true),
+  // Login records activity via user.updateOne(...).catch(...) (fire-and-forget),
+  // so the instance mock must expose it and return a promise.
+  updateOne: jest.fn().mockResolvedValue(true),
 };
 
 describe("Auth API (Mocked DB)", () => {

@@ -494,6 +494,9 @@ const getConfig = async (req, res) => {
     // current activeProvider from the AI service module — "mock" means no
     // API key is configured.
     const { activeProvider } = require("../services/ai.service");
+    // Resolved per-action credit costs (real defaults + any admin overrides) so
+    // the frontend can run accurate preflight checks. See lib/credits.js.
+    const creditCosts = await SettingsService.getCreditCosts();
     res.status(200).json({
       features: {
         maintenanceMode: settings.features.maintenanceMode,
@@ -501,6 +504,7 @@ const getConfig = async (req, res) => {
         admobEnabled: settings.features.admobEnabled === true,
       },
       credits: settings.credits,
+      creditCosts,
       announcement: settings.announcement,
     });
   } catch (err) {

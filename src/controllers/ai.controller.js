@@ -7,6 +7,7 @@ const Application = require("../models/Application");
 const Resume = require("../models/Resume");
 const Job = require("../models/Job");
 const subscription = require("../services/subscription.service");
+const settingsService = require("../services/settings.service");
 
 // @desc    Generate optimized CV and Cover Letter
 // @route   POST /api/ai/generate
@@ -429,9 +430,9 @@ const scoreBestForRole = (skillNames, { description = "", aiKeywords = [] } = {}
 
 const generateSkills = async (req, res) => {
   const { education, experience, projects, targetJob, draftId } = req.body;
-  const SKILLS_COST = 10;
 
   try {
+    const SKILLS_COST = (await settingsService.getCreditCosts()).GENERATE_SKILLS;
     const user = await require("../models/User").findById(req.user.id);
     // Paid tiers get the richer output (STAR talking points) and skip the charge.
     const isPaid = subscription.isPaidActive(user);
@@ -536,9 +537,9 @@ const generateSkills = async (req, res) => {
   }
 };
 
-// Paid "Find more keywords" cost. Mirrored in the frontend credit table
-// (applyright-frontend/src/lib/credits.js → GENERATE_JD_KEYWORDS). Keep in sync.
-const JD_KEYWORDS_COST = 5;
+// Paid "Find more keywords" cost lives in config/creditCosts.js
+// (GENERATE_JD_KEYWORDS) and is resolved per-request via getCreditCosts() inside
+// getJobKeywords. The frontend mirror is applyright-frontend/src/lib/credits.js.
 
 // Normalize a JD before hashing so trivial edits (whitespace/case) don't force
 // a re-charge for what is effectively the same job description.
@@ -611,6 +612,7 @@ const getJobKeywords = async (req, res) => {
       }
 
       // New/changed JD → verify credits before spending.
+      const JD_KEYWORDS_COST = (await settingsService.getCreditCosts()).GENERATE_JD_KEYWORDS;
       const User = require("../models/User");
       const user = await User.findById(req.user.id);
       // Everyone spends credits now; paid tiers draw from their allowance first.

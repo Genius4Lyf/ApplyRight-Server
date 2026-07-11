@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const Application = require("../models/Application");
 const DraftCV = require("../models/DraftCV");
+const settingsService = require("../services/settings.service");
 
 // Allowed Story Bank themes — kept in sync with the enum on
 // Application/DraftCV interviewPrep.stories[].theme.
@@ -938,7 +939,7 @@ exports.gradeAnswer = async (req, res) => {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const GRADE_COST = 1;
+    const GRADE_COST = (await settingsService.getCreditCosts()).GRADE_ANSWER;
     // Paid-only route (requireTier); now also spends credits from the tier
     // allowance first, then the wallet.
     if (subscription.availableCredits(user) < GRADE_COST) {
@@ -1073,7 +1074,7 @@ exports.generateFollowUp = async (req, res) => {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const FOLLOWUP_COST = 1;
+    const FOLLOWUP_COST = (await settingsService.getCreditCosts()).FOLLOWUP;
     // Paid-only route (requireTier); now also spends credits (tier allowance first).
     if (subscription.availableCredits(user) < FOLLOWUP_COST) {
       return res.status(403).json({
@@ -2160,7 +2161,7 @@ exports.gradeStoryAnswer = async (req, res) => {
     const aiService = require("../services/ai.service");
     const subscription = require("../services/subscription.service");
 
-    const GRADE_COST = 1;
+    const GRADE_COST = (await settingsService.getCreditCosts()).GRADE_STORY;
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
     // Paid-only route (requireTier); now also spends credits (tier allowance first).

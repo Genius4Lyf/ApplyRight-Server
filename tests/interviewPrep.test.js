@@ -632,11 +632,23 @@ describe("Interview Prep API", () => {
 
     it("should assess the transcript and persist the session (no credits charged)", async () => {
       aiService.assessInterview.mockResolvedValue(mockAssessment);
+      // The AI scorecard is paid-only (a free taste returns ANALYSIS_LOCKED), so
+      // this user must resolve to a paid effective tier.
+      const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const paidUser = { ...mockUser, subscription: { tier: "pro", expiresAt: future } };
+      // Mirror the beforeEach query shape: protect's .select() AND the handler's
+      // await UserModel.findById(...) must both resolve to the paid user.
+      User.findById.mockReturnValue({
+        select: jest.fn().mockResolvedValue(paidUser),
+        then: (resolve) => resolve(paidUser),
+      });
 
       const res = await request(app)
         .post(`/api/interview-prep/${mockAppId}/assess-interview`)
         .set("Authorization", "Bearer mock-token")
-        .send({ transcript, durationSec: 300, plannedSec: 360 });
+        // durationSec must clear MIN_REVIEW_SEC (8 min) or the handler declines
+        // the expensive score with REVIEW_TOO_SHORT.
+        .send({ transcript, durationSec: 540, plannedSec: 600 });
 
       expect(res.statusCode).toEqual(200);
       expect(res.body.assessment.overallScore).toEqual(78);
@@ -672,11 +684,20 @@ describe("Interview Prep API", () => {
 
     it("should return 503 when the assessor is unavailable", async () => {
       aiService.assessInterview.mockRejectedValue({ code: "AI_UNAVAILABLE" });
+      // Must pass the paid + min-length gates to actually reach the assessor call.
+      const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const paidUser = { ...mockUser, subscription: { tier: "pro", expiresAt: future } };
+      // Mirror the beforeEach query shape: protect's .select() AND the handler's
+      // await UserModel.findById(...) must both resolve to the paid user.
+      User.findById.mockReturnValue({
+        select: jest.fn().mockResolvedValue(paidUser),
+        then: (resolve) => resolve(paidUser),
+      });
 
       const res = await request(app)
         .post(`/api/interview-prep/${mockAppId}/assess-interview`)
         .set("Authorization", "Bearer mock-token")
-        .send({ transcript });
+        .send({ transcript, durationSec: 540 });
 
       expect(res.statusCode).toEqual(503);
       expect(res.body.code).toBe("AI_UNAVAILABLE");

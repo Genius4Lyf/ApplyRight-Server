@@ -28,6 +28,9 @@ jest.mock("../src/services/settings.service", () => ({
     features: { maintenanceMode: false },
     credits: { signupBonus: 10, referralBonus: 5 },
   }),
+  getCreditCosts: jest
+    .fn()
+    .mockResolvedValue(require("../src/config/creditCosts").getDefaults()),
 }));
 
 // Mock Models with explicit factories to avoid Mongoose compilation errors in Jest

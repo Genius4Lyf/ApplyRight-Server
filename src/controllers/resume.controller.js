@@ -1,11 +1,14 @@
 const { parseResume } = require("../services/resumeParser.service");
 const aiService = require("../services/ai.service");
 const subscription = require("../services/subscription.service");
+const settingsService = require("../services/settings.service");
 const Resume = require("../models/Resume");
 const DraftCV = require("../models/DraftCV");
 const fs = require("fs");
 
-const UPLOAD_CREATE_COST = 15;
+// This "upload → create draft" flow is the SAME user action as the create-from-
+// upload path in analysis.controller; both resolve to the CREATE_FROM_UPLOAD key
+// in config/creditCosts.js (unified — one key, one price).
 
 // Lightweight, deterministic ATS readiness score (summary, experience, skills,
 // etc.). Moved to atsCoach.service so the CV Builder coach panel and this upload
@@ -118,6 +121,7 @@ const uploadAndCreateDraft = async (req, res) => {
 
   const user = req.user;
   const filePath = req.file.path;
+  const UPLOAD_CREATE_COST = (await settingsService.getCreditCosts()).CREATE_FROM_UPLOAD;
 
   // 1. Check credits BEFORE doing any expensive work. Paid tiers draw from their
   // per-period allowance first, then the wallet (combined available balance).

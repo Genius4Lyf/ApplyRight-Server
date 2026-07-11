@@ -9,36 +9,13 @@ const aiService = require("../services/ai.service");
 const cvOptimizer = require("../services/cvOptimizer.service");
 const metricCapture = require("../services/metricCapture.service");
 const subscription = require("../services/subscription.service");
+const settingsService = require("../services/settings.service");
 
-// Credit costs
-const COSTS = {
-  ANALYSIS: 10,
-  GENERATE_CV: 10,
-  GENERATE_COVER_LETTER: 5,
-  // Initial interview-prep generation — a distinctive, high-value unlock that
-  // produces the grounded question set + STAR answers (3 questions).
-  GENERATE_INTERVIEW: 10,
-  // Appending more questions to an existing prep (3 more per call) — cheaper
-  // than the initial unlock.
-  GENERATE_INTERVIEW_MORE: 5,
-  // Story Bank generation. On web this charges credits; on the Android app it's
-  // reached through an AdMob rewarded video (which grants credits) so it nets free.
-  GENERATE_STORIES: 5,
-  // Personalized "essential" answer (Tell me about yourself / Why this company) —
-  // a single grounded answer. Web charges; Android ad-rewarded.
-  GENERATE_ESSENTIAL: 2,
-  CREATE_FROM_UPLOAD: 15,
-  // Bundle: CV (10) + Cover letter (5) + Interview prep (10) = 25 individually,
-  // 18 as a bundle. Flat price — charged once, all-or-nothing: if any stage
-  // fails, the user is not charged at all.
-  GENERATE_BUNDLE: 18,
-  // Interview Mode (a full live run). Defined for the planned premium gate but
-  // NOT enforced yet — Interview Mode is free during testing.
-  INTERVIEW_MODE: 5,
-  // "What to wear" — a single tailored interview-attire guide. Same tier as an
-  // essential answer. Web charges; Android ad-rewarded.
-  GENERATE_DRESS_GUIDE: 2,
-};
+// Credit costs are the single source of truth in config/creditCosts.js, resolved
+// (with any admin overrides) via settingsService.getCreditCosts(). Each handler
+// loads the resolved map into a local `COSTS` before charging — see the
+// `const COSTS = await settingsService.getCreditCosts()` lines below. The canonical
+// keys (ANALYSIS, GENERATE_CV, …) match what these handlers reference.
 
 /**
  * Helper: Verify the user has sufficient credits BEFORE running expensive AI work.
@@ -251,6 +228,7 @@ const analyzeFit = async (req, res) => {
     const { jobId, resumeId, draftCVId } = req.body;
     const userId = req.user._id;
     const user = req.user;
+    const COSTS = await settingsService.getCreditCosts();
 
     if (!resumeId && !draftCVId) {
       return res.status(400).json({ message: "Select a saved CV or upload a resume first." });
@@ -536,6 +514,7 @@ const runCVGenerationPipeline = async ({
   // tier-based text model (paid/agent → gpt-4o, free → gpt-4o-mini) — flows to
   // every callJSON/callText in this CV-generation pipeline via meta.model.
   const meta = { userId, applicationId, model: aiService.resolveTextModel(user) };
+  const COSTS = await settingsService.getCreditCosts();
 
   try {
     // Stage 1: Extract (parallel)
@@ -713,6 +692,7 @@ const generateApplicationCV = async (req, res) => {
     const { templateId, providedMetrics } = req.body || {};
     const userId = req.user._id;
     const user = req.user;
+    const COSTS = await settingsService.getCreditCosts();
 
     const application = await Application.findOne({ _id: id, userId });
     if (!application) {
@@ -913,6 +893,7 @@ const generateApplicationCoverLetter = async (req, res) => {
     }
 
     // Pre-flight balance check
+    const COSTS = await settingsService.getCreditCosts();
     checkCredits(user, COSTS.GENERATE_COVER_LETTER);
 
     const coverLetter = await aiService.generateCoverLetter(resumeText, jobData.description, {
@@ -973,6 +954,7 @@ const generateApplicationInterview = async (req, res) => {
     }
 
     // Pre-flight balance check
+    const COSTS = await settingsService.getCreditCosts();
     checkCredits(user, COSTS.GENERATE_INTERVIEW);
 
     // Build the FULL candidate context so the AI can ground both questions and
@@ -1194,6 +1176,7 @@ const generateMoreApplicationInterview = async (req, res) => {
       return res.status(404).json({ message: "Job not found" });
     }
 
+    const COSTS = await settingsService.getCreditCosts();
     checkCredits(user, COSTS.GENERATE_INTERVIEW_MORE);
 
     let candidateContext = null;
@@ -1313,6 +1296,7 @@ const generateApplicationStories = async (req, res) => {
       return res.status(404).json({ message: "Job not found" });
     }
 
+    const COSTS = await settingsService.getCreditCosts();
     checkCredits(user, COSTS.GENERATE_STORIES);
 
     let candidateContext = null;
@@ -1422,6 +1406,7 @@ const generateApplicationEssential = async (req, res) => {
       return res.status(404).json({ message: "Job not found" });
     }
 
+    const COSTS = await settingsService.getCreditCosts();
     checkCredits(user, COSTS.GENERATE_ESSENTIAL);
 
     let candidateContext = null;
@@ -1528,6 +1513,7 @@ const generateDressGuide = async (req, res) => {
       return res.status(404).json({ message: "Job not found" });
     }
 
+    const COSTS = await settingsService.getCreditCosts();
     checkCredits(user, COSTS.GENERATE_DRESS_GUIDE);
 
     const guide = await aiService.generateDressGuide(
@@ -1609,6 +1595,7 @@ const generateApplicationBundle = async (req, res) => {
       return res.status(404).json({ message: "Resume or Job not found" });
     }
 
+    const COSTS = await settingsService.getCreditCosts();
     checkCredits(user, COSTS.GENERATE_BUNDLE);
 
     // Mark CV stage so the polling UI sees motion immediately.

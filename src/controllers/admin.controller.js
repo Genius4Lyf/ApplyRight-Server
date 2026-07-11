@@ -810,8 +810,18 @@ exports.getJobSearches = async (req, res) => {
 // @access  Private/Admin
 exports.getSettings = async (req, res) => {
   try {
+    const { DEFAULT_CREDIT_COSTS } = require("../config/creditCosts");
     const settings = await SettingsService.getSettings();
-    res.status(200).json({ success: true, data: settings });
+    const resolvedCreditCosts = await SettingsService.getCreditCosts();
+    const data = settings.toObject();
+    // Surface the full cost picture so the admin UI can render EVERY cost row
+    // (with its effective value) even when the override map is empty:
+    //  - creditCostDefaults: the real hardcoded defaults (source of truth)
+    //  - creditCostsResolved: defaults with any admin overrides merged
+    //  - creditCosts (already on `data`): only the keys an admin has overridden
+    data.creditCostDefaults = DEFAULT_CREDIT_COSTS;
+    data.creditCostsResolved = resolvedCreditCosts;
+    res.status(200).json({ success: true, data });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: "Server Error" });
@@ -831,18 +841,25 @@ exports.updateSettings = async (req, res) => {
     const oldSettings = await SettingsService.getSettings();
     const newSettings = await SettingsService.updateSettings(updates);
 
-    // Detect price changes and notify users
-    if (updates.credits) {
-      const oldCredits = oldSettings.credits;
-      const newCredits = newSettings.credits;
+    // Detect per-action cost changes and notify users. Costs now live in the
+    // `creditCosts` override map (config/creditCosts.js holds the defaults), so we
+    // diff the submitted overrides against the previously-effective values.
+    if (updates.creditCosts && Object.keys(updates.creditCosts).length > 0) {
+      const { DEFAULT_CREDIT_COSTS } = require("../config/creditCosts");
+      const oldEffective = {
+        ...DEFAULT_CREDIT_COSTS,
+        ...(oldSettings.creditCosts ? Object.fromEntries(oldSettings.creditCosts) : {}),
+      };
+      const changed = Object.entries(updates.creditCosts).filter(
+        ([k, v]) => Number(v) !== Number(oldEffective[k])
+      );
 
-      if (
-        oldCredits.analysisCost !== newCredits.analysisCost ||
-        oldCredits.uploadCost !== newCredits.uploadCost
-      ) {
+      if (changed.length > 0) {
         // NOTIFY ALL USERS (Simplified for now - can be background job)
         const title = "Pricing Update";
-        const message = `Credit costs have been updated:\nAnalysis: ${newCredits.analysisCost} Credits\nUpload: ${newCredits.uploadCost} Credits`;
+        const message =
+          "Credit costs have been updated:\n" +
+          changed.map(([k, v]) => `${k}: ${v} Credits`).join("\n");
 
         await NotificationController.broadcast(
           {
@@ -860,7 +877,14 @@ exports.updateSettings = async (req, res) => {
       }
     }
 
-    res.status(200).json({ success: true, data: newSettings });
+    // Return the same enriched shape as GET so the admin UI can keep rendering
+    // every cost row (with resolved values) after a save.
+    const { DEFAULT_CREDIT_COSTS } = require("../config/creditCosts");
+    const data = newSettings.toObject();
+    data.creditCostDefaults = DEFAULT_CREDIT_COSTS;
+    data.creditCostsResolved = await SettingsService.getCreditCosts();
+
+    res.status(200).json({ success: true, data });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: "Server Error" });

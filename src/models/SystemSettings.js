@@ -2,16 +2,22 @@ const mongoose = require("mongoose");
 
 const systemSettingsSchema = new mongoose.Schema(
   {
+    // Grants & rewards only (NOT per-action costs — those live in
+    // config/creditCosts.js and are overridden via `creditCosts` below).
     credits: {
       signupBonus: { type: Number, default: 20 },
       referralBonus: { type: Number, default: 10 },
-      analysisCost: { type: Number, default: 30 },
-      uploadCost: { type: Number, default: 15 },
-      aiSkillsCost: { type: Number, default: 10 },
-      adReward: { type: Number, default: 5 },
       adRewardAndroid: { type: Number, default: 10 },
-      tailorCVCost: { type: Number, default: 15 },
-      tailorBundleCost: { type: Number, default: 20 },
+    },
+    // Admin-editable overrides for per-action credit costs. Keys are the
+    // canonical names in config/creditCosts.js (e.g. ANALYSIS, GENERATE_CV).
+    // Starts EMPTY: the resolver (settings.getCreditCosts) falls back to the real
+    // defaults, so a fresh deploy with no admin edits changes nothing. Only keys
+    // an admin actually changes are stored here.
+    creditCosts: {
+      type: Map,
+      of: Number,
+      default: {},
     },
     features: {
       maintenanceMode: { type: Boolean, default: false },
@@ -28,10 +34,6 @@ const systemSettingsSchema = new mongoose.Schema(
     templates: {
       featuredTemplateId: { type: String, default: "ats-clean" },
       disabledTemplateIds: [{ type: String }],
-    },
-    ai: {
-      model: { type: String, default: "gpt-3.5-turbo" },
-      maxTokens: { type: Number, default: 2000 },
     },
     // Interview Mode AI-interviewer voice. The provider toggle is admin-switchable;
     // the API keys live in env (secrets). "off" disables premium voice so the

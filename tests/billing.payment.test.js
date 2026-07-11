@@ -9,6 +9,7 @@ const Payment = require("../src/models/Payment");
 const Transaction = require("../src/models/Transaction");
 const SystemSettings = require("../src/models/SystemSettings");
 const flutterwave = require("../src/services/flutterwave.service");
+const { getItem } = require("../src/config/catalog");
 const jwt = require("jsonwebtoken");
 
 jest.mock("express-rate-limit", () => jest.fn(() => (req, res, next) => next()));
@@ -21,6 +22,10 @@ jest.mock("jsonwebtoken");
 
 const mockUserId = "60c72b2f9b1d8b2bad6e1a11";
 const mockUser = { _id: mockUserId, id: mockUserId, email: "u@example.com", credits: 5 };
+// Source the expected price from the catalog so these assertions can never go
+// stale when the price changes (checkout stores this; the webhook/verify grant
+// requires the verified amount to match it).
+const WEEKLY_PRO_NGN = getItem("weekly_pro").amountNgn;
 
 describe("Billing — Flutterwave payments", () => {
   beforeEach(() => {
@@ -48,7 +53,7 @@ describe("Billing — Flutterwave payments", () => {
       expect(res.statusCode).toBe(200);
       expect(res.body.link).toBe("https://pay.flutterwave/abc");
       expect(Payment.create).toHaveBeenCalledWith(
-        expect.objectContaining({ amountNgn: 3000, planId: "weekly_pro", status: "pending" })
+        expect.objectContaining({ amountNgn: WEEKLY_PRO_NGN, planId: "weekly_pro", status: "pending" })
       );
     });
 
@@ -76,7 +81,7 @@ describe("Billing — Flutterwave payments", () => {
       const payment = {
         _id: "p1",
         userId: mockUserId,
-        amountNgn: 3000,
+        amountNgn: WEEKLY_PRO_NGN,
         flwTxRef: "AR-1",
         planId: "weekly_pro",
         purpose: "subscription",
@@ -88,7 +93,7 @@ describe("Billing — Flutterwave payments", () => {
       Payment.updateOne.mockResolvedValue({ modifiedCount: 1 }); // grant claim
       flutterwave.verifyTransaction.mockResolvedValue({
         status: "successful",
-        amount: 3000,
+        amount: WEEKLY_PRO_NGN,
         currency: "NGN",
         txRef: "AR-1",
         id: "999",
@@ -112,7 +117,7 @@ describe("Billing — Flutterwave payments", () => {
       const payment = {
         _id: "p1",
         userId: mockUserId,
-        amountNgn: 3000,
+        amountNgn: WEEKLY_PRO_NGN,
         flwTxRef: "AR-1",
         status: "successful",
         grantedAt: new Date(),
@@ -134,7 +139,7 @@ describe("Billing — Flutterwave payments", () => {
       const payment = {
         _id: "p1",
         userId: mockUserId,
-        amountNgn: 3000,
+        amountNgn: WEEKLY_PRO_NGN,
         flwTxRef: "AR-1",
         planId: "weekly_pro",
         purpose: "subscription",
@@ -168,7 +173,7 @@ describe("Billing — Flutterwave payments", () => {
       const payment = {
         _id: "p1",
         userId: mockUserId,
-        amountNgn: 3000,
+        amountNgn: WEEKLY_PRO_NGN,
         flwTxRef: "AR-1",
         planId: "weekly_pro",
         purpose: "subscription",
@@ -180,7 +185,7 @@ describe("Billing — Flutterwave payments", () => {
       Payment.updateOne.mockResolvedValue({ modifiedCount: 1 });
       flutterwave.verifyTransaction.mockResolvedValue({
         status: "successful",
-        amount: 3000,
+        amount: WEEKLY_PRO_NGN,
         currency: "NGN",
         txRef: "AR-1",
         id: "999",

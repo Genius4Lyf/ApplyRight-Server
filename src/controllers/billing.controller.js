@@ -6,8 +6,9 @@ const adReward = require("../services/adReward.service");
 const admobSsv = require("../services/admobSsv.service");
 const flutterwave = require("../services/flutterwave.service");
 const subscription = require("../services/subscription.service");
+const settingsService = require("../services/settings.service");
 const { getItem, FREE_TASTE_SEC, MIN_REVIEW_SEC } = require("../config/catalog");
-const { isFreeTemplate, TEMPLATE_UNLOCK_COST } = require("../config/templates");
+const { isFreeTemplate } = require("../config/templates");
 const env = require("../config/env");
 const logger = require("../utils/logger");
 
@@ -224,7 +225,7 @@ exports.unlockTemplate = async (req, res) => {
     // Atomic, balance-guarded deduction + add-to-set in one update. The
     // `unlockedTemplates: { $ne }` guard ensures a concurrent unlock of the SAME
     // template can't be charged twice (only one update matches + deducts).
-    const cost = TEMPLATE_UNLOCK_COST;
+    const cost = (await settingsService.getCreditCosts()).TEMPLATE_UNLOCK;
     const result = await User.updateOne(
       { _id: user._id, credits: { $gte: cost }, unlockedTemplates: { $ne: templateId } },
       { $inc: { credits: -cost }, $addToSet: { unlockedTemplates: templateId } }
