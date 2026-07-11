@@ -946,6 +946,20 @@ exports.getEngagementStats = async (req, res) => {
       { $sort: { calls: -1 } },
     ]);
 
+    // --- Text-AI spend (last 30 days): tokens → estimated ₦, grouped by
+    // operation+model. Only logs with recorded tokens count toward cost. ---
+    const textCostRaw = await AICallLog.aggregate([
+      { $match: { createdAt: { $gte: monthAgo }, tokensInput: { $ne: null } } },
+      {
+        $group: {
+          _id: { operation: "$operation", model: "$model" },
+          calls: { $sum: 1 },
+          sumIn: { $sum: "$tokensInput" },
+          sumOut: { $sum: "$tokensOutput" },
+        },
+      },
+    ]);
+
     // --- Live interview usage (from the "Live interview Ns (tier)" usage txns) ---
     const liveTxns = await Transaction.find({
       type: "usage",
@@ -975,6 +989,45 @@ exports.getEngagementStats = async (req, res) => {
       distinctUsers: liveUsers.size,
     };
 
+    // --- Text-AI cost estimate (list prices × logged tokens → NGN) ---
+    const {
+      NGN_PER_USD,
+      priceForModel,
+      EST_COST_NGN_PER_MIN,
+    } = require("../config/catalog");
+    let textTotalUsd = 0;
+    const byOperation = textCostRaw
+      .map((g) => {
+        const price = priceForModel(g._id.model);
+        const sumIn = g.sumIn || 0;
+        const sumOut = g.sumOut || 0;
+        const costUsd = (sumIn / 1e6) * price.in + (sumOut / 1e6) * price.out;
+        textTotalUsd += costUsd;
+        return {
+          operation: g._id.operation,
+          model: g._id.model || "unknown",
+          calls: g.calls,
+          avgIn: g.calls ? Math.round(sumIn / g.calls) : 0,
+          avgOut: g.calls ? Math.round(sumOut / g.calls) : 0,
+          costNgn: Math.round(costUsd * NGN_PER_USD),
+        };
+      })
+      .sort((a, b) => b.costNgn - a.costNgn);
+    const textTotalNgn = Math.round(textTotalUsd * NGN_PER_USD);
+    const aiTextCost = {
+      windowDays: 30,
+      byOperation,
+      totalNgn: textTotalNgn,
+      totalUsd: Number(textTotalUsd.toFixed(2)),
+    };
+    // Combined estimate: text spend + the existing live-interview minute cost
+    // (same formula/constants as the revenue view's estOpenAiCostNgn).
+    const liveCostNgn = Math.round(
+      (miniSec / 60) * (EST_COST_NGN_PER_MIN.mini || 0) +
+        (proSec / 60) * (EST_COST_NGN_PER_MIN.full || 0)
+    );
+    const totalAiSpendNgn = textTotalNgn + liveCostNgn;
+
     // --- Conversion funnel + churn (all-time, non-admin) ---
     const nonAdmin = { role: { $ne: "admin" } };
     const [signups, createdCvUsers, createdAppUsers, paidEver, activePaid, churned] =
@@ -1002,6 +1055,8 @@ exports.getEngagementStats = async (req, res) => {
         activeOverTime: activeOverTime.map((d) => ({ name: d._id, users: d.users })),
         featureAdoption: adoptionRaw,
         liveUsage,
+        aiTextCost,
+        totalAiSpendNgn,
         funnel: { signups, createdCv: createdCvUsers, createdApplication: createdAppUsers, paid: paidEver },
         subscriptions: { activePaid, churned },
       },

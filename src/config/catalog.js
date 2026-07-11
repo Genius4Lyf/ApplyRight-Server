@@ -187,6 +187,28 @@ const EST_COST_NGN_PER_MIN = {
   full: 80,
 };
 
+// Estimated text-AI token prices (USD per 1M tokens), OpenAI list prices. Used
+// by the admin "AI Spend" view to turn logged tokens (AICallLog) into an
+// ESTIMATED NGN cost — NOT an invoice. Keyed by canonical model name.
+const EST_TEXT_COST_USD_PER_MTOK = {
+  "gpt-4o-mini": { in: 0.15, out: 0.6 },
+  "gpt-4o": { in: 2.5, out: 10.0 },
+};
+
+// FX used to convert the USD token estimate to NGN. Matches the rate implied by
+// the per-minute live calibration above (~₦45/min mini at $0.29/10min ≈ 1550).
+const NGN_PER_USD = 1550;
+
+// Pick the token price row for a logged model name. "mini" models → mini
+// pricing; any other gpt-4o* → full pricing; unknown → mini (cheapest, so an
+// unlabelled call is never over-estimated).
+const priceForModel = (model) => {
+  const m = String(model || "").toLowerCase();
+  if (m.includes("mini")) return EST_TEXT_COST_USD_PER_MTOK["gpt-4o-mini"];
+  if (m.includes("gpt-4o")) return EST_TEXT_COST_USD_PER_MTOK["gpt-4o"];
+  return EST_TEXT_COST_USD_PER_MTOK["gpt-4o-mini"];
+};
+
 const getItem = (planId) => CATALOG[planId] || null;
 
 module.exports = {
@@ -195,5 +217,8 @@ module.exports = {
   MIN_REVIEW_SEC,
   MAX_SESSION_SEC_BY_TIER,
   EST_COST_NGN_PER_MIN,
+  EST_TEXT_COST_USD_PER_MTOK,
+  NGN_PER_USD,
+  priceForModel,
   getItem,
 };
