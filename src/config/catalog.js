@@ -4,7 +4,7 @@
 //
 // Marketing tiers map onto the existing User.tier enum (free/plus/pro) so the
 // requireTier middleware and TIER_RANK keep working unchanged:
-//   Weekly Pro / Monthly Pro -> "plus" (mini model)
+//   Starter Pack (2-week) / Monthly Pro -> "plus" (mini model)
 //   Monthly Premium          -> "pro"  (full gpt-realtime model)
 // The marketing label, minute allowance, model and period live here, decoupled
 // from the coarse enum.
@@ -46,7 +46,7 @@ const CATALOG = {
     model: "mini",
     minutes: 15,
     credits: 150, // text-AI/CV/prep allowance; resets each period (no roll-over)
-    periodDays: 7,
+    periodDays: 14, // 2-week window (same price/allowances as the old 1-week plan)
   },
   monthly_pro: {
     id: "monthly_pro",
