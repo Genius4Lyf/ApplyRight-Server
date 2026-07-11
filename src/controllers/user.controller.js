@@ -10,6 +10,17 @@ const DownloadLog = require("../models/DownloadLog");
 const Feedback = require("../models/Feedback");
 const Notification = require("../models/Notification");
 const SettingsService = require("../services/settings.service");
+const subscription = require("../services/subscription.service");
+
+// Return a plain user object with the client-facing `plan` replaced by the
+// EFFECTIVE (expiry-aware) paid status — so an expired subscriber isn't treated
+// as paid by the CV-builder / profile gates that read user.plan. The raw stored
+// User.plan field in the DB is unchanged.
+const withEffectivePlan = (userDoc) => {
+  const obj = typeof userDoc.toObject === "function" ? userDoc.toObject() : { ...userDoc };
+  obj.plan = subscription.hasPaidAccess(userDoc) ? "paid" : "free";
+  return obj;
+};
 const logger = require("../utils/logger");
 
 exports.updateProfile = async (req, res) => {
@@ -79,7 +90,7 @@ exports.updateProfile = async (req, res) => {
       { new: true }
     ).select("-password");
 
-    res.json(user);
+    res.json(withEffectivePlan(user));
   } catch (err) {
     console.error(err.message);
     res.status(500).send("Server Error");
@@ -89,7 +100,7 @@ exports.updateProfile = async (req, res) => {
 exports.getProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select("-password");
-    res.json(user);
+    res.json(withEffectivePlan(user));
   } catch (err) {
     console.error(err.message);
     res.status(500).send("Server Error");
@@ -256,6 +267,8 @@ exports.changeEmail = async (req, res) => {
     delete safe.password;
     delete safe.resetPasswordToken;
     delete safe.resetPasswordExpire;
+    // Client-facing EFFECTIVE (expiry-aware) paid status; raw DB field unchanged.
+    safe.plan = subscription.hasPaidAccess(user) ? "paid" : "free";
     res.json(safe);
   } catch (err) {
     if (err.code === 11000) {

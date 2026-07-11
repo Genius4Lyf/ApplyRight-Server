@@ -285,7 +285,9 @@ const entitlementFor = (user) => {
   const planItem = tier !== "free" && user.subscription?.planId ? getItem(user.subscription.planId) : null;
   return {
     tier,
-    plan: user.plan,
+    // Client's EFFECTIVE (expiry-aware) paid status — expired subscribers read
+    // "free". The raw stored User.plan field is unchanged in the DB.
+    plan: subscription.hasPaidAccess(user) ? "paid" : "free",
     expiresAt: user.subscription?.expiresAt || null,
     planId: user.subscription?.planId || null,
     planLabel: planItem?.label || null,

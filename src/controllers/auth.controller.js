@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const SettingsService = require("../services/settings.service");
+const subscription = require("../services/subscription.service");
 const { sendPasswordResetOTP } = require("../utils/email.service");
 
 const generateReferralCode = () => {
@@ -289,7 +290,9 @@ const loginUser = async (req, res, next) => {
         firstName: user.firstName,
         lastName: user.lastName,
         credits: user.credits,
-        plan: user.plan,
+        // Client's EFFECTIVE (expiry-aware) paid status — an expired subscriber
+        // reads "free". The raw stored User.plan field is unchanged in the DB.
+        plan: subscription.hasPaidAccess(user) ? "paid" : "free",
         tier: user.tier,
         // Expiry-aware paid checks on the client (e.g. template unlock-all) read
         // subscription.expiresAt; include it so paid status reverts on expiry.
@@ -322,6 +325,10 @@ const getMe = async (req, res) => {
   const userObj = typeof req.user.toObject === "function" ? req.user.toObject() : { ...req.user };
   userObj.isFreeForAds =
     !req.user.hasEverPurchased && (req.user.credits ?? 0) < FREE_FOR_ADS_THRESHOLD;
+  // The frontend refreshes the user via /auth/me and gates premium UI on `plan`.
+  // Return the EFFECTIVE (expiry-aware) paid status so an expired subscriber isn't
+  // treated as paid; the raw stored User.plan field is unchanged in the DB.
+  userObj.plan = subscription.hasPaidAccess(req.user) ? "paid" : "free";
   res.status(200).json(userObj);
 };
 
@@ -374,7 +381,8 @@ const updateProfile = async (req, res, next) => {
         phone: updatedUser.phone,
         firstName: updatedUser.firstName,
         lastName: updatedUser.lastName,
-        plan: updatedUser.plan,
+        // Client's EFFECTIVE (expiry-aware) paid status; raw DB field unchanged.
+        plan: subscription.hasPaidAccess(updatedUser) ? "paid" : "free",
         education: updatedUser.education,
         currentStatus: updatedUser.currentStatus,
         settings: updatedUser.settings,

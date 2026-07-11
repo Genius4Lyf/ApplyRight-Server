@@ -29,6 +29,38 @@ describe("subscription.service", () => {
     });
   });
 
+  // The API returns the client's EFFECTIVE paid status as
+  //   plan: hasPaidAccess(user) ? "paid" : "free"
+  // (auth login/register/profile + /auth/me, billing entitlement snapshot).
+  describe("hasPaidAccess → effective client plan", () => {
+    const effectivePlan = (user) => (subscription.hasPaidAccess(user) ? "paid" : "free");
+
+    it('maps an EXPIRED subscription to "free"', () => {
+      const past = new Date(Date.now() - 1000);
+      const user = { plan: "paid", subscription: { tier: "pro", expiresAt: past } };
+      expect(subscription.hasPaidAccess(user)).toBe(false);
+      expect(effectivePlan(user)).toBe("free");
+    });
+
+    it('maps an ACTIVE subscription to "paid"', () => {
+      const future = new Date(Date.now() + 100000);
+      const user = { plan: "free", subscription: { tier: "plus", expiresAt: future } };
+      expect(subscription.hasPaidAccess(user)).toBe(true);
+      expect(effectivePlan(user)).toBe("paid");
+    });
+
+    it('maps an admin-granted tester (plan:"paid", no subscription) to "paid"', () => {
+      const user = { plan: "paid" };
+      expect(subscription.hasPaidAccess(user)).toBe(true);
+      expect(effectivePlan(user)).toBe("paid");
+    });
+
+    it('maps a plain free user to "free"', () => {
+      expect(effectivePlan({ plan: "free" })).toBe("free");
+      expect(effectivePlan({})).toBe("free");
+    });
+  });
+
   describe("modelForUser", () => {
     it("uses the full model for an active pro tier", () => {
       const future = new Date(Date.now() + 100000);
