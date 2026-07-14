@@ -702,5 +702,58 @@ describe("Interview Prep API", () => {
       expect(res.statusCode).toEqual(503);
       expect(res.body.code).toBe("AI_UNAVAILABLE");
     });
+
+    // --- Paywall guard tests: the two revenue-protecting gates must BLOCK. Both
+    // return 200 with a `code` flag (not a 4xx), and the expensive AI grading
+    // pass must be skipped. The scorecard gate runs BEFORE the length gate. ---
+
+    it("free user is blocked from the AI scorecard (ANALYSIS_LOCKED)", async () => {
+      aiService.assessInterview.mockResolvedValue(mockAssessment);
+      // Free effective tier: mockUser has no active paid subscription. The free
+      // path does a SECOND User.findById (u3), so both protect's .select() and
+      // the handler's await must resolve to the free user on repeated calls.
+      const freeUser = { ...mockUser };
+      delete freeUser.subscription;
+      User.findById.mockReturnValue({
+        select: jest.fn().mockResolvedValue(freeUser),
+        then: (resolve) => resolve(freeUser),
+      });
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/assess-interview`)
+        .set("Authorization", "Bearer mock-token")
+        // Long duration, so it's clearly the scorecard gate blocking (which runs
+        // first), not the min-length gate.
+        .send({ transcript, durationSec: 540 });
+
+      expect(res.statusCode).toEqual(200);
+      expect(res.body.code).toBe("ANALYSIS_LOCKED");
+      expect(res.body.assessment).toBeNull();
+      // The expensive grading pass must be skipped — the point of the gate.
+      expect(aiService.assessInterview).not.toHaveBeenCalled();
+    });
+
+    it("paid session under the minimum length is declined (REVIEW_TOO_SHORT)", async () => {
+      aiService.assessInterview.mockResolvedValue(mockAssessment);
+      // Paid effective tier so it clears the scorecard gate; mirror the passing
+      // test's setup (subscription tier "pro", future expiresAt).
+      const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const paidUser = { ...mockUser, subscription: { tier: "pro", expiresAt: future } };
+      User.findById.mockReturnValue({
+        select: jest.fn().mockResolvedValue(paidUser),
+        then: (resolve) => resolve(paidUser),
+      });
+
+      const res = await request(app)
+        .post(`/api/interview-prep/${mockAppId}/assess-interview`)
+        .set("Authorization", "Bearer mock-token")
+        // Below MIN_REVIEW_SEC (480) → the handler declines the expensive score.
+        .send({ transcript, durationSec: 120 });
+
+      expect(res.statusCode).toEqual(200);
+      expect(res.body.code).toBe("REVIEW_TOO_SHORT");
+      expect(res.body.assessment).toBeNull();
+      expect(aiService.assessInterview).not.toHaveBeenCalled();
+    });
   });
 });

@@ -121,6 +121,7 @@ app.use("/api/analysis", require("./routes/analysis.routes"));
 app.use("/api/coach", aiLimiter, require("./routes/coach.routes")); // CV Builder ATS Coach (AI deep scan)
 app.use("/api/cv", require("./routes/cv.routes"));
 app.use("/api/pdf", require("./routes/pdf.routes"));
+app.use("/api/docx", require("./routes/docx.routes"));
 app.use("/api/billing/checkout", checkoutLimiter);
 app.use("/api/billing", require("./routes/billing.routes"));
 app.use("/api/feedback", require("./routes/feedback.routes"));
