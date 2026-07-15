@@ -363,6 +363,7 @@ const applicationSchema = new mongoose.Schema(
             name: String,
             role: String,
             focus: String,
+            gender: String, // 'male' | 'female' — drives gender-matched voice assignment
             voice: String,
             description: String, // 1-2 sentences: what this interview will be like
           },

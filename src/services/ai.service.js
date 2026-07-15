@@ -1988,24 +1988,52 @@ Return JSON matching exactly:
   };
 };
 
-// Distinct voices for the 3 panel seats (Premium plays them on separate sessions;
-// Pro role-plays them in one voice). All three MUST be in realtime.service's
-// ALLOWED_VOICES or minting falls back to the default. Seat 0 (HR) keeps the
-// default "marin".
-const PANEL_VOICES = ["marin", "ash", "shimmer"];
+// Gender-tagged realtime voice pools. Every voice MUST be in realtime.service's
+// ALLOWED_VOICES (marin, cedar, alloy, sage, verse, shimmer, ash) or minting
+// falls back to the default. Pools follow the app's frontend voice labels
+// (InterviewSetup.VOICES: marin/shimmer = female, cedar = male) — perceived
+// genders, worth an ear-check, but this is the shipped mapping.
+const FEMALE_VOICES = ["marin", "shimmer", "sage"];
+const MALE_VOICES = ["cedar", "ash", "verse"];
+const NEUTRAL_VOICE = "alloy";
+
+// Assign each seat a DISTINCT voice matching its gender, in seat order. Unknown
+// gender draws from a neutral-first blended pool. If a gender's pool is exhausted
+// (more same-gender seats than voices) we fall back to any remaining distinct
+// voice, so no two seats ever share one.
+function assignPanelVoices(seats) {
+  const used = new Set();
+  for (const s of seats) {
+    const g = s.gender === "male" ? "male" : s.gender === "female" ? "female" : "neutral";
+    const pool =
+      g === "female"
+        ? FEMALE_VOICES
+        : g === "male"
+          ? MALE_VOICES
+          : [NEUTRAL_VOICE, ...MALE_VOICES, ...FEMALE_VOICES];
+    const v =
+      pool.find((x) => !used.has(x)) ||
+      [...MALE_VOICES, ...FEMALE_VOICES, NEUTRAL_VOICE].find((x) => !used.has(x)) ||
+      "marin";
+    s.voice = v;
+    used.add(v);
+  }
+  return seats;
+}
 
 // Deterministic fallback panel — used when the AI generation call is unavailable
 // so the panel feature degrades gracefully instead of breaking the interview.
-// HR is always seat 0; the role-specific seats lean on the job title.
+// HR is always seat 0; the role-specific seats lean on the job title. Voices are
+// gender-matched via assignPanelVoices, so the fallback matches too.
 const fallbackPanel = (jobTitle = "") => {
   const role = jobTitle || "the role";
-  return [
+  const seats = [
     {
       seat: 0,
       name: "Renee",
       role: "HR / Talent Partner",
       focus: "motivation, why this company, culture fit, and background",
-      voice: PANEL_VOICES[0],
+      gender: "female",
       description:
         "A friendly recruiter-style screen — expect questions about your motivation, why this company, your background, and overall fit. Broad and conversational, not deeply technical.",
     },
@@ -2014,7 +2042,7 @@ const fallbackPanel = (jobTitle = "") => {
       name: "Marcus",
       role: "Hiring Manager",
       focus: `ownership, delivery, and how you'd handle real ${role} situations`,
-      voice: PANEL_VOICES[1],
+      gender: "male",
       description: `A hiring-manager interview — expect situational questions about ownership, delivery, and how you'd handle real ${role} challenges.`,
     },
     {
@@ -2022,11 +2050,12 @@ const fallbackPanel = (jobTitle = "") => {
       name: "Priya",
       role: "Senior Team Member",
       focus: "hands-on depth and the must-have skills the role needs",
-      voice: PANEL_VOICES[2],
+      gender: "female",
       description:
         "A hands-on round with a senior teammate — expect to go deep on the must-have skills, specifics, and how you actually work.",
     },
   ];
+  return assignPanelVoices(seats);
 };
 
 /**
@@ -2058,8 +2087,8 @@ const buildInterviewPanel = async (jobMeta = {}, fit = {}, _styleUnused = "", me
     "who would most likely interview a candidate for it. Use real-world job titles appropriate to THIS role and " +
     "seniority (e.g. 'Engineering Manager', 'Head of Product', 'Lead Designer', 'Nursing Supervisor', 'Store Manager'). " +
     "Give each a plausible FIRST NAME ONLY (no surnames). Respond as JSON: " +
-    '{"interviewers":[{"name":"","role":"","focus":"","description":""},{"name":"","role":"","focus":"","description":""}]}. ' +
-    "`focus` is one short phrase describing what that person probes. `description` is ONE short, candidate-facing sentence " +
+    '{"interviewers":[{"name":"","role":"","focus":"","gender":"","description":""},{"name":"","role":"","focus":"","gender":"","description":""}]}. ' +
+    "`focus` is one short phrase describing what that person probes. `gender` is 'male' or 'female', matching the first name you chose, so the voice matches the person. `description` is ONE short, candidate-facing sentence " +
     "describing what a 1:1 interview with this person will be like (e.g. 'A technical deep-dive on system design — expect to " +
     "defend your architecture decisions.'). Do not include HR — that seat is fixed.";
 
@@ -2089,11 +2118,13 @@ const buildInterviewPanel = async (jobMeta = {}, fit = {}, _styleUnused = "", me
         name: (typeof p?.name === "string" && p.name.trim().split(/\s+/)[0]) || fb[i + 1].name,
         role: (typeof p?.role === "string" && p.role.trim()) || fb[i + 1].role,
         focus: (typeof p?.focus === "string" && p.focus.trim()) || fb[i + 1].focus,
+        gender: p?.gender === "male" || p?.gender === "female" ? p.gender : fb[i + 1].gender,
         description: (typeof p?.description === "string" && p.description.trim()) || fb[i + 1].description,
-        voice: PANEL_VOICES[i + 1],
       })),
     ];
-    return seats;
+    // HR (fb[0]) already carries gender; assign every seat a distinct,
+    // gender-matched voice from the one code path.
+    return assignPanelVoices(seats);
   } catch (_err) {
     return fallbackPanel(jobTitle);
   }

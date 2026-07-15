@@ -1206,10 +1206,12 @@ exports.conversationTurn = async (req, res) => {
 // inside ai.service, so this never throws on AI being unavailable.
 const loadOrGeneratePanel = async (application, jobMeta, fit, _style, meta = {}) => {
   const cached = application.interviewPrep?.panel;
+  // Require gender too, so pre-gender cached panels (whose voices were assigned by
+  // seat index, not gender) regenerate with gender-matched voices.
   const hasDescriptions =
     Array.isArray(cached?.seats) &&
     cached.seats.length >= 2 &&
-    cached.seats.every((s) => s && s.description);
+    cached.seats.every((s) => s && s.description && s.gender);
   if (hasDescriptions) return cached.seats;
 
   const aiService = require("../services/ai.service");
@@ -1220,17 +1222,12 @@ const loadOrGeneratePanel = async (application, jobMeta, fit, _style, meta = {})
   return seats;
 };
 
-// Interview LOOP gating: you unlock the next interviewer by reaching this score
-// on the current one (the "almost there" band) — encouraging, not a hard wall.
-// HR (seat 0) is always open; seat i needs seat i-1 passed. Kept here so the
-// backend enforces it (anti-bypass) and the frontend mirrors the same rule.
-const INTERVIEW_PASS_SCORE = 65;
-const seatUnlocked = (seatIndex, rounds = [], unlockAll = false) => {
-  if (unlockAll) return true; // support-granted override: all interviewers open
-  if (!Number.isInteger(seatIndex) || seatIndex <= 0) return true; // HR / first always open
-  const prev = (Array.isArray(rounds) ? rounds : []).find((r) => r && r.seatIndex === seatIndex - 1);
-  return !!prev && typeof prev.score === "number" && prev.score >= INTERVIEW_PASS_SCORE;
-};
+// Interview LOOP access: Premium users pick any panel interviewer in any order —
+// there is no score-based sequential unlock. Always-true helper (name + signature
+// preserved so callers keep working); the separate readiness gate
+// (computeInterviewGate) still governs whether the loop is startable at all.
+// eslint-disable-next-line no-unused-vars
+const seatUnlocked = (seatIndex, rounds = [], unlockAll = false) => true;
 
 // Split a reservation's total seconds across N panel seats (multi-voice). Each
 // seat runs as its own realtime session capped to its slice, so the SUM of caps
@@ -1514,21 +1511,7 @@ exports.createRealtimeSession = async (req, res) => {
       seatIdx >= 0 &&
       seatIdx < panelSeats.length
     ) {
-      // Loop gating: refuse a locked interviewer (defense-in-depth — the UI also
-      // prevents it). Refund the just-made reservation so no minutes are lost.
-      if (!seatUnlocked(seatIdx, application.interviewPrep?.rounds, user.unlockAllInterviewers)) {
-        await UserModel.updateOne(
-          { _id: user._id, "liveInterview.activeReservation.reservationId": reservationId },
-          {
-            $inc: { "liveInterview.secondsRemaining": reservedSec },
-            $set: { "liveInterview.activeReservation": {} },
-          }
-        ).catch(() => {});
-        return res.status(403).json({
-          message: `Pass the previous interview (${INTERVIEW_PASS_SCORE}%) to unlock this interviewer.`,
-          code: "INTERVIEWER_LOCKED",
-        });
-      }
+      // Premium picks any interviewer in any order — no score-based unlock gate.
       const chosen = panelSeats[seatIdx];
       const ivInstructions = aiService.buildRealtimeInstructions(
         candidateContext,
