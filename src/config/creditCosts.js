@@ -25,6 +25,8 @@ const DEFAULT_CREDIT_COSTS = Object.freeze({
   GRADE_ANSWER: 1,
   GRADE_STORY: 1,
   FOLLOWUP: 1,
+  // Rewrite a professional summary into a tighter, shorter version.
+  TIGHTEN_SUMMARY: 1,
   // Defined for the planned premium gate but NOT enforced today — Interview Mode
   // is free during testing. Kept here so the key is admin-visible/adjustable.
   INTERVIEW_MODE: 5,

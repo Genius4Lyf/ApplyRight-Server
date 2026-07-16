@@ -719,6 +719,71 @@ const getKeywordCoverage = async (req, res) => {
   }
 };
 
+// @desc    Rewrite a professional summary into a tighter, shorter version.
+//          No CV grounding — it only compresses the given text. Charges 1 credit,
+//          but only AFTER the AI produces the rewrite (an AI outage 503s with no
+//          charge). Mirrors the essential/grade endpoints' credit + AI handling.
+// @route   POST /api/ai/tighten-summary
+// @access  Private
+const tightenSummary = async (req, res) => {
+  const { text } = req.body || {};
+
+  // Validate: non-empty string, reasonable length.
+  if (typeof text !== "string" || text.trim().length < 20) {
+    return res
+      .status(400)
+      .json({ message: "Provide a professional summary of at least 20 characters to tighten." });
+  }
+  if (text.trim().length > 2000) {
+    return res
+      .status(400)
+      .json({ message: "Summary is too long to tighten (max ~2000 characters)." });
+  }
+
+  try {
+    const aiService = require("../services/ai.service");
+    const user = req.user; // set by `protect`
+
+    const COST = (await settingsService.getCreditCosts()).TIGHTEN_SUMMARY;
+
+    // AI FIRST — if no provider is configured, this throws AI_UNAVAILABLE and we
+    // 503 below WITHOUT charging (the deduction only happens after success).
+    const tightened = await aiService.tightenSummary(text, {
+      userId: req.user.id,
+      model: resolveTextModel(req.user),
+    });
+
+    // Charge 1 credit atomically (balance-guarded). Paid tiers draw from their
+    // per-period allowance first via chargeOrSkip — same mechanism as the other
+    // text endpoints (see generateApplicationEssential / generateSkills).
+    const charge = await subscription.chargeOrSkip(user, COST, {
+      type: "usage",
+      description: "AI tighten professional summary",
+    });
+    if (charge.insufficient) {
+      return res.status(403).json({
+        message: "Insufficient credits",
+        code: "INSUFFICIENT_CREDITS",
+        required: COST,
+        current: subscription.availableCredits(user),
+      });
+    }
+
+    return res.json({ tightened, remainingCredits: subscription.availableCredits(user) });
+  } catch (error) {
+    // AI unavailable → 503, no charge (the deduction is after the AI call).
+    if (error?.name === "AIUnavailableError" || error?.code === "AI_UNAVAILABLE") {
+      return res.status(503).json({
+        message:
+          "AI service is temporarily unavailable. You have not been charged. Please try again later.",
+        code: "AI_UNAVAILABLE",
+      });
+    }
+    console.error("Tighten Summary Error:", error.message);
+    return res.status(500).json({ message: "Failed to tighten summary" });
+  }
+};
+
 module.exports = {
   generateApplication,
   generateBullets,
@@ -727,4 +792,5 @@ module.exports = {
   getJobKeywords,
   getKeywordCoverage,
   generateSkills,
+  tightenSummary,
 };

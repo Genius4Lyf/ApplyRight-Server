@@ -1815,6 +1815,24 @@ Return JSON matching exactly:
   };
 };
 
+// Tighten a professional summary into a shorter, punchier rewrite of the SAME
+// facts. No CV grounding needed — it only compresses the given text. A single
+// free-form text call; throws AIUnavailableError in mock mode so the caller can
+// 503 without charging.
+const tightenSummary = async (text, meta = {}) => {
+  const system =
+    "You tighten CV professional summaries. Rewrite the summary to be shorter and punchier — 2–3 sentences, roughly 45–60 words — preserving the candidate's real facts, seniority, and strongest points. Do NOT invent anything not in the original (no new skills, titles, metrics, or employers). Keep the same voice/person as the input. Return ONLY the rewritten summary text, no preamble.";
+
+  const result = await callText({
+    system,
+    user: String(text || ""),
+    temperature: 0.3,
+    meta: { ...meta, operation: "tightenSummary" },
+  });
+
+  return (result || "").trim();
+};
+
 const DRESS_CODES = [
   "business_formal",
   "business_casual",
@@ -3264,6 +3282,7 @@ module.exports = {
   generateInterviewStories,
   factCheckStories,
   generateEssentialAnswer,
+  tightenSummary,
   generateDressGuide,
   generateFollowUp,
   conversationTurn,
