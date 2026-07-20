@@ -27,6 +27,16 @@ const DEFAULT_CREDIT_COSTS = Object.freeze({
   FOLLOWUP: 1,
   // Rewrite a professional summary into a tighter, shorter version.
   TIGHTEN_SUMMARY: 1,
+  // Coach: AI-rewrite the weak bullets of one role/project (paid tiers draw from allowance).
+  REWRITE_ROLE: 1,
+  // Coach: AI-generate bullets from a described role/project. The count picker
+  // charges count × this (paid tiers draw from allowance). Admin-overridable.
+  GENERATE_BULLET: 1,
+  // Coach: AI-generate ONE career-stage-aware, JD-tailored professional summary.
+  // EACH re-roll charges again (paid tiers draw from allowance). Admin-overridable.
+  GENERATE_SUMMARY: 3,
+  // Aria free-form coach chat. 10 messages/day free per user, then this per message.
+  ARIA_CHAT_MESSAGE: 1,
   // Defined for the planned premium gate but NOT enforced today — Interview Mode
   // is free during testing. Kept here so the key is admin-visible/adjustable.
   INTERVIEW_MODE: 5,

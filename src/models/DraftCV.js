@@ -44,6 +44,23 @@ const draftCVSchema = new mongoose.Schema(
         },
       ],
       aiKeywordsHash: String,
+      // Aria's Role Brief — the research object every AI feature reuses. Built
+      // once from the JD (extractJobRequirements + an inferred companyType),
+      // cached by briefHash so re-viewing a step never re-extracts; rebuilt only
+      // when the JD text changes.
+      brief: {
+        role: String,
+        company: String,
+        companyType: String, // 'startup'|'enterprise'|'agency'|'nonprofit'|'government'|'smb'|'unknown' — INFERRED, user-confirmable
+        companyTypeConfirmed: { type: Boolean, default: false }, // true once the student confirms/corrects the chip
+        industry: String,
+        seniority: String,
+        yearsRequired: Number,
+        mustHaves: [{ name: String, importance: String }],
+        niceToHaves: [{ name: String, importance: String }],
+        responsibilities: [String],
+      },
+      briefHash: String,
     },
     // Cached "Auto-fill skills" generation. Keyed by a hash of the inputs the
     // generation depends on (education + experience + projects + target job), so
@@ -255,6 +272,13 @@ const draftCVSchema = new mongoose.Schema(
       externalId: String,
       source: String,
     },
+    // Per-entry generation state so the FIRST re-roll of an identical request is free.
+    // { [sortId]: { hash: String, freeRerollAvailable: Boolean } }
+    genState: { type: Object, default: {} },
+    // Aria's per-section conversation, persisted ON the draft so it survives step
+    // navigation, refresh, and other devices. { [stepId]: [{ who, text }] }. Session
+    // flags (skip choice, always-allow, target ack) stay in the frontend coachState.
+    coachChats: { type: mongoose.Schema.Types.Mixed, default: {} },
     isComplete: {
       type: Boolean,
       default: false,

@@ -121,6 +121,11 @@ const userSchema = new mongoose.Schema(
       todayCount: { type: Number, default: 0 },
       todayDate: { type: Date, default: null },
     },
+    // Aria free-chat daily allowance (resets by calendar date). 10/day free, then credits.
+    ariaChat: {
+      date: String, // 'YYYY-MM-DD' of the current window
+      count: { type: Number, default: 0 }, // messages used in that window
+    },
     hasEverPurchased: {
       type: Boolean,
       default: false,

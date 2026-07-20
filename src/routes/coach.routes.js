@@ -1,24 +1,44 @@
 const express = require("express");
 const router = express.Router();
-const { deepScan, guide, rewriteRole, recheck } = require("../controllers/coach.controller");
+const {
+  guide,
+  generateBullets,
+  summary,
+  setCompanyType,
+  getBrief,
+  askAria,
+  chat,
+} = require("../controllers/coach.controller");
 const { protect } = require("../middleware/auth.middleware");
-
-// CV Builder ATS Coach. The free, live "CV Health" score is computed client-side
-// (no endpoint). This is the paid "Deep Scan": Job Match + Career Match +
-// recruiter red-flags. Free users get one lifetime taste; gated in the controller.
-// Mounted under the AI rate limiter in app.js since it triggers AI calls.
-router.post("/deep-scan", protect, deepScan);
 
 // Live conversational AI coach for the current builder step (free daily quota,
 // paid unlimited; gated in the controller).
 router.post("/guide", protect, guide);
 
-// Turn a red-flag into a fix: generate role-targeted ATS bullet rewrites for one
-// work-history role or project (paid; gated in the controller).
-router.post("/rewrite-role", protect, rewriteRole);
+// Aria "build-with" bullet generation — turn a described role/project into N
+// Role-Brief-grounded bullets. Charges count × GENERATE_BULLET; first re-roll of
+// an identical request is free (gated in the controller).
+router.post("/generate-bullets", protect, generateBullets);
 
-// Re-verify after applying fixes — recompute red-flags + fit score so resolved
-// items flip green (paid, repeatable; gated in the controller).
-router.post("/recheck", protect, recheck);
+// Aria career-stage-aware, JD-tailored professional summary. Charges GENERATE_SUMMARY
+// per generation (each re-roll charges again; paid tiers draw from allowance).
+router.post("/summary", protect, summary);
+
+// Confirm/correct the inferred company type on Aria's Role Brief (infer+confirm
+// chip). Persists the choice so a same-JD brief rebuild keeps it.
+router.post("/company-type", protect, setCompanyType);
+
+// Fetch (or build+cache) Aria's Role Brief — powers the "Aria's read" strip.
+// Cheap on repeat (same-JD cache hit); no target JD → { brief: null }.
+router.post("/brief", protect, getBrief);
+
+// Aria's free-form coach chat — warm, guardrailed Q&A on the cheap base model.
+// Draws from the shared daily chat allowance, then ARIA_CHAT_MESSAGE credits each.
+router.post("/ask", protect, askAria);
+
+// Aria's UNIFIED chat — ONE focus-aware front door. Intent-classified + smart
+// per-message charging: focused build-with is FREE, a general question spends the
+// daily allowance. History/Projects use this; other steps still use /ask.
+router.post("/chat", protect, chat);
 
 module.exports = router;

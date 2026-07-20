@@ -504,8 +504,8 @@ const generateSkills = async (req, res) => {
     // Charge (or skip for an active paid tier) BEFORE caching, so a failed charge
     // never leaves a cached result the user can re-fetch for free.
     const charge = await subscription.chargeOrSkip(user, SKILLS_COST, {
-      type: "usage",
-      description: "AI Skills Generation users profile context",
+      type: "generate_skills",
+      description: "Aria skills",
     });
     if (charge.insufficient) {
       return res.status(403).json({
