@@ -1,6 +1,17 @@
 const OpenAI = require("openai");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const crypto = require("crypto");
+const { DEFAULT_MODELS, DEFAULT_MODEL, modelFrom } = require("../config/catalog");
+// Anthropic SDK is optional at load — lazily required so a deploy without it (or the
+// package missing) still boots; only claude-* calls fail, and they fall back to the
+// default model rather than taking the whole service down.
+const Anthropic = (() => {
+  try {
+    return require("@anthropic-ai/sdk");
+  } catch {
+    return null;
+  }
+})();
 
 let openai;
 let geminiModel;
@@ -156,6 +167,13 @@ const callJSON = async ({ system, user, messages, temperature = 0.2, maxTokens, 
     throw new AIUnavailableError();
   }
 
+  // When the caller selected a specific model (Aria model picker), route through the
+  // multi-provider dispatcher — which resolves provider + apiModel and handles the
+  // missing-key fallback. Callers that don't select a model keep the legacy path below.
+  if (meta.modelId) {
+    return callModel(meta.modelId, { system, user, messages, json: true, temperature, maxTokens, meta });
+  }
+
   // Per-request OpenAI model (tier-based — see resolveTextModel). Defaults to the
   // standard model when the caller doesn't specify one.
   const openaiModel = meta.model || MODEL;
@@ -246,6 +264,11 @@ const callText = async ({ system, user, temperature = 0.4, maxTokens, meta = {} 
     throw new AIUnavailableError();
   }
 
+  // Selected-model routing (see callJSON) — free-form text variant.
+  if (meta.modelId) {
+    return callModel(meta.modelId, { system, user, json: false, temperature, maxTokens, meta });
+  }
+
   // Per-request OpenAI model (tier-based — see resolveTextModel).
   const openaiModel = meta.model || MODEL;
   const start = Date.now();
@@ -300,6 +323,166 @@ const callText = async ({ system, user, temperature = 0.4, maxTokens, meta = {} 
     }
 
     throw new AIUnavailableError(`Unknown AI provider: ${activeProvider}`);
+  } catch (err) {
+    persistLog({
+      ...baseLog,
+      latencyMs: Date.now() - start,
+      errorMessage: err.message,
+      errorCode: err.code,
+    });
+    throw err;
+  }
+};
+
+// ── Multi-provider model dispatcher (Aria chat / tailoring model selection) ──
+// callModel(modelId, opts) resolves modelId → provider + real apiModel (config/catalog),
+// gets/creates that provider's client, and runs ONE call. Providers: OpenAI (also serves
+// gpt-4o/-mini/gpt-5/-mini), Anthropic (claude-sonnet-5, with prompt caching), Gemini,
+// and DeepSeek + Kimi/Moonshot (OpenAI-compatible — reuse the OpenAI SDK with a baseURL).
+// If the selected provider's key is missing it FALLS BACK to DEFAULT_MODEL's provider,
+// never to mock output (users are never charged for fabricated text).
+const PROVIDER_KEY_ENV = {
+  openai: "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  deepseek: "DEEPSEEK_API_KEY",
+  moonshot: "MOONSHOT_API_KEY",
+};
+const OPENAI_COMPAT_BASEURL = {
+  deepseek: "https://api.deepseek.com",
+  moonshot: "https://api.moonshot.ai/v1",
+};
+const providerHasKey = (provider) => !!process.env[PROVIDER_KEY_ENV[provider]];
+
+// Lazy, cached provider clients (one per provider).
+const _providerClients = {};
+const getProviderClient = (provider) => {
+  if (_providerClients[provider]) return _providerClients[provider];
+  let client;
+  if (provider === "openai") {
+    client = openai || new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  } else if (provider === "deepseek" || provider === "moonshot") {
+    client = new OpenAI({
+      apiKey: process.env[PROVIDER_KEY_ENV[provider]],
+      baseURL: OPENAI_COMPAT_BASEURL[provider],
+    });
+  } else if (provider === "anthropic") {
+    if (!Anthropic) throw new AIUnavailableError("Anthropic SDK is not installed.");
+    client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  } else if (provider === "gemini") {
+    client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY); // model chosen per call
+  } else {
+    throw new AIUnavailableError(`Unknown provider: ${provider}`);
+  }
+  _providerClients[provider] = client;
+  return client;
+};
+
+// Resolve a modelId to the row we'll actually call, honouring the missing-key fallback:
+// the selected model's provider must have a key; else DEFAULT_MODEL; else the module's
+// booted provider; else AI_UNAVAILABLE (never mock).
+const resolveModelCall = (modelId) => {
+  const row = modelFrom(DEFAULT_MODELS, modelId);
+  if (row && providerHasKey(row.provider)) {
+    return { id: modelId, provider: row.provider, apiModel: row.apiModel };
+  }
+  const def = DEFAULT_MODELS[DEFAULT_MODEL];
+  if (providerHasKey(def.provider)) {
+    return { id: DEFAULT_MODEL, provider: def.provider, apiModel: def.apiModel, fellBack: true };
+  }
+  if (activeProvider === "openai") {
+    return { id: "openai-default", provider: "openai", apiModel: MODEL, fellBack: true };
+  }
+  if (activeProvider === "gemini") {
+    return { id: "gemini-default", provider: "gemini", apiModel: GEMINI_MODEL, fellBack: true };
+  }
+  throw new AIUnavailableError();
+};
+
+const callModel = async (
+  modelId,
+  { system = "", user, messages, json = false, temperature = 0.4, maxTokens, meta = {} } = {}
+) => {
+  const { provider, apiModel } = resolveModelCall(modelId);
+  const client = getProviderClient(provider);
+  const start = Date.now();
+  const baseLog = {
+    operation: meta.operation || "callModel",
+    provider,
+    model: apiModel,
+    userId: meta.userId,
+    applicationId: meta.applicationId,
+    systemPrompt: system,
+    userPrompt: messages ? JSON.stringify(messages) : user,
+  };
+  try {
+    let content = "";
+    let usage = {};
+    if (provider === "openai" || provider === "deepseek" || provider === "moonshot") {
+      const resp = await client.chat.completions.create({
+        model: apiModel,
+        messages: messages
+          ? [{ role: "system", content: system }, ...messages]
+          : [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+        temperature,
+        ...(json ? { response_format: { type: "json_object" } } : {}),
+        ...(maxTokens ? { max_tokens: maxTokens } : {}),
+      });
+      content = resp.choices[0].message.content;
+      usage = {
+        tokensInput: resp.usage?.prompt_tokens,
+        tokensOutput: resp.usage?.completion_tokens,
+      };
+    } else if (provider === "anthropic") {
+      const resp = await client.messages.create({
+        model: apiModel,
+        max_tokens: maxTokens || 1024,
+        temperature,
+        // Prompt caching on the system block (system prompt + JD + CV context) — the big
+        // margin lever on flagship: repeated turns reuse the cached prefix.
+        system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+        messages: (messages || [{ role: "user", content: user }]).map((m) => ({
+          role: m.role === "assistant" ? "assistant" : "user",
+          content: m.content,
+        })),
+      });
+      content = (resp.content || []).map((b) => b.text || "").join("");
+      usage = {
+        tokensInput: resp.usage?.input_tokens,
+        tokensOutput: resp.usage?.output_tokens,
+      };
+    } else if (provider === "gemini") {
+      const gm = client.getGenerativeModel({ model: apiModel });
+      const result = await gm.generateContent({
+        contents: messages
+          ? messages.map((m) => ({
+              role: m.role === "assistant" ? "model" : "user",
+              parts: [{ text: m.content }],
+            }))
+          : [{ role: "user", parts: [{ text: user }] }],
+        systemInstruction: { role: "system", parts: [{ text: system }] },
+        generationConfig: {
+          temperature,
+          ...(json ? { responseMimeType: "application/json" } : {}),
+          ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
+        },
+      });
+      content = result.response.text();
+      const u = result.response.usageMetadata || {};
+      usage = { tokensInput: u.promptTokenCount, tokensOutput: u.candidatesTokenCount };
+    } else {
+      throw new AIUnavailableError(`Unknown provider: ${provider}`);
+    }
+    persistLog({ ...baseLog, response: content, ...usage, latencyMs: Date.now() - start });
+    if (!json) return String(content).trim();
+    // Tolerate ```json fences some providers wrap JSON in.
+    const cleaned = String(content)
+      .replace(/```json\s*|\s*```/g, "")
+      .trim();
+    return JSON.parse(cleaned);
   } catch (err) {
     persistLog({
       ...baseLog,
@@ -3095,17 +3278,74 @@ ${APP_PRIMER}`;
   });
 };
 
+// ── Career stage (work-history coaching) ────────────────────────────────────
+// Shares the summary flow's vocabulary: 'experienced' | 'grad' (student/recent grad)
+// | 'changer' (career changer). Split out + exported so the fork and the inference are
+// unit-testable WITHOUT an AI round-trip.
+const CAREER_STAGES = ["experienced", "grad", "changer"];
+
+// A blank row (Studio seeds empty entries before /coach can write) is NOT experience —
+// only a row with a real title or company counts.
+const hasRealJob = (draft) =>
+  Array.isArray(draft?.experience) &&
+  draft.experience.some(
+    (e) => String(e?.title || "").trim() || String(e?.company || "").trim()
+  );
+
+// INFER the stage from the draft when the client didn't send one: any real job →
+// 'experienced'; only education/projects, or nothing yet → 'grad' (entry-level). A
+// 'changer' can't be read off CV shape, so inference never returns it — it's only ever
+// an explicit choice from the frontend chip.
+const inferCareerStage = (draft) => (hasRealJob(draft) ? "experienced" : "grad");
+
+// Explicit choice (frontend chip) wins; otherwise infer. Frontend can override the
+// inference; if it's skipped or garbage, inference applies.
+const resolveCareerStage = ({ stage, draft } = {}) =>
+  CAREER_STAGES.includes(stage) ? stage : inferCareerStage(draft);
+
+// The shared rule for EVERY stage — this is what replaces the old "push for a number".
+// Bullets need EVIDENCE (a specific action + a truthful outcome); a number is ONE kind
+// of evidence, never required, NEVER invented or pressured for.
+const EXPERIENCE_CORE_RULE = `
+- THIS IS A JOB (work experience) — the rule is ACHIEVEMENTS, not duties. Never settle for "responsible for X" / "duties included" — draw out what CHANGED because they did it (PAR/CAR: "responsible for training new staff" → "trained new hires, several promoted within the year"). Shape each bullet as: a strong action verb + the specific work + context/constraint + a TRUTHFUL outcome.
+- EVIDENCE, not numbers: an outcome CAN be a number, but a number is only ONE kind of evidence and is NEVER required. Use a real figure ONLY when the user actually has one — NEVER invent, guess, or pressure them for a number. With no metric, the outcome uses non-numeric evidence instead: scope · frequency · audience · constraint · decision role · range · scale (e.g. "across 40+ tickets a shift", "for the whole final-year cohort").
+- ELICITATION: your follow-ups DISCOVER material, they don't demand it. Ask ONE focused question — "What problem did you solve?", "Who benefited — the team, customers, your class?", "How did you know it worked?" — or the Ws (what / where / when / why / how / how many). NEVER answer "I haven't really done anything" with "give me a number"; answer it with a discovery question that surfaces something they HAVE done.`;
+
+// The stage forks. Each ends with a note steering the answer scaffolds (suggestions /
+// exampleAnswer) so they're stage-appropriate — this is the fix for the "generic"
+// scaffolds: entry-level starts from projects/coursework, not "increased revenue by X".
+const EXPERIENCE_STAGE = {
+  experienced: `${EXPERIENCE_CORE_RULE}
+- STAGE — EXPERIENCED: keep the XYZ/achievement framing (accomplished [result], as measured by [scale/number], by doing [action]); a number STRENGTHENS a bullet when it's real, otherwise fall back to scope/scale. When ready, 3-5 achievement bullets, action-verb-first, impact-focused, tailored to the target role.
+- SCAFFOLDS: your \`suggestions\` may offer a metric starter (e.g. "We cut ___ by "), and \`exampleAnswer\` may show a quantified bullet — but explicitly as a SAMPLE, never the user's claim.`,
+
+  grad: `${EXPERIENCE_CORE_RULE}
+- STAGE — ENTRY-LEVEL (student, recent grad, intern, or first-ever CV): be gentle and reassuring — a first CV is built from EXPERIENCE broadly defined, NOT from job titles. Material counts from coursework, academic/capstone & personal projects, campus leadership/societies, volunteering, part-time or informal work, internships/SIWES, and (where it applies) an NYSC/service year — all framed as achievements. Do NOT demand a metric; a strong entry-level bullet usually shows scope or scale instead ("built the booking tool used by the whole class", "ran the society stall every market day"). If they say they've "done nothing", reassure them and ask a discovery question about a project, a course, or something they organised — never a number. When ready, frame 2-4 achievement bullets from whatever real material they gave.
+- SCAFFOLDS: your \`suggestions\` LEAD with project / coursework / leadership angles (e.g. "In my final-year project I ", "I organised the ___ for our society ") — NOT "increased revenue by ___". \`exampleAnswer\` shows a strong bullet whose impact is SCOPE or SCALE, not a number (as a sample).`,
+
+  changer: `${EXPERIENCE_CORE_RULE}
+- STAGE — CAREER CHANGER (moving into a new field): foreground TRANSFERABLE skills and frame prior work for its RELEVANCE to the target role — a hybrid of what they did and where they're headed. Establish credibility through evidence of IMPACT, not industry tenure; name what they achieved and translate it toward the new field. When ready, 3-5 bullets that lead with the transferable achievement, tailored to the target role.
+- SCAFFOLDS: your \`suggestions\` surface transferable angles (e.g. "A skill that carries over is ___", "I did ___, which maps to this role "); \`exampleAnswer\` translates a past achievement toward the target field (as a sample).`,
+};
+
+// The experience-branch coaching fragment for a resolved stage. Exported for tests.
+const experienceCoachingBlock = (stage) =>
+  EXPERIENCE_STAGE[stage] || EXPERIENCE_STAGE.experienced;
+
 // Aria's UNIFIED chat turn — ONE warm, student-first front door. When `focus` is set
 // (she's on a specific role/project) and the user is describing their work, she runs
 // the build-with interview (FREE); a general CV question is answered instead (metered).
 // Same CHEAP base MODEL + hard fences as answerCoachQuestion. Returns
 // { reply, intent, description } with intent ∈ 'answer' | 'building' | 'ready'.
+// `stage` ('experienced'|'grad'|'changer') forks the experience-section coaching; the
+// controller resolves it (explicit chip → inferred) before calling.
 const coachChatTurn = async ({
   messages,
   focus,
   entryTitle,
   entryCompany,
   section,
+  stage,
   stepLabel,
   cvSummary,
   brief,
@@ -3145,8 +3385,9 @@ Every turn, classify the user's latest message into ONE intent and act according
     }
 
     if (section === "experience") {
-      system += `
-- THIS IS A JOB (work experience) — the most-scrutinised part of a CV, and the rule is ACHIEVEMENTS, not duties. Never settle for "responsible for X" / "duties included" — draw out what CHANGED because they did it. Aim each bullet at the shape: accomplished [result], as measured by [a number/scale], by doing [action] (the XYZ formula) — lead with a strong action verb (Led, Built, Increased, Cut, Launched, Streamlined, Managed…), name the RESULT/impact, and quantify it. Interview ONE informed question at a time: what they did → then "what did that improve or change?" to surface the result → then gently ask for a number or rough scale (%, count, time saved, money, volume, frequency). If they truly have no number, use scale/frequency ("across 40+ tickets a day") — NEVER invent figures or claims they didn't give (confirm, don't fabricate). When ready, 3-5 achievement bullets, each action-verb-first + impact-focused + tailored to the target role.`;
+      // Career-stage-aware: entry-level is coached gently (no metric pressure), the
+      // experienced keep XYZ/metric framing, career-changers foreground transferables.
+      system += experienceCoachingBlock(resolveCareerStage({ stage }));
     }
   } else {
     system += `
@@ -3173,8 +3414,9 @@ CV SO FAR: ${cvSummary}. ${briefLine}`;
     messages: turns,
     temperature: 0.5,
     maxTokens: 380, // room for the extra suggestions/exampleAnswer/suggestionsLabel JSON
-    // FORCE the cheap base model regardless of tier — the unified chat must stay cheap.
-    meta: { ...meta, model: MODEL, operation: "coachChatTurn" },
+    // Honour the caller's selected model (meta.modelId → multi-provider dispatcher). With
+    // no selection it stays on the cheap base model (callJSON's default path).
+    meta: { ...meta, operation: "coachChatTurn" },
   });
 
   const intent = ["answer", "building", "ready"].includes(data?.intent) ? data.intent : "building";
@@ -3413,7 +3655,15 @@ const generateSkillsFromContext = async (education, experience, projects, target
 
   try {
     let resultText = "";
-    if (activeProvider === "openai") {
+    if (options.modelId) {
+      // Selected model → multi-provider dispatcher. Raw text (json:false) so the tolerant
+      // fence/brace parse below still runs identically.
+      resultText = await callModel(options.modelId, {
+        user: prompt,
+        json: false,
+        meta: { ...(options.meta || {}), operation: options.meta?.operation || "generateSkills" },
+      });
+    } else if (activeProvider === "openai") {
       const response = await openai.chat.completions.create({
         model,
         messages: [{ role: "user", content: prompt }],
@@ -3607,6 +3857,10 @@ module.exports = {
   generateBulletsFromDescription,
   answerCoachQuestion,
   coachChatTurn,
+  // Career-stage helpers (work-history coaching) — exported for the controller + tests.
+  inferCareerStage,
+  resolveCareerStage,
+  experienceCoachingBlock,
   generateSummaries,
   generateSummaryForStage,
   generateSkillsFromContext,
@@ -3614,4 +3868,7 @@ module.exports = {
   categorizeSkillsList,
   activeProvider,
   AIUnavailableError,
+  // Multi-provider model dispatcher (Aria model selection)
+  callModel,
+  resolveModelCall,
 };

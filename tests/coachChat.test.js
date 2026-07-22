@@ -202,4 +202,119 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
     expect(res.statusCode).toBe(404);
     expect(aiService.coachChatTurn).not.toHaveBeenCalled();
   });
+
+  describe("career stage threading", () => {
+    beforeEach(() => {
+      aiService.coachChatTurn.mockResolvedValue({ reply: "ok", intent: "building", description: "" });
+      // Real resolver behaviour: explicit valid stage wins, else infer from the draft.
+      aiService.resolveCareerStage.mockImplementation(({ stage, draft }) =>
+        ["experienced", "grad", "changer"].includes(stage)
+          ? stage
+          : (draft?.experience || []).some((e) => e?.title || e?.company)
+          ? "experienced"
+          : "grad"
+      );
+    });
+
+    it("forwards an explicit stage from the request to coachChatTurn", async () => {
+      await post({
+        draftId,
+        currentStepId: "history",
+        focus,
+        stage: "grad",
+        messages: buildMsgs("In my final-year project I built a booking app"),
+      });
+      expect(aiService.resolveCareerStage).toHaveBeenCalledWith(
+        expect.objectContaining({ stage: "grad" })
+      );
+      expect(aiService.coachChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ stage: "grad" })
+      );
+    });
+
+    it("resolves the stage from the draft when none is sent (inference fallback)", async () => {
+      // The seeded draft has a real experience entry → inference should yield 'experienced'.
+      await post({
+        draftId,
+        currentStepId: "history",
+        focus,
+        messages: buildMsgs("I operated wireline tools downhole"),
+      });
+      expect(aiService.coachChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ stage: "experienced" })
+      );
+    });
+  });
+
+  describe("model selection", () => {
+    const paidSub = {
+      tier: "plus",
+      status: "active",
+      expiresAt: new Date(Date.now() + 86400000),
+      creditsRemaining: 100,
+    };
+
+    it("threads the resolved model id into coachChatTurn (default when none picked)", async () => {
+      aiService.coachChatTurn.mockResolvedValue({ reply: "hi", intent: "building", description: "" });
+      await post({ draftId, currentStepId: "history", focus, messages: buildMsgs("I did X") });
+      // The turn RUNS on the selected model — default gpt-4o-mini here — via meta.modelId.
+      expect(aiService.coachChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ meta: expect.objectContaining({ modelId: "gpt-4o-mini" }) })
+      );
+    });
+
+    it("a focused BUILD-WITH turn stays FREE even on a flagship model", async () => {
+      setUser({ credits: 5, ariaChat: { date: today, count: 15 } }); // past the free daily pool
+      aiService.coachChatTurn.mockResolvedValue({ reply: "and then?", intent: "building", description: "" });
+
+      const res = await post({
+        draftId,
+        currentStepId: "history",
+        focus,
+        model: "gpt-5", // flagship
+        messages: buildMsgs("I operated the tools"),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.charged).toBe(false); // building never charges, regardless of model
+      expect(Transaction.create).not.toHaveBeenCalled();
+      // …and it still ran on the picked flagship model.
+      expect(aiService.coachChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ meta: expect.objectContaining({ modelId: "gpt-5" }) })
+      );
+    });
+
+    it("a metered general answer on FLAGSHIP charges the flagship cost, even on a paid plan", async () => {
+      setUser({ credits: 5, subscription: paidSub, ariaChat: { date: today, count: 15 } });
+      aiService.coachChatTurn.mockResolvedValue({ reply: "here you go", intent: "answer", description: "" });
+
+      const res = await post({
+        draftId,
+        currentStepId: "history",
+        model: "gpt-5", // flagship — no focus → forced 'answer' (metered)
+        messages: buildMsgs("how long should my summary be?"),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.charged).toBe(true); // flagship ALWAYS meters, even for paid
+      expect(User.updateOne).toHaveBeenCalled();
+      expect(Transaction.create).toHaveBeenCalledTimes(1);
+    });
+
+    it("a metered general answer on LIGHT is FREE on an active paid plan", async () => {
+      setUser({ credits: 5, subscription: paidSub, ariaChat: { date: today, count: 15 } });
+      aiService.coachChatTurn.mockResolvedValue({ reply: "sure", intent: "answer", description: "" });
+
+      const res = await post({
+        draftId,
+        currentStepId: "history",
+        // no model → default light; past the free pool, but paid → unlimited light.
+        messages: buildMsgs("what's a good CV length?"),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.charged).toBe(false); // light is included on paid plans
+      expect(Transaction.create).not.toHaveBeenCalled();
+    });
+  });
 });

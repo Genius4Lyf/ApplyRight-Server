@@ -13,6 +13,26 @@
  */
 
 /**
+ * The canonical point budget per section — the `totalPoints +=` lines in
+ * computeATSReadiness below, named so consumers can subtotal quality per section
+ * without re-deriving the rubric. Sums to 100.
+ *
+ * Deliberately NOT summed from the emitted `checks`: the "Quantified achievements"
+ * check (15 of experience's 25) is only pushed when bullets exist, so summing checks
+ * would quietly RAISE the denominator for a CV with no bullets at all — scoring an
+ * empty work history as if it were complete. The fixed budget keeps a missing section
+ * missing.
+ */
+const SECTION_POINTS = {
+  summary: 15,
+  experience: 25,
+  skills: 20,
+  education: 10,
+  contact: 15,
+  projects: 15,
+};
+
+/**
  * Compute a lightweight ATS readiness score from a CV draft.
  * Pure deterministic checks on completeness and quality.
  * Returns { score: 0-100, checks: [...], tips: [...] }.
@@ -31,13 +51,13 @@ const computeATSReadiness = (extractedData, draft) => {
   const summary = draft.professionalSummary || "";
   if (summary.length >= 100) {
     earnedPoints += 15;
-    checks.push({ label: "Professional summary", passed: true });
+    checks.push({ section: "summary", label: "Professional summary", passed: true, points: 15, max: 15 });
   } else if (summary.length > 0) {
     earnedPoints += 8;
-    checks.push({ label: "Professional summary", passed: false, detail: "Too short" });
+    checks.push({ section: "summary", label: "Professional summary", passed: false, detail: "Too short", points: 8, max: 15 });
     tips.push("Expand your professional summary to 3-4 sentences highlighting your key strengths and career goals.");
   } else {
-    checks.push({ label: "Professional summary", passed: false, detail: "Missing" });
+    checks.push({ section: "summary", label: "Professional summary", passed: false, detail: "Missing", points: 0, max: 15 });
     tips.push("Add a professional summary — it's the first thing recruiters and ATS systems scan.");
   }
 
@@ -46,13 +66,13 @@ const computeATSReadiness = (extractedData, draft) => {
   const exp = draft.experience || [];
   if (exp.length >= 2) {
     earnedPoints += 10;
-    checks.push({ label: "Work experience entries", passed: true, detail: `${exp.length} roles` });
+    checks.push({ section: "experience", label: "Work experience entries", passed: true, detail: `${exp.length} roles`, points: 10, max: 10 });
   } else if (exp.length === 1) {
     earnedPoints += 5;
-    checks.push({ label: "Work experience entries", passed: false, detail: "Only 1 role" });
+    checks.push({ section: "experience", label: "Work experience entries", passed: false, detail: "Only 1 role", points: 5, max: 10 });
     tips.push("Add more work experience if available — most ATS systems rank resumes with 2+ roles higher.");
   } else {
-    checks.push({ label: "Work experience entries", passed: false, detail: "Missing" });
+    checks.push({ section: "experience", label: "Work experience entries", passed: false, detail: "Missing", points: 0, max: 10 });
     tips.push("Add work experience to strengthen your resume.");
   }
 
@@ -63,13 +83,13 @@ const computeATSReadiness = (extractedData, draft) => {
     const quantifiedRatio = bulletsWithNumbers.length / allBullets.length;
     if (quantifiedRatio >= 0.3) {
       earnedPoints += 15;
-      checks.push({ label: "Quantified achievements", passed: true, detail: `${bulletsWithNumbers.length}/${allBullets.length} bullets include metrics` });
+      checks.push({ section: "experience", label: "Quantified achievements", passed: true, detail: `${bulletsWithNumbers.length}/${allBullets.length} bullets include metrics`, points: 15, max: 15 });
     } else if (quantifiedRatio > 0) {
       earnedPoints += 8;
-      checks.push({ label: "Quantified achievements", passed: false, detail: `Only ${bulletsWithNumbers.length}/${allBullets.length} bullets include metrics` });
+      checks.push({ section: "experience", label: "Quantified achievements", passed: false, detail: `Only ${bulletsWithNumbers.length}/${allBullets.length} bullets include metrics`, points: 8, max: 15 });
       tips.push("Add numbers and metrics to more bullet points (e.g., 'Increased sales by 25%' instead of 'Increased sales').");
     } else {
-      checks.push({ label: "Quantified achievements", passed: false, detail: "No metrics found" });
+      checks.push({ section: "experience", label: "Quantified achievements", passed: false, detail: "No metrics found", points: 0, max: 15 });
       tips.push("Quantify your achievements with numbers, percentages, or dollar amounts to stand out in ATS screening.");
     }
   }
@@ -79,14 +99,14 @@ const computeATSReadiness = (extractedData, draft) => {
   const skills = draft.skills || [];
   if (skills.length >= 8) {
     earnedPoints += 20;
-    checks.push({ label: "Skills listed", passed: true, detail: `${skills.length} skills` });
+    checks.push({ section: "skills", label: "Skills listed", passed: true, detail: `${skills.length} skills`, points: 20, max: 20 });
   } else if (skills.length >= 4) {
     earnedPoints += 12;
-    checks.push({ label: "Skills listed", passed: false, detail: `${skills.length} skills — aim for 8+` });
+    checks.push({ section: "skills", label: "Skills listed", passed: false, detail: `${skills.length} skills — aim for 8+`, points: 12, max: 20 });
     tips.push("Add more relevant skills. ATS systems match keywords from job descriptions against your skills section.");
   } else {
     earnedPoints += skills.length > 0 ? 5 : 0;
-    checks.push({ label: "Skills listed", passed: false, detail: skills.length > 0 ? `Only ${skills.length} skills` : "Missing" });
+    checks.push({ section: "skills", label: "Skills listed", passed: false, detail: skills.length > 0 ? `Only ${skills.length} skills` : "Missing", points: skills.length > 0 ? 5 : 0, max: 20 });
     tips.push("Add a comprehensive skills section — this is critical for ATS keyword matching.");
   }
 
@@ -95,9 +115,9 @@ const computeATSReadiness = (extractedData, draft) => {
   const edu = draft.education || [];
   if (edu.length > 0) {
     earnedPoints += 10;
-    checks.push({ label: "Education", passed: true, detail: `${edu.length} entries` });
+    checks.push({ section: "education", label: "Education", passed: true, detail: `${edu.length} entries`, points: 10, max: 10 });
   } else {
-    checks.push({ label: "Education", passed: false, detail: "Missing" });
+    checks.push({ section: "education", label: "Education", passed: false, detail: "Missing", points: 0, max: 10 });
     tips.push("Add your education details — many ATS systems filter by degree requirements.");
   }
 
@@ -111,14 +131,14 @@ const computeATSReadiness = (extractedData, draft) => {
   const contactScore = [hasName, hasEmail, hasPhone, hasLinkedIn].filter(Boolean).length;
   if (contactScore >= 3) {
     earnedPoints += 15;
-    checks.push({ label: "Contact information", passed: true });
+    checks.push({ section: "contact", label: "Contact information", passed: true, points: 15, max: 15 });
   } else if (contactScore >= 2) {
     earnedPoints += 10;
-    checks.push({ label: "Contact information", passed: false, detail: "Incomplete" });
+    checks.push({ section: "contact", label: "Contact information", passed: false, detail: "Incomplete", points: 10, max: 15 });
     tips.push("Add your phone number and LinkedIn URL — recruiters need multiple ways to reach you.");
   } else {
     earnedPoints += 5;
-    checks.push({ label: "Contact information", passed: false, detail: "Minimal" });
+    checks.push({ section: "contact", label: "Contact information", passed: false, detail: "Minimal", points: 5, max: 15 });
     tips.push("Complete your contact details: full name, email, phone, and LinkedIn profile.");
   }
 
@@ -127,9 +147,9 @@ const computeATSReadiness = (extractedData, draft) => {
   const projects = draft.projects || [];
   if (projects.length > 0) {
     earnedPoints += 15;
-    checks.push({ label: "Projects", passed: true, detail: `${projects.length} projects` });
+    checks.push({ section: "projects", label: "Projects", passed: true, detail: `${projects.length} projects`, points: 15, max: 15 });
   } else {
-    checks.push({ label: "Projects", passed: false, detail: "None listed" });
+    checks.push({ section: "projects", label: "Projects", passed: false, detail: "None listed", points: 0, max: 15 });
     tips.push("Consider adding relevant projects to showcase practical skills and initiative.");
   }
 
@@ -473,4 +493,5 @@ module.exports = {
   cvDataToCandidate,
   detectRedFlags,
   coachState,
+  SECTION_POINTS,
 };

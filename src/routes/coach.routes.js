@@ -5,6 +5,7 @@ const {
   generateBullets,
   summary,
   setCompanyType,
+  setModel,
   getBrief,
   askAria,
   chat,
@@ -27,6 +28,10 @@ router.post("/summary", protect, summary);
 // Confirm/correct the inferred company type on Aria's Role Brief (infer+confirm
 // chip). Persists the choice so a same-JD brief rebuild keeps it.
 router.post("/company-type", protect, setCompanyType);
+
+// Set the Aria model for this session (draft.studioModelId) and optionally the user's
+// default. Server-gated: the model must be `exposed`. Powers the model picker.
+router.post("/model", protect, setModel);
 
 // Fetch (or build+cache) Aria's Role Brief — powers the "Aria's read" strip.
 // Cheap on repeat (same-JD cache hit); no target JD → { brief: null }.

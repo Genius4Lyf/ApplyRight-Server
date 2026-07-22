@@ -262,6 +262,81 @@ const draftCVSchema = new mongoose.Schema(
       // a single saved note on read so the frontend only ever sees the array.
       userNotes: mongoose.Schema.Types.Mixed,
     },
+    // Marks this draft as an Aria Studio SESSION, and which kind. Presence is the
+    // marker; the value is the kind — one field doing both jobs.
+    //
+    // Deliberately NOT a new `source` enum value: admin.controller's Creation Method
+    // analytics buckets drafts by `source` into upload vs scratch (admin.controller.js
+    // ~100), so adding 'studio' there would silently reclassify every Studio draft in
+    // that chart. Studio drafts keep source:'scratch' (which is what they are — typed,
+    // not uploaded) and carry their Studio identity here instead.
+    studioKind: {
+      type: String,
+      enum: ["tailor", "build"],
+      default: null,
+      index: true,
+    },
+    // Per-SESSION Aria model choice (config/catalog DEFAULT_MODELS id). Overrides the
+    // user's default (User.aiModelId) for this draft only; null → fall back to the user
+    // default → DEFAULT_MODEL. Set via POST /coach/model. Plain id (no enum) so new models
+    // don't need a migration.
+    studioModelId: {
+      type: String,
+      default: null,
+    },
+    // The source CV's title, denormalized at clone time. The session list shows
+    // "from <source CV>", and a title read through tailoredFrom would break the moment
+    // the user renames or deletes the original — this is a historical fact, not a live ref.
+    tailoredFromTitle: String,
+    // Aria Studio's scan snapshot — the last full AI analysis of this CV against its
+    // target job, plus the deterministic per-section verdicts. Persisted so the Studio
+    // (score card, section breakdown, artifact panel) restores on refresh without
+    // re-charging. `jdHash` marks which JD it was scanned against, so a changed job can
+    // be detected as stale. A free /studio/recompute refreshes the deterministic parts
+    // and stamps recomputedAt, leaving the AI narrative flagged fromLastFullScan.
+    studioScan: {
+      fitScore: Number,
+      recommendation: String,
+      scoreBreakdown: {
+        skillsScore: Number,
+        experienceScore: Number,
+        educationScore: Number,
+        seniorityScore: Number,
+        overallScore: Number,
+      },
+      matchedSkills: [{ name: String, importance: String }],
+      missingSkills: [{ name: String, importance: String }],
+      evidence: [{ quote: String, issue: String, fix: String }],
+      sections: [
+        {
+          key: String,
+          label: String,
+          band: String, // 'ok' | 'warn' | 'bad'
+          score: Number,
+          quality: Number,
+          relevance: Number,
+          covered: Number,
+          total: Number,
+          missingKeywords: [String],
+          note: String,
+        },
+      ],
+      // Where this CV STARTED against this job — captured on the FIRST scan and never
+      // written again. Without it there is no honest "before → after": recompute
+      // overwrites fitScore/sections in place, so by the time the user finishes, the
+      // only surviving number is the current one. The finish card needs both.
+      baseline: {
+        fitScore: Number,
+        sections: [{ key: String, band: String, score: Number }],
+        capturedAt: Date,
+      },
+      jdHash: String,
+      scannedAt: Date,
+      recomputedAt: Date,
+      // True once a free recompute has refreshed the scores underneath an AI
+      // narrative that was written for an earlier version of the CV.
+      fromLastFullScan: { type: Boolean, default: false },
+    },
     tailoredFrom: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "DraftCV",

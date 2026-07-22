@@ -5,6 +5,7 @@ const DraftCV = require("../models/DraftCV");
 const subscription = require("../services/subscription.service");
 const settingsService = require("../services/settings.service");
 const aiService = require("../services/ai.service");
+const modelSelection = require("../services/modelSelection.service");
 const { coachState } = require("../services/atsCoach.service");
 
 // The valid Role-Brief company types (mirrors DraftCV.targetJob.brief.companyType
@@ -24,15 +25,32 @@ const STEP_LABELS = {
   finalize: "review",
 };
 
+// The JD-identity hash a brief is keyed by. Shared so every caller (draft-attached or
+// not) derives the SAME key from the same job text — that identity is what lets a
+// preview-built brief be persisted onto a draft later without a rebuild.
+const briefHashFor = (jd) => crypto.createHash("sha256").update(jd).digest("hex");
+
+// Build Aria's Role Brief from RAW JD text — no draft required. The draft-attached
+// path (resolveDraftBrief) and the draftless path (Aria Studio's brief preview) both
+// go through here, so there is exactly one place that turns a JD into a brief.
+// Returns { brief, hash }. aiService.buildRoleBrief wraps extractJobRequirements,
+// which is withExtractionCache-backed, so an identical JD is free on repeat.
+const buildBriefForJd = async (jobDescription, title, meta) => {
+  const jd = (jobDescription || "").trim();
+  if (!jd) return { brief: null, hash: null };
+  const brief = await aiService.buildRoleBrief(jd, { title }, meta);
+  return { brief, hash: briefHashFor(jd) };
+};
+
 // Resolve (and cache) Aria's Role Brief for a draft. The brief is keyed by a hash
 // of the current JD text: a cache hit (brief present AND briefHash matches the
 // current JD) returns the stored brief untouched — crucially preserving a
 // user-confirmed companyType. On a miss (no brief, or the JD changed) it rebuilds
-// via aiService.buildRoleBrief, persists brief + briefHash, and returns it.
+// via buildBriefForJd, persists brief + briefHash, and returns it.
 const resolveDraftBrief = async (draft, meta) => {
   const jd = (draft.targetJob?.description || "").trim();
   if (!jd) return null;
-  const hash = crypto.createHash("sha256").update(jd).digest("hex");
+  const hash = briefHashFor(jd);
 
   const cached = draft.targetJob?.brief;
   if (cached && draft.targetJob?.briefHash === hash) {
@@ -40,7 +58,7 @@ const resolveDraftBrief = async (draft, meta) => {
     return cached.toObject ? cached.toObject() : cached;
   }
 
-  const brief = await aiService.buildRoleBrief(jd, { title: draft.targetJob?.title }, meta);
+  const { brief } = await buildBriefForJd(jd, draft.targetJob?.title, meta);
   draft.targetJob.brief = brief;
   draft.targetJob.briefHash = hash;
   await draft.save();
@@ -166,8 +184,14 @@ const generateBullets = async (req, res) => {
       console.error("Coach resolveDraftBrief error (generateBullets, brief-less):", briefErr.message);
     }
 
-    // count × per-bullet cost (admin-overridable, same resolver as REWRITE_ROLE).
-    const perBullet = (await settingsService.getCreditCosts()).GENERATE_BULLET;
+    // Resolve the model (session pick → user default → DEFAULT_MODEL), gate it, and price
+    // the bullet by its TIER (flagship costs more per bullet). count × per-bullet cost.
+    const { modelId, tier, cost: perBullet } = await modelSelection.resolveForAction({
+      action: "GENERATE_BULLET",
+      sessionModelId: req.body?.model,
+      draft,
+      user,
+    });
     const cost = n * perBullet;
 
     // The first re-roll of an IDENTICAL request (same section+sortId+description+count)
@@ -197,8 +221,8 @@ const generateBullets = async (req, res) => {
         brief,
         role: entry.title || (section === "experience" ? "this role" : "this project"),
         section,
-        model: aiService.resolveTextModel(user), // tier-based (paid → stronger model)
-        meta,
+        // Route through the multi-provider dispatcher via the selected model id.
+        meta: { ...meta, modelId },
       });
     } catch (genErr) {
       if (genErr instanceof aiService.AIUnavailableError) {
@@ -214,7 +238,9 @@ const generateBullets = async (req, res) => {
     // Charge on success (skipped for a free re-roll). Rare race: a concurrent spend
     // between the pre-check and here can still come back insufficient.
     if (!isFreeReroll) {
-      const charge = await subscription.chargeOrSkip(user, cost, {
+      // Tier-aware charge: LIGHT is free on an active paid plan (the unlimited perk);
+      // FLAGSHIP always meters, even for paid subscribers.
+      const charge = await modelSelection.chargeForModel(user, cost, tier, {
         type: "generate_bullet",
         description: `Aria bullets (${n})`,
       });
@@ -276,11 +302,18 @@ const summary = async (req, res) => {
     }
 
     const user = await User.findById(req.user.id).select("plan subscription credits");
-    const cost = (await settingsService.getCreditCosts()).GENERATE_SUMMARY;
+    // Resolve + gate the session model, priced by its tier (flagship summary costs more).
+    const { modelId, tier, cost } = await modelSelection.resolveForAction({
+      action: "GENERATE_SUMMARY",
+      sessionModelId: req.body?.model,
+      draft,
+      user,
+    });
 
-    // PRE-CHECK the balance before spending an AI call the user can't pay for
-    // (paid tiers pass via their allowance — availableCredits includes it).
-    if (subscription.availableCredits(user) < cost) {
+    // PRE-CHECK the balance before spending an AI call the user can't pay for — only when
+    // it will actually meter (a paid LIGHT summary is free/unlimited; flagship always meters).
+    const willMeter = tier === "flagship" || !subscription.isPaidActive(user);
+    if (willMeter && subscription.availableCredits(user) < cost) {
       return res.status(403).json({
         code: "INSUFFICIENT_CREDITS",
         message: "Insufficient credits",
@@ -317,8 +350,8 @@ const summary = async (req, res) => {
         role: draft.targetJob?.title || "Professional",
         context,
         jobDescription: (draft.targetJob?.description || "").trim(),
-        model: aiService.resolveTextModel(user), // tier-based (paid → stronger model)
-        meta: { userId: req.user.id, operation: "coachSummary" },
+        // Route through the selected model via meta.modelId (multi-provider dispatcher).
+        meta: { userId: req.user.id, operation: "coachSummary", modelId },
       });
     } catch (genErr) {
       if (genErr instanceof aiService.AIUnavailableError) {
@@ -334,9 +367,9 @@ const summary = async (req, res) => {
       return res.status(502).json({ message: "Couldn't generate right now. Please try again." });
     }
 
-    // Charge on confirmed success. Rare race: a concurrent spend between the pre-check
-    // and here can still come back insufficient.
-    const charge = await subscription.chargeOrSkip(user, cost, {
+    // Charge on confirmed success — tier-aware (flagship always meters; light free on an
+    // active paid plan). Rare race: a concurrent spend can still come back insufficient.
+    const charge = await modelSelection.chargeForModel(user, cost, tier, {
       type: "generate_summary",
       description: "Aria summary",
     });
@@ -418,22 +451,33 @@ const chatAllowance = (user) => {
   return { today, used, willCharge: used >= FREE_DAILY_CHATS };
 };
 
-// Commit a chat turn AFTER the AI succeeds: charge a credit (past the free pool) or
-// bump the daily free counter. Returns { insufficient } on a lost charge race, else
-// { charged, freeRemaining }.
-const commitChatTurn = async (user, pre, cost) => {
+// Commit a chat turn AFTER the AI succeeds. Past the free daily pool it charges the
+// (action, tier) cost via the TIER-AWARE charge — flagship always meters, LIGHT is free on
+// an active paid plan (the "unlimited light on paid" perk). Within the pool it just bumps
+// the free counter. `tier` defaults to 'light' so the model-agnostic /coach/ask path keeps
+// working. Returns { insufficient } on a lost charge race, else { charged, freeRemaining }.
+const commitChatTurn = async (user, pre, cost, tier = "light") => {
   if (pre.willCharge) {
-    const r = await subscription.chargeOrSkip(user, cost, { type: "aria_chat", description: "Aria chat" });
+    const r = await modelSelection.chargeForModel(user, cost, tier, {
+      type: "aria_chat",
+      description: "Aria chat",
+    });
     if (r.insufficient) return { insufficient: true };
-  } else {
-    user.ariaChat = { date: pre.today, count: pre.used + 1 };
+    await user.save();
+    // Charged past the pool → nothing free left. A tier-SKIP (paid light) is genuinely
+    // free but the pool is still spent for the day, so freeRemaining stays 0 here.
+    return { charged: r.charged, freeRemaining: 0 };
   }
+  user.ariaChat = { date: pre.today, count: pre.used + 1 };
   await user.save();
-  return {
-    charged: pre.willCharge,
-    freeRemaining: Math.max(0, FREE_DAILY_CHATS - (pre.willCharge ? pre.used : pre.used + 1)),
-  };
+  return { charged: false, freeRemaining: Math.max(0, FREE_DAILY_CHATS - (pre.used + 1)) };
 };
+
+// Will this metered turn ACTUALLY spend credits? Past the free pool, yes — UNLESS it's a
+// light model on an active paid plan (unlimited light). Drives the pre-flight balance
+// check so a paid light user is never wrongly blocked with CHAT_LIMIT_REACHED.
+const turnWillMeter = (user, pre, tier) =>
+  pre.willCharge && (tier === "flagship" || !subscription.isPaidActive(user));
 
 // @desc    Aria's free-form coach chat. Warm, on-task, guardrailed Q&A about the
 //          current CV/section/target role on the CHEAP base model. Draws from the
@@ -540,7 +584,7 @@ const INTERVIEW_TURN_CAP = 6;
 // @route   POST /api/coach/chat
 // @access  Private (job-seekers only — not CV-agent client CVs)
 const chat = async (req, res) => {
-  const { draftId, currentStepId, messages, focus, buildTurns } = req.body || {};
+  const { draftId, currentStepId, messages, focus, buildTurns, stage } = req.body || {};
   if (!draftId) {
     return res.status(400).json({ message: "draftId is required" });
   }
@@ -589,12 +633,25 @@ const chat = async (req, res) => {
 
     const user = await User.findById(req.user.id).select("plan subscription credits ariaChat");
     const pre = chatAllowance(user);
-    const cost = (await settingsService.getCreditCosts()).ARIA_CHAT_MESSAGE;
+    // Resolve the session's model (session pick → draft.studioModelId → user default →
+    // DEFAULT_MODEL), gate it, and price a metered turn by its TIER (flagship chat costs
+    // more). The turn RUNS on this model via meta.modelId below.
+    const {
+      modelId,
+      tier,
+      cost,
+    } = await modelSelection.resolveForAction({
+      action: "ARIA_CHAT_MESSAGE",
+      sessionModelId: req.body?.model,
+      draft,
+      user,
+    });
 
     // The per-interview turn cap only bounds focused BUILDING (forces a draft).
     const mustFinish = !!focus && Number(buildTurns) >= INTERVIEW_TURN_CAP;
 
-    const meta = { userId: req.user.id, operation: "coachChatTurn" };
+    // Route the turn through the selected model (multi-provider dispatcher).
+    const meta = { userId: req.user.id, operation: "coachChatTurn", modelId };
     const targetTitle = (draft.targetJob?.title || draft.targetJob?.brief?.role || "").trim();
     const cvSummary = `${targetTitle ? `Target: ${targetTitle}. ` : ""}Progress: ${
       draft.experience?.length || 0
@@ -613,8 +670,9 @@ const chat = async (req, res) => {
     const window = turns.slice(-12); // bounded memory sent to the model
 
     // NO focus → every turn is a general answer (metered like /coach/ask). Pre-check
-    // the balance BEFORE spending an AI call the user can't pay for.
-    if (!focus && pre.willCharge && subscription.availableCredits(user) < cost) {
+    // the balance BEFORE spending an AI call the user can't pay for — but only when the
+    // turn will actually meter (a paid light user is unlimited and never blocked here).
+    if (!focus && turnWillMeter(user, pre, tier) && subscription.availableCredits(user) < cost) {
       return res.status(402).json({
         code: "CHAT_LIMIT_REACHED",
         message: "You've used today's free chats — top up or come back tomorrow.",
@@ -630,6 +688,9 @@ const chat = async (req, res) => {
         entryTitle: entry?.title || "this role",
         entryCompany: (entry?.company || "").trim(),
         section: focus?.section || "",
+        // Career stage forks the experience coaching: explicit chip choice wins; else
+        // inferred from the draft (real job → experienced, else entry-level 'grad').
+        stage: aiService.resolveCareerStage({ stage, draft }),
         stepLabel,
         cvSummary,
         brief,
@@ -652,7 +713,7 @@ const chat = async (req, res) => {
     let charged = false;
     let freeRemaining = Math.max(0, FREE_DAILY_CHATS - pre.used);
     if (intent === "answer") {
-      const c = await commitChatTurn(user, pre, cost);
+      const c = await commitChatTurn(user, pre, cost, tier);
       if (c.insufficient) {
         // They can't pay for a general answer — don't leak the reply. (They can still
         // build for free on a focused role.)
@@ -723,12 +784,63 @@ const getBrief = async (req, res) => {
   }
 };
 
+// @desc    Set the Aria model for a session (and optionally the user's default). The
+//          model must be `exposed` in the registry — gated server-side, never trusting
+//          the client. Persists onto the draft (studioModelId) so it survives a reload.
+// @route   POST /api/coach/model
+// @access  Private
+const setModel = async (req, res) => {
+  const { draftId, model, setDefault } = req.body || {};
+  if (!model || typeof model !== "string") {
+    return res.status(400).json({ message: "model is required" });
+  }
+  // Gate: unknown or hidden models are rejected outright.
+  const gate = await modelSelection.gateModel(model);
+  if (!gate.ok) {
+    return res.status(400).json({ code: "MODEL_NOT_ALLOWED", message: "That model isn't available." });
+  }
+
+  try {
+    // Per-session persistence (optional — a picker may set only the user default).
+    if (draftId) {
+      if (!mongoose.Types.ObjectId.isValid(draftId)) {
+        return res.status(400).json({ message: "Invalid draftId format" });
+      }
+      const draft = await DraftCV.findById(draftId);
+      if (!draft) return res.status(404).json({ message: "CV not found" });
+      if (draft.userId.toString() !== req.user.id) {
+        return res.status(403).json({ message: "Not authorized to edit this CV" });
+      }
+      draft.studioModelId = model;
+      await draft.save();
+    }
+    // Optional user default (persists across sessions).
+    if (setDefault === true) {
+      const user = await User.findById(req.user.id).select("aiModelId");
+      if (user) {
+        user.aiModelId = model;
+        await user.save();
+      }
+    }
+    return res.json({ model, tier: gate.tier });
+  } catch (error) {
+    console.error("Coach Set Model Error:", error);
+    return res.status(500).json({ message: "Couldn't save your model choice." });
+  }
+};
+
 module.exports = {
   guide,
   generateBullets,
   summary,
   setCompanyType,
+  setModel,
   getBrief,
   askAria,
   chat,
+  // Exported so Aria Studio can build+cache a Role Brief on a freshly-cloned draft
+  // without duplicating the JD-hash cache logic. Not route handlers.
+  resolveDraftBrief,
+  buildBriefForJd,
+  briefHashFor,
 };

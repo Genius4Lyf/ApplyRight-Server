@@ -195,6 +195,111 @@ const EST_TEXT_COST_USD_PER_MTOK = {
   "gpt-4o": { in: 2.5, out: 10.0 },
 };
 
+// ── AI model registry (Aria's chat / tailoring model selection) ──
+// modelId → { provider, apiModel, tier, inUsdPer1M, outUsdPer1M, exposed }. Two tiers
+// ONLY: LIGHT (budget, the default) and FLAGSHIP (Sonnet-class ceiling — deliberately NO
+// Opus and NO heavyweight reasoning models, to keep the cost floor predictable). Prices
+// are USD list prices per 1M tokens and live HERE so a change is a one-line edit; the
+// admin panel can override this whole map via SystemSettings.models (the same Map-override
+// pattern as creditCosts). `exposed` gates whether a model is offered in the picker — the
+// server enforces it, never the client.
+//
+// NOTE: claude-sonnet-5 intro pricing ($2 / $10 per 1M) ends 2026-08-31 → then $3 / $15.
+// When that lands, edit the two numbers on the claude-sonnet-5 row below (or override via
+// SystemSettings.models) — nothing else depends on the literal.
+const DEFAULT_MODELS = Object.freeze({
+  // LIGHT — cheap; the default tier. "Unlimited text AI on paid plans" applies to THESE.
+  // Only gpt-4o-mini is EXPOSED (surfaced as "Standard"); the rest stay in the registry as
+  // admin/cost options (exposed:false) so an admin can swap the Standard model without code.
+  "deepseek-v4-flash": {
+    provider: "deepseek",
+    apiModel: "deepseek-chat",
+    tier: "light",
+    inUsdPer1M: 0.14,
+    outUsdPer1M: 0.28,
+    exposed: false,
+  },
+  "gpt-4o-mini": {
+    provider: "openai",
+    apiModel: "gpt-4o-mini",
+    tier: "light",
+    inUsdPer1M: 0.15,
+    outUsdPer1M: 0.6,
+    exposed: true,
+  },
+  "gpt-5-mini": {
+    provider: "openai",
+    apiModel: "gpt-5-mini",
+    tier: "light",
+    inUsdPer1M: 0.25,
+    outUsdPer1M: 2.0,
+    exposed: false,
+  },
+  "kimi-k2.5": {
+    provider: "moonshot",
+    apiModel: "kimi-k2.5",
+    tier: "light",
+    inUsdPer1M: 0.44,
+    outUsdPer1M: 2.0,
+    exposed: false,
+  },
+  // FLAGSHIP — Sonnet-class ceiling; ALWAYS meters credits, even on paid plans (an
+  // unlimited Sonnet would be a cost blow-out). EXPOSED (surfaced as "Pro"): claude-sonnet-5
+  // + gpt-5. gpt-4o + gemini-3.5-flash stay in the registry as admin/cost options.
+  "gpt-5": {
+    provider: "openai",
+    apiModel: "gpt-5.6-luna", // GPT-5.6 Luna — newest + cheapest, still Sonnet-class
+    tier: "flagship",
+    inUsdPer1M: 1.0,
+    outUsdPer1M: 6.0,
+    exposed: true,
+  },
+  "gemini-3.5-flash": {
+    provider: "gemini",
+    apiModel: "gemini-3.5-flash",
+    tier: "flagship",
+    inUsdPer1M: 1.5,
+    outUsdPer1M: 9.0,
+    exposed: false,
+  },
+  "claude-sonnet-5": {
+    provider: "anthropic",
+    apiModel: "claude-sonnet-5",
+    tier: "flagship",
+    inUsdPer1M: 2.0,
+    outUsdPer1M: 10.0,
+    exposed: true,
+  },
+  "gpt-4o": {
+    provider: "openai",
+    apiModel: "gpt-4o",
+    tier: "flagship",
+    inUsdPer1M: 2.5,
+    outUsdPer1M: 10.0,
+    exposed: false,
+  },
+});
+
+// The out-of-the-box model. LIGHT, and its provider is OpenAI — the key that is already
+// required for all text AI — so the default works with zero new keys, and the missing-key
+// fallback (→ DEFAULT_MODEL's provider) is always satisfiable.
+const DEFAULT_MODEL = "gpt-4o-mini";
+
+// Valid tiers, in ascending cost. Exported so the cost resolver + gating share one list.
+const MODEL_TIERS = ["light", "flagship"];
+
+// Resolve a model row from a (possibly admin-overridden) models map, defaulting to the
+// DEFAULT_MODEL row for an unknown id so callers always get a usable provider/apiModel.
+const modelFrom = (models, id) =>
+  (models && models[id]) || (models && models[DEFAULT_MODEL]) || DEFAULT_MODELS[DEFAULT_MODEL];
+
+// The tier of a model id (light|flagship), defaulting to 'light' for an unknown id — the
+// cheaper, safer assumption for cost/gating.
+const tierOfModel = (models, id) => {
+  const row = models && models[id];
+  return row && MODEL_TIERS.includes(row.tier) ? row.tier : "light";
+};
+
 // FX used to convert the USD token estimate to NGN. Matches the rate implied by
 // the per-minute live calibration above (~₦45/min mini at $0.29/10min ≈ 1550).
 const NGN_PER_USD = 1550;
@@ -221,4 +326,10 @@ module.exports = {
   NGN_PER_USD,
   priceForModel,
   getItem,
+  // Model registry (Aria chat/tailoring model selection)
+  DEFAULT_MODELS,
+  DEFAULT_MODEL,
+  MODEL_TIERS,
+  modelFrom,
+  tierOfModel,
 };

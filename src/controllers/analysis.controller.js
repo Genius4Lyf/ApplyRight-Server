@@ -1908,4 +1908,10 @@ module.exports = {
   preflightMetrics,
   editApplication,
   buildInterviewCandidateContext,
+  // Exported so Aria Studio serializes a CV for analysis exactly the way the
+  // analysis pipeline does, and charges on exactly the same discipline
+  // (check before the AI, deduct only after it succeeds). Not route handlers.
+  buildMarkdownFromDraft,
+  checkCredits,
+  deductCredits,
 };

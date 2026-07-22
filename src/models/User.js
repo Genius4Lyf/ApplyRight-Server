@@ -36,6 +36,14 @@ const userSchema = new mongoose.Schema(
       enum: ["free", "plus", "pro"],
       default: "free",
     },
+    // The user's DEFAULT model for Aria's chat / tailoring (config/catalog DEFAULT_MODELS
+    // id). A per-session choice (DraftCV.studioModelId) overrides it; the resolver picks
+    // session → this → DEFAULT_MODEL. Kept as a plain id (no enum) so the admin can add
+    // models without a migration. Default null → the resolver falls back to DEFAULT_MODEL.
+    aiModelId: {
+      type: String,
+      default: null,
+    },
     // Time-boxed entitlement from a one-time Flutterwave purchase. `tier` (above)
     // is kept in sync on grant so requireTier keeps working; THIS subdoc is the
     // source of truth for expiry (effective tier is computed lazily on read —

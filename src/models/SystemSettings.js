@@ -19,6 +19,32 @@ const systemSettingsSchema = new mongoose.Schema(
       of: Number,
       default: {},
     },
+    // FLAGSHIP-tier per-action credit-cost overrides. Same empty-default Map pattern as
+    // `creditCosts` (the LIGHT tier). Keys are the canonical action names; the resolver
+    // (settings.getCreditCostsForTier('flagship')) layers these over the light costs +
+    // the DEFAULT_FLAGSHIP_CREDIT_COSTS deltas, so an unset action inherits the light cost.
+    flagshipCreditCosts: {
+      type: Map,
+      of: Number,
+      default: {},
+    },
+    // Admin-editable overrides for the AI model registry (config/catalog.js DEFAULT_MODELS).
+    // Keys are model ids; each value is a partial row ({ tier, exposed, inUsdPer1M, ... })
+    // merged over the default row — so an admin can flip a model's `exposed`, retune a
+    // price, or add a model without a deploy. Starts EMPTY (pure defaults). Mixed, because
+    // rows are objects (a Map of Number can't hold them).
+    models: {
+      type: Map,
+      of: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+    // Optional daily FLAGSHIP allowance for paid plans (free flagship actions/day before
+    // credits are charged). Default 0 = off — flagship always meters, per the locked
+    // decision. Admin can raise it to grant a taste without an unlimited-Sonnet blow-out.
+    flagshipDailyAllowance: {
+      type: Number,
+      default: 0,
+    },
     features: {
       maintenanceMode: { type: Boolean, default: false },
       enablePdfGeneration: { type: Boolean, default: true },

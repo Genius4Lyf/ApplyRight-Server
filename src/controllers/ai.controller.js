@@ -8,6 +8,7 @@ const Resume = require("../models/Resume");
 const Job = require("../models/Job");
 const subscription = require("../services/subscription.service");
 const settingsService = require("../services/settings.service");
+const modelSelection = require("../services/modelSelection.service");
 
 // @desc    Generate optimized CV and Cover Letter
 // @route   POST /api/ai/generate
@@ -432,9 +433,8 @@ const generateSkills = async (req, res) => {
   const { education, experience, projects, targetJob, draftId } = req.body;
 
   try {
-    const SKILLS_COST = (await settingsService.getCreditCosts()).GENERATE_SKILLS;
     const user = await require("../models/User").findById(req.user.id);
-    // Paid tiers get the richer output (STAR talking points) and skip the charge.
+    // Paid tiers get the richer output (STAR talking points). Charging is tier-aware below.
     const isPaid = subscription.isPaidActive(user);
 
     // Load the draft (when saved) so the generation can be cached against the
@@ -445,6 +445,18 @@ const generateSkills = async (req, res) => {
       const found = await require("../models/DraftCV").findById(draftId);
       if (found && found.userId.toString() === req.user.id) draft = found;
     }
+
+    // Resolve + gate the session model, priced by tier (flagship skills cost more).
+    const {
+      modelId,
+      tier,
+      cost: SKILLS_COST,
+    } = await modelSelection.resolveForAction({
+      action: "GENERATE_SKILLS",
+      sessionModelId: req.body?.model,
+      draft,
+      user,
+    });
 
     // Hash of everything the generation depends on (whitespace/case-insensitive
     // on the JD so trivial edits don't bust the cache).
@@ -474,8 +486,10 @@ const generateSkills = async (req, res) => {
       });
     }
 
-    // Verify credits before spending the AI call (free users only; paid skip).
-    if (!isPaid && subscription.availableCredits(user) < SKILLS_COST) {
+    // Verify credits before spending the AI call — only when it will actually meter
+    // (a paid LIGHT skills gen is free/unlimited; flagship always meters).
+    const willMeter = tier === "flagship" || !isPaid;
+    if (willMeter && subscription.availableCredits(user) < SKILLS_COST) {
       return res.status(403).json({
         message: "Insufficient credits",
         code: "INSUFFICIENT_CREDITS",
@@ -490,7 +504,8 @@ const generateSkills = async (req, res) => {
       projects || [],
       targetJob || "",
       isPaid,
-      { model: resolveTextModel(req.user) }
+      // Route through the selected model (multi-provider dispatcher).
+      { modelId, meta: { userId: req.user.id, operation: "generateSkills" } }
     );
 
     // Deterministic best-for-role set (prefers cached richer JD keywords).
@@ -501,9 +516,9 @@ const generateSkills = async (req, res) => {
       aiKeywords: draft?.targetJob?.aiKeywords || [],
     });
 
-    // Charge (or skip for an active paid tier) BEFORE caching, so a failed charge
-    // never leaves a cached result the user can re-fetch for free.
-    const charge = await subscription.chargeOrSkip(user, SKILLS_COST, {
+    // Charge BEFORE caching, so a failed charge never leaves a cached result the user can
+    // re-fetch for free. Tier-aware: flagship always meters; light is free on a paid plan.
+    const charge = await modelSelection.chargeForModel(user, SKILLS_COST, tier, {
       type: "generate_skills",
       description: "Aria skills",
     });

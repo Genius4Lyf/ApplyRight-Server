@@ -505,6 +505,15 @@ const getConfig = async (req, res) => {
     // Resolved per-action credit costs (real defaults + any admin overrides) so
     // the frontend can run accurate preflight checks. See lib/credits.js.
     const creditCosts = await SettingsService.getCreditCosts();
+    // Flagship-tier costs + the exposed model list, so the model picker can show each
+    // model's per-message credit cost. Only EXPOSED models are surfaced (the picker never
+    // learns about hidden ones); the DEFAULT_MODEL id is included so the UI can pre-select.
+    const flagshipCreditCosts = await SettingsService.getCreditCostsForTier("flagship");
+    const allModels = await SettingsService.getModels();
+    const { DEFAULT_MODEL } = require("../config/catalog");
+    const models = Object.entries(allModels)
+      .filter(([, row]) => row && row.exposed === true)
+      .map(([id, row]) => ({ id, tier: row.tier, provider: row.provider }));
     res.status(200).json({
       features: {
         maintenanceMode: settings.features.maintenanceMode,
@@ -513,6 +522,8 @@ const getConfig = async (req, res) => {
       },
       credits: settings.credits,
       creditCosts,
+      // Model selection (Aria chat/tailoring): the two-tier cost tables + exposed models.
+      aiModels: { models, defaultModel: DEFAULT_MODEL, flagshipCreditCosts },
       announcement: settings.announcement,
     });
   } catch (err) {
