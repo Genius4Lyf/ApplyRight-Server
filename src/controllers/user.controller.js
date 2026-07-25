@@ -39,6 +39,7 @@ exports.updateProfile = async (req, res) => {
       skills,
       onboardingCompleted,
       settings,
+      interfaceLang,
     } = req.body;
 
     // Build update object
@@ -56,6 +57,9 @@ exports.updateProfile = async (req, res) => {
     if (skills) updateFields.skills = skills;
     if (typeof onboardingCompleted !== "undefined")
       updateFields.onboardingCompleted = onboardingCompleted;
+    // App language — validated against the schema enum so a bad value is ignored
+    // rather than failing the whole profile save.
+    if (["en", "fr"].includes(interfaceLang)) updateFields.interfaceLang = interfaceLang;
 
     // Handle nested settings using dot notation to avoid overwriting other settings
     if (settings) {

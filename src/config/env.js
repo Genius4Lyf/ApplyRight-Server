@@ -16,9 +16,14 @@ const envSchema = z.object({
   GEMINI_API_KEY: z.string().optional(),
   AI_PROVIDER: z.enum(["openai", "gemini"]).default("gemini"),
   // Realtime (live voice) interview — OpenAI Realtime API over WebRTC.
-  REALTIME_MODEL: z.string().default("gpt-realtime-mini"), // mini = ~3-4x cheaper; use "gpt-realtime" for premium tier
+  REALTIME_MODEL: z.string().default("gpt-realtime-2.1-mini"), // mini = ~3-4x cheaper; use "gpt-realtime-2.1" for premium tier
   REALTIME_VOICE: z.string().default("marin"), // realtime voices: marin / cedar / alloy
   REALTIME_MAX_SESSION_SEC: z.coerce.number().int().positive().default(360), // cost guardrail
+  // Turn-taking sensitivity. "low" = wait longest before deciding the candidate has
+  // finished (interrupting an interviewee is worse than a beat of silence). Set to
+  // the literal "server_vad" to force the silence-based fallback.
+  REALTIME_VAD_EAGERNESS: z.string().default("low"), // low | medium | high | auto | server_vad
+  REALTIME_VAD_SILENCE_MS: z.coerce.number().int().positive().default(1800), // server_vad fallback only
   REALTIME_GRACE_SEC: z.coerce.number().int().nonnegative().default(90), // wind-down window after time-up for the closing ("any questions for me?")
   REALTIME_SPEED: z.coerce.number().positive().optional(), // optional voice speed, e.g. 1.1 (snappier)
   REALTIME_RETENTION_RATIO: z.coerce.number().positive().max(1).default(0.8), // <1.0 prunes old turns to cap per-turn input cost

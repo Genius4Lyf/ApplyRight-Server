@@ -109,6 +109,57 @@ describe("Auth API (Mocked DB)", () => {
       expect(User.create).toHaveBeenCalledWith(expect.objectContaining({ role: "agent" }));
       expect(res.body).toHaveProperty("role", "agent");
     });
+
+    // ── Signup language (P2) ──
+    it("persists the interfaceLang chosen at signup", async () => {
+      await request(app).post("/api/auth/register").send({
+        email: "fr@example.com",
+        password: "Password123",
+        phone: "+12025550133",
+        interfaceLang: "fr",
+      });
+
+      expect(User.create).toHaveBeenCalledWith(expect.objectContaining({ interfaceLang: "fr" }));
+    });
+
+    it("ignores an unsupported interfaceLang instead of failing the signup", async () => {
+      const res = await request(app).post("/api/auth/register").send({
+        email: "de@example.com",
+        password: "Password123",
+        phone: "+12025550144",
+        interfaceLang: "de",
+      });
+
+      expect(res.statusCode).toEqual(201);
+      // Falls back to the request language, which defaults to "en" with no header.
+      expect(User.create).toHaveBeenCalledWith(expect.objectContaining({ interfaceLang: "en" }));
+    });
+
+    it("falls back to the X-App-Language header when no picker value is sent", async () => {
+      await request(app)
+        .post("/api/auth/register")
+        .set("X-App-Language", "fr-CI")
+        .send({
+          email: "ci@example.com",
+          password: "Password123",
+          phone: "+12025550155",
+        });
+
+      expect(User.create).toHaveBeenCalledWith(expect.objectContaining({ interfaceLang: "fr" }));
+    });
+
+    it("echoes interfaceLang back so the client can seed its language", async () => {
+      User.create.mockResolvedValue({ ...mockUser, interfaceLang: "fr" });
+
+      const res = await request(app).post("/api/auth/register").send({
+        email: "echo@example.com",
+        password: "Password123",
+        phone: "+12025550166",
+        interfaceLang: "fr",
+      });
+
+      expect(res.body).toHaveProperty("interfaceLang", "fr");
+    });
   });
 
   describe("POST /api/auth/login", () => {

@@ -36,7 +36,6 @@ const buildCheckout = async ({ user, item, txRef, redirectUrl, currency = "NGN" 
     redirect_url: redirectUrl,
     customer: {
       email: user.email,
-      phonenumber: user.phone || undefined,
       name: [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email,
     },
     customizations: {

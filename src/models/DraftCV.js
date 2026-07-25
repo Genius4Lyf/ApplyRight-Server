@@ -354,6 +354,16 @@ const draftCVSchema = new mongoose.Schema(
     // navigation, refresh, and other devices. { [stepId]: [{ who, text }] }. Session
     // flags (skip choice, always-allow, target ack) stay in the frontend coachState.
     coachChats: { type: mongoose.Schema.Types.Mixed, default: {} },
+    // The language this CV DOCUMENT is written in — distinct from the user's
+    // interface language (User.interfaceLang). Aria can coach in English while
+    // writing a French CV; that split is the point.
+    // null = "not set" → falls back to the request language (req.lang). Existing
+    // CVs are deliberately NOT backfilled, so they keep behaving exactly as before.
+    outputLang: {
+      type: String,
+      enum: ["en", "fr"],
+      default: null,
+    },
     isComplete: {
       type: Boolean,
       default: false,

@@ -38,6 +38,44 @@ const buildTruncation = () => {
   };
 };
 
+// TURN DETECTION — ONE definition, shared by both session shapes below, so the
+// two call sites can never drift apart.
+//
+// We use semantic_vad, which decides the candidate has finished from the WORDS
+// they spoke rather than from raw silence. The old server_vad config ended a turn
+// after 600ms of quiet, which cut people off mid-thought: a normal thinking pause
+// is 1-2s and a nervous first-time interviewee pauses far longer. In an interview,
+// being interrupted is much worse than a beat of dead air, so eagerness defaults
+// to "low" (wait longest before deciding they're done).
+//
+// REALTIME_VAD_EAGERNESS tunes this live without a deploy: "low" | "medium" |
+// "high" | "auto", or the literal "server_vad" to force the silence-based
+// fallback below.
+const VAD_EAGERNESS = ["low", "medium", "high", "auto"];
+
+const buildTurnDetection = () => {
+  const want = String(process.env.REALTIME_VAD_EAGERNESS || "low").trim().toLowerCase();
+  if (want === "server_vad") return buildServerVadFallback();
+  return {
+    type: "semantic_vad",
+    eagerness: VAD_EAGERNESS.includes(want) ? want : "low",
+  };
+};
+
+// Silence-based fallback, used only if semantic_vad is rejected for this session
+// type (or forced via env). Deliberately NOT the old 600ms — that is the bug we
+// are fixing. ~1.8s tolerates a normal thinking pause; tune via
+// REALTIME_VAD_SILENCE_MS.
+function buildServerVadFallback() {
+  const ms = Number(process.env.REALTIME_VAD_SILENCE_MS);
+  return {
+    type: "server_vad",
+    threshold: 0.5,
+    prefix_padding_ms: 300,
+    silence_duration_ms: Number.isFinite(ms) && ms > 0 ? Math.round(ms) : 1800,
+  };
+}
+
 // Tool a panel interviewer calls the moment they've finished their portion, so
 // the CLIENT can hand the floor to the next interviewer's (already pre-connected)
 // voice seamlessly — instead of cutting on a stopwatch. Only attached for
@@ -75,7 +113,7 @@ const buildSessionConfig = (
   instructions,
   model,
   voice,
-  { enableHandoff = false, enableSpeakerTool = false } = {}
+  { enableHandoff = false, enableSpeakerTool = false, turnDetection } = {}
 ) => {
   // Optional voice playback speed (e.g. 1.1 for a snappier, less-draggy delivery).
   // Only included when REALTIME_SPEED is set, so we never risk a 400 by default.
@@ -93,12 +131,9 @@ const buildSessionConfig = (
         // Transcribe the candidate's speech so the client can collect a transcript
         // for end-of-interview AI grading (audio never reaches our backend).
         transcription: { model: "whisper-1" },
-        turn_detection: {
-          type: "server_vad",
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 600,
-        },
+        // Verified against the gpt-realtime-2.1 session schema: turn_detection
+        // belongs HERE, under session.audio.input — not at the top level.
+        turn_detection: turnDetection || buildTurnDetection(),
       },
       output,
     },
@@ -120,7 +155,7 @@ const buildLegacySessionConfig = (
   instructions,
   model,
   voice,
-  { enableHandoff = false, enableSpeakerTool = false } = {}
+  { enableHandoff = false, enableSpeakerTool = false, turnDetection } = {}
 ) => {
   const cfg = {
     model,
@@ -128,7 +163,10 @@ const buildLegacySessionConfig = (
     instructions,
     modalities: ["audio", "text"],
     input_audio_transcription: { model: "whisper-1" },
-    turn_detection: { type: "server_vad" },
+    // Same turn_detection definition as the nested shape (flat placement is the
+    // only difference). Previously this was a bare, untuned `server_vad` that
+    // silently disagreed with the tuned block above.
+    turn_detection: turnDetection || buildTurnDetection(),
   };
   const tools = [];
   if (enableHandoff) tools.push(HANDOFF_TOOL);
@@ -164,10 +202,11 @@ const mintRealtimeSession = async ({
   if (!key) throw new RealtimeUnavailableError("OPENAI_REALTIME_API_KEY not configured");
 
   // Caller (the tier-aware controller) may override the model per user. Default to
-  // the mini speech2speech model: ~3-4x cheaper than full gpt-realtime with
+  // the mini speech2speech model: ~3-4x cheaper than full gpt-realtime-2.1 with
   // negligible quality loss for a practice mock. Premium (pro) tier passes the
-  // full "gpt-realtime" for its sharper interviewer.
-  const model = modelOverride || process.env.REALTIME_MODEL || "gpt-realtime-mini";
+  // full "gpt-realtime-2.1" for its sharper interviewer. (The pre-2.1 names
+  // gpt-realtime / gpt-realtime-mini were deprecated 2026-07-20, removed 2027-01-20.)
+  const model = modelOverride || process.env.REALTIME_MODEL || "gpt-realtime-2.1-mini";
   const voice = ALLOWED_VOICES.includes(requestedVoice)
     ? requestedVoice
     : process.env.REALTIME_VOICE || "marin";
@@ -184,26 +223,51 @@ const mintRealtimeSession = async ({
 
   const post = (body) => axios.post(CLIENT_SECRETS_URL, body, { headers, timeout: 15000 });
 
+  const turnDetection = buildTurnDetection();
+  const opts = { enableHandoff, enableSpeakerTool, turnDetection };
+
+  // Attempt order on a 400. The middle step matters: without it, a session where
+  // semantic_vad is rejected would fall straight through to the LEGACY flat shape,
+  // silently losing truncation AND landing on an untuned VAD — the exact failure
+  // that looks identical to success from the outside.
+  //   1. nested shape + semantic_vad          (what we want)
+  //   2. nested shape + tuned server_vad      (semantic_vad not accepted here)
+  //   3. legacy flat shape + tuned server_vad (schema drift)
+  const serverVad = buildServerVadFallback();
+  const attempts = [
+    { label: "nested/semantic_vad", body: buildSessionConfig(instructions, model, voice, opts) },
+  ];
+  if (turnDetection.type === "semantic_vad") {
+    attempts.push({
+      label: "nested/server_vad",
+      body: buildSessionConfig(instructions, model, voice, { ...opts, turnDetection: serverVad }),
+    });
+  }
+  attempts.push({
+    label: "legacy/server_vad",
+    body: buildLegacySessionConfig(instructions, model, voice, {
+      ...opts,
+      turnDetection: serverVad,
+    }),
+  });
+
   let data;
-  try {
-    const res = await post(
-      buildSessionConfig(instructions, model, voice, { enableHandoff, enableSpeakerTool })
-    );
-    data = res.data;
-  } catch (err) {
-    // One-shot fallback to the legacy flat shape on a 400 (schema drift).
-    if (err.response?.status === 400) {
-      try {
-        const res = await post(
-          buildLegacySessionConfig(instructions, model, voice, { enableHandoff, enableSpeakerTool })
-        );
-        data = res.data;
-      } catch {
+  let usedVad = turnDetection.type;
+  for (let i = 0; i < attempts.length; i += 1) {
+    try {
+      const res = await post(attempts[i].body);
+      data = res.data;
+      usedVad = attempts[i].label;
+      break;
+    } catch (err) {
+      const isLast = i === attempts.length - 1;
+      // Only a 400 (schema rejection) is worth retrying with a different shape.
+      if (isLast || err.response?.status !== 400) {
+        // Do NOT surface the OpenAI error body — it can echo request data.
         throw new RealtimeUnavailableError("Failed to create realtime session");
       }
-    } else {
-      // Do NOT surface the OpenAI error body — it can echo request data.
-      throw new RealtimeUnavailableError("Failed to create realtime session");
+      // Safe to log: a shape label, no request/response content.
+      console.warn(`[Realtime] session shape rejected (${attempts[i].label}) — retrying`);
     }
   }
 
@@ -214,9 +278,14 @@ const mintRealtimeSession = async ({
   if (!clientSecret) throw new RealtimeUnavailableError("No client secret returned");
 
   // Safe to log: no secret material.
-  console.log(`[Realtime] session minted (model=${model}, voice=${voice})`);
+  console.log(`[Realtime] session minted (model=${model}, voice=${voice}, vad=${usedVad})`);
 
   return { clientSecret, expiresAt, model, voice, maxSessionSec };
 };
 
-module.exports = { mintRealtimeSession, RealtimeUnavailableError, ALLOWED_VOICES };
+module.exports = {
+  mintRealtimeSession,
+  RealtimeUnavailableError,
+  ALLOWED_VOICES,
+  buildTurnDetection,
+};

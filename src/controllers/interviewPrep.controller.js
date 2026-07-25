@@ -317,6 +317,9 @@ const deriveSkillsFromDraft = (draftSkills) =>
 exports.getOne = async (req, res) => {
   try {
     const { applicationId: id } = req.params;
+    // Lazily required, matching the rest of this controller (avoids a circular
+    // import at module load).
+    const { inferCareerStage } = require("../services/ai.service");
 
     const application = await Application.findById(id)
       .populate("jobId", "title company description")
@@ -329,9 +332,16 @@ exports.getOne = async (req, res) => {
       let skillsWithEvidence = Array.isArray(prep.skillsWithEvidence)
         ? prep.skillsWithEvidence
         : [];
-      if (skillsWithEvidence.length === 0 && application.draftCVId) {
-        const draft = await DraftCV.findById(application.draftCVId).select("skills").lean();
-        if (draft) skillsWithEvidence = deriveSkillsFromDraft(draft.skills);
+      // Also used for the pre-call brief's career stage, so fetch experience with
+      // the skills rather than adding a second read.
+      let linkedDraft = null;
+      if (application.draftCVId) {
+        linkedDraft = await DraftCV.findById(application.draftCVId)
+          .select("skills experience")
+          .lean();
+      }
+      if (skillsWithEvidence.length === 0 && linkedDraft) {
+        skillsWithEvidence = deriveSkillsFromDraft(linkedDraft.skills);
       }
       return res.json({
         application: {
@@ -340,6 +350,19 @@ exports.getOne = async (req, res) => {
           // Support-granted loop override (read from the user) so the UI can show
           // all interviewers unlocked.
           unlockAllInterviewers: !!req.user.unlockAllInterviewers,
+          // Career stage for the pre-call brief's "what counts as evidence" section.
+          // Reuses the SAME inference the CV coach uses (any real job → experienced,
+          // else grad) so the two can't drift. No AI call — it's CV shape only.
+          careerStage: inferCareerStage(linkedDraft),
+          // Which archetype this role selects, so the pre-call brief can say what
+          // kind of interview it will be instead of guessing from the style
+          // picker. Deterministic lookup, no AI call. Null (omitted) for an
+          // unrecognised role family — the brief falls back to its generic copy.
+          archetype:
+            require("../services/interviewArchetypes.service").selectArchetype({
+              role: prep.panel?.seats?.[0]?.role || application.jobTitle || application.jobId?.title || "",
+              stage: inferCareerStage(linkedDraft),
+            })?.key || "",
           interviewPrep: {
             ...prep,
             skillsWithEvidence,
@@ -366,6 +389,7 @@ exports.getOne = async (req, res) => {
       jobCompany: "",
       draftCVId: draft._id,
       unlockAllInterviewers: !!req.user.unlockAllInterviewers,
+      careerStage: inferCareerStage(draft),
       interviewPrep: { ...prep, skillsWithEvidence, userNotes: normalizeNotes(prep.userNotes) },
     };
     return res.json({ application: draftAsApplication });
@@ -975,6 +999,7 @@ exports.gradeAnswer = async (req, res) => {
     const candidateContext = await buildInterviewCandidateContext(application, {
       userId: req.user.id,
       applicationId: application._id,
+      lang: req.lang,
     });
 
     const aiResult = await aiService.gradeInterviewAnswer(
@@ -983,7 +1008,7 @@ exports.gradeAnswer = async (req, res) => {
       suggestedAnswer,
       jobDescription,
       candidateContext,
-      { userId: req.user.id, applicationId: application._id }
+      { userId: req.user.id, applicationId: application._id, lang: req.lang }
     );
 
     // Charge (or skip for paid). chargeOrSkip does the atomic balance-guarded
@@ -1091,7 +1116,7 @@ exports.generateFollowUp = async (req, res) => {
         jobTitle: application.jobTitle || application.jobId?.title || "",
         company: application.jobCompany || application.jobId?.company || "",
       },
-      { userId: req.user.id, applicationId: application._id }
+      { userId: req.user.id, applicationId: application._id, lang: req.lang }
     );
 
     if (!aiResult.followUp) {
@@ -1150,6 +1175,7 @@ exports.conversationTurn = async (req, res) => {
     const candidateContext = await buildInterviewCandidateContext(application, {
       userId: req.user.id,
       applicationId: application._id,
+      lang: req.lang,
     });
     const jobDescription = application.jobId?.description || application.jobTitle || "";
 
@@ -1158,13 +1184,27 @@ exports.conversationTurn = async (req, res) => {
     //   User.updateOne({ _id, credits: { $gte: COST } }, { $inc: { credits: -COST } })
     // followed by Transaction.create({ ..., type: "usage" }). Free during testing.
 
+    // ARCHETYPE + VARIATION for the TYPED engine — the same machinery the live
+    // room uses. Planned ONCE, on the greeting turn, and read back on every turn
+    // after it: re-planning per turn would drift mid-interview. Typed sessions
+    // therefore appear in sessionHistory and vary across runs exactly like live
+    // ones. No AI call — selection is a regex plus a lookup on cached data.
+    const typedPhase = phase === "answer" ? "answer" : "greeting";
+    const sessionArchetype = await selectArchetypeFor(application);
+    if (typedPhase === "greeting") {
+      await planAndPersistVariation(application, sessionArchetype);
+    }
+
     const result = await aiService.conversationTurn(
       {
         questionSpine: Array.isArray(questionSpine) ? questionSpine : [],
         spineIndex: Number.isInteger(spineIndex) ? spineIndex : 0,
         transcript: Array.isArray(transcript) ? transcript : [],
         lastAnswer: typeof lastAnswer === "string" ? lastAnswer : "",
-        phase: phase === "answer" ? "answer" : "greeting",
+        phase: typedPhase,
+        candidateName: typeof req.body?.candidateName === "string" ? req.body.candidateName.slice(0, 40) : "",
+        archetype: sessionArchetype,
+        variation: variationFromPending(application),
       },
       candidateContext,
       {
@@ -1172,7 +1212,7 @@ exports.conversationTurn = async (req, res) => {
         company: application.jobCompany || application.jobId?.company || "",
         jobDescription,
       },
-      { userId: req.user.id, applicationId: application._id }
+      { userId: req.user.id, applicationId: application._id, lang: req.lang }
     );
 
     res.status(200).json(result);
@@ -1273,6 +1313,106 @@ const panelInputsFromApplication = (application) => {
 };
 
 /**
+ * Decide (and persist) this interview's variation plan. No AI call — the pool is
+ * sampled from data already computed and cached (fit analysis, panel seats,
+ * skills, the linked CV's JD keywords), built once per role and reused.
+ *
+ * Persisted as `pendingSession` because a multi-voice panel mints one realtime
+ * session per SEAT for a single interview: seat 0 plans, later seats read it back
+ * so the whole panel steers the same way. Also read at grading time to write the
+ * history entry.
+ */
+/**
+ * archetype = f(role family, career stage), both from cached data. Returns null
+ * for an unrecognised role family (or a stage we can't read) so the caller falls
+ * back to today's generic interview — an odd job title must never break a room.
+ */
+const selectArchetypeFor = async (application, roleOverride = "") => {
+  const archetypes = require("../services/interviewArchetypes.service");
+  const { inferCareerStage } = require("../services/ai.service");
+  const role =
+    roleOverride ||
+    application.jobTitle ||
+    application.jobId?.title ||
+    "";
+  let stage = "experienced";
+  if (application.draftCVId) {
+    const d = await DraftCV.findById(application.draftCVId).select("experience").lean();
+    stage = inferCareerStage(d);
+  }
+  return archetypes.selectArchetype({ role, stage });
+};
+
+const planAndPersistVariation = async (application, archetype = null) => {
+  const variation = require("../services/interviewVariation.service");
+  const prep = application.interviewPrep || {};
+
+  // Pool: build once per role, then reuse (it only changes if the JD does).
+  let pool = Array.isArray(prep.competencyPool?.items) ? prep.competencyPool.items : [];
+  if (!pool.length) {
+    const draft = application.draftCVId
+      ? await DraftCV.findById(application.draftCVId).select("targetJob.aiKeywords").lean()
+      : null;
+    pool = variation.buildCompetencyPool({ application, draft });
+    if (pool.length) {
+      application.interviewPrep = application.interviewPrep || {};
+      application.interviewPrep.competencyPool = { items: pool, builtAt: new Date() };
+      application.markModified("interviewPrep.competencyPool");
+    }
+  }
+
+  const plan = variation.planSession({
+    pool,
+    history: prep.sessionHistory || [],
+    archetype,
+  });
+
+  application.interviewPrep = application.interviewPrep || {};
+  application.interviewPrep.pendingSession = {
+    startedAt: new Date(),
+    openerStrategy: plan.openerStrategy,
+    competencies: plan.sampledCompetencies,
+    // Recorded so the DEBRIEF grades against the same archetype the room ran —
+    // otherwise a fair room can still be followed by an unfair scorecard.
+    archetypeKey: archetype?.key || "",
+    careerStage: archetype?.stage || "",
+  };
+  application.markModified("interviewPrep.pendingSession");
+  try {
+    await application.save();
+  } catch {
+    // Variation is a nice-to-have: never fail a paid session over it. The plan
+    // still applies to THIS interview; it just won't be remembered.
+  }
+  return plan;
+};
+
+/**
+ * Read back the archetype seat 0 already selected — so every seat of a panel, and
+ * the debrief afterwards, run the same one.
+ */
+const archetypeFromPending = (application) => {
+  const archetypes = require("../services/interviewArchetypes.service");
+  const pending = application.interviewPrep?.pendingSession;
+  if (!pending?.archetypeKey) return null;
+  return archetypes.getArchetype(pending.archetypeKey, pending.careerStage);
+};
+
+/** Read back the plan a multi-voice panel's seat 0 already decided. */
+const variationFromPending = (application) => {
+  const variation = require("../services/interviewVariation.service");
+  const pending = application.interviewPrep?.pendingSession;
+  if (!pending?.openerStrategy) return null;
+  const strat = variation.OPENER_STRATEGIES[pending.openerStrategy];
+  return {
+    openerStrategy: pending.openerStrategy,
+    openerIntent: strat ? strat.intent : "",
+    sampledCompetencies: Array.isArray(pending.competencies) ? pending.competencies : [],
+    previouslyCovered: [],
+  };
+};
+
+/**
  * GET /:applicationId/panel — the "who's likely to interview you" preview.
  * PAID tiers get the real 3-person panel (HR + 2 JD-derived seats), generated +
  * cached. FREE tier gets a GENERIC teaser (no AI call, no cost) so the prep
@@ -1307,6 +1447,7 @@ exports.getInterviewPanel = async (req, res) => {
     const seats = await loadOrGeneratePanel(application, jobMeta, fit, style, {
       userId: req.user.id,
       applicationId: application._id,
+      lang: req.lang,
     });
     res.status(200).json({ panel: seats, style, teaser: false });
   } catch (error) {
@@ -1343,6 +1484,7 @@ exports.createRealtimeSession = async (req, res) => {
     const candidateContext = await buildInterviewCandidateContext(application, {
       userId: req.user.id,
       applicationId: application._id,
+      lang: req.lang,
     });
     // Is this interview grounded in the candidate's CV? (Has real experience or a
     // summary to reference.) When false, the interviewer can't reference their
@@ -1498,13 +1640,32 @@ exports.createRealtimeSession = async (req, res) => {
       panelSeats = await loadOrGeneratePanel(application, jobMeta, fit, safeStyle, {
         userId: req.user.id,
         applicationId: application._id,
+        lang: req.lang,
       });
     }
+
+    const seatIdx = Number(interviewerSeatIndex);
+
+    // ---- ARCHETYPE + VARIATION PLAN (no AI call) ----
+    // Both decided ONCE per interview, here at mint, AFTER the panel is known so
+    // the archetype keys off the ROLE that will actually run the round: the chosen
+    // seat for pick-a-role, else the panel lead, else the job title. Unrecognised
+    // role family → null → today's generic interview, never a broken one.
+    //
+    // A multi-voice panel mints several realtime sessions for ONE interview, so
+    // later seats read this plan back off the record instead of re-planning and
+    // drifting from seat 0. First-ever session: empty history → no "previously
+    // covered" text at all.
+    const archetypeRole =
+      (Number.isInteger(seatIdx) && seatIdx >= 0 && panelSeats[seatIdx]?.role) ||
+      panelSeats[0]?.role ||
+      "";
+    const sessionArchetype = await selectArchetypeFor(application, archetypeRole);
+    const variationPlan = await planAndPersistVariation(application, sessionArchetype);
 
     // PICK-A-ROLE (paid): the candidate chose ONE roster interviewer to run this
     // round 1:1, in that interviewer's own voice. A focused single session — no
     // panel, no segments, no tools. This is the unit of the interview "loop".
-    const seatIdx = Number(interviewerSeatIndex);
     if (
       panelMode !== "solo" &&
       Number.isInteger(seatIdx) &&
@@ -1525,6 +1686,9 @@ exports.createRealtimeSession = async (req, res) => {
           style: safeStyle,
           challenge: safeChallenge,
           interviewer: { name: chosen.name, role: chosen.role, focus: chosen.focus },
+          lang: req.lang,
+          variation: variationPlan,
+          archetype: sessionArchetype,
         }
       );
       const ivModel = subscription.modelForUser(user);
@@ -1587,6 +1751,9 @@ exports.createRealtimeSession = async (req, res) => {
           panel: panelSeats,
           panelMode,
           segment: { index: 0, isFirst: true, isLast: N === 1 },
+          lang: req.lang,
+          variation: variationPlan,
+          archetype: sessionArchetype,
         }
       );
 
@@ -1652,6 +1819,9 @@ exports.createRealtimeSession = async (req, res) => {
         challenge: safeChallenge,
         panel: panelSeats,
         panelMode,
+        lang: req.lang,
+        variation: variationPlan,
+        archetype: sessionArchetype,
       }
     );
 
@@ -1796,6 +1966,7 @@ exports.mintRealtimeSegment = async (req, res) => {
     const candidateContext = await buildInterviewCandidateContext(application, {
       userId: req.user.id,
       applicationId: application._id,
+      lang: req.lang,
     });
     const ALLOWED_STYLES = ["balanced", "screening", "technical", "behavioral"];
     const safeStyle = ALLOWED_STYLES.includes(style) ? style : "balanced";
@@ -1816,6 +1987,9 @@ exports.mintRealtimeSegment = async (req, res) => {
         panel: panelSeats,
         panelMode: "multi-voice",
         segment: { index: idx, isFirst: false, isLast: idx === N - 1 },
+        lang: req.lang,
+        variation: variationFromPending(application),
+        archetype: archetypeFromPending(application),
       }
     );
 
@@ -1869,8 +2043,14 @@ exports.mintRealtimeSegment = async (req, res) => {
 exports.assessInterview = async (req, res) => {
   try {
     const { applicationId: id } = req.params;
-    const { transcript, durationSec, plannedSec, reservationId, interviewerSeatIndex } =
-      req.body || {};
+    const {
+      transcript,
+      durationSec,
+      plannedSec,
+      reservationId,
+      interviewerSeatIndex,
+      deliveryTelemetry,
+    } = req.body || {};
 
     const application = await Application.findById(id).populate("jobId");
     if (!application) return res.status(404).json({ message: "Application not found" });
@@ -1981,6 +2161,7 @@ exports.assessInterview = async (req, res) => {
     const candidateContext = await buildInterviewCandidateContext(application, {
       userId: req.user.id,
       applicationId: application._id,
+      lang: req.lang,
     });
     const jobMeta = {
       jobTitle: application.jobTitle || application.jobId?.title || "",
@@ -1988,11 +2169,34 @@ exports.assessInterview = async (req, res) => {
     };
 
     const turns = Array.isArray(transcript) ? transcript : [];
+    // Delivery telemetry is client-measured (audio never reaches us), so treat it
+    // as untrusted: numbers only, bounded length, non-numeric fields dropped. It
+    // can only ever produce feedback about the sender's own session.
+    const telemetry = Array.isArray(deliveryTelemetry)
+      ? deliveryTelemetry
+          .slice(0, 100)
+          .filter((a) => a && typeof a === "object" && !Array.isArray(a))
+          .map((a) => ({
+            timeToFirstWordMs: Number(a.timeToFirstWordMs),
+            answerDurationMs: Number(a.answerDurationMs),
+            longestPauseMs: Number(a.longestPauseMs),
+            wordCount: Number(a.wordCount),
+          }))
+      : null;
+
+    // Grade against the SAME archetype the room ran. This is the step where
+    // stage-awareness is most easily undone: a room that fairly interviewed a
+    // graduate on their project work, followed by a scorecard that marks them
+    // down for having no jobs, is worse than no stage-awareness at all.
+    const gradingArchetype = archetypeFromPending(application);
+
     const assessment = await aiService.assessInterview(
       turns,
       candidateContext,
       jobMeta,
-      { userId: req.user.id, applicationId: application._id }
+      { userId: req.user.id, applicationId: application._id, lang: req.lang },
+      telemetry,
+      gradingArchetype
     );
 
     // The questions the interviewer actually asked (the interviewer's turns) — so
@@ -2020,6 +2224,39 @@ exports.assessInterview = async (req, res) => {
       : [];
     history.push({ completedAt, confidence: assessment.readiness, score: assessment.overallScore });
     application.interviewPrep.interviewHistory = history.slice(-10);
+
+    // VARIATION INDEX — what this run actually went at, so the next run can be a
+    // different interview. Gists only; capped. Independent of the assessment above
+    // (which keeps the full report). Best-effort: never fail a graded session for it.
+    try {
+      const variation = require("../services/interviewVariation.service");
+      const pending = application.interviewPrep.pendingSession || {};
+      const entry = variation.buildHistoryEntry({
+        plan: {
+          openerStrategy: pending.openerStrategy,
+          sampledCompetencies: pending.competencies,
+        },
+        startedAt: pending.startedAt || completedAt,
+        // The lens this run was run through — the closest thing to an archetype we
+        // have until Phase 5 introduces real ones.
+        archetype:
+          gradingArchetype?.key ||
+          application.interviewPrep.panel?.seats?.[interviewerSeatIndex]?.role ||
+          "",
+        questionsAsked: assessment.questionsAsked,
+        delivery: assessment.delivery || null,
+        overallScore: assessment.overallScore,
+      });
+      application.interviewPrep.sessionHistory = variation.appendHistory(
+        application.interviewPrep.sessionHistory,
+        entry
+      );
+      application.interviewPrep.pendingSession = undefined;
+      application.markModified("interviewPrep.sessionHistory");
+      application.markModified("interviewPrep.pendingSession");
+    } catch (e) {
+      console.error("[InterviewPrep] session-history append failed:", e.message);
+    }
 
     // Readiness: a real interview is evidence about every prepared question. Raise
     // (never lower) each question's confidence toward the assessment band, so a
@@ -2167,6 +2404,7 @@ exports.gradeStoryAnswer = async (req, res) => {
     // needed — the story was already grounded + fact-checked at generation.
     const aiResult = await aiService.gradeInterviewAnswer(prompt, answerText, starText, "", null, {
       userId: req.user.id,
+      lang: req.lang,
     });
 
     // Charge only after the AI call succeeds (or skip for an active paid tier).

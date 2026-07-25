@@ -15,6 +15,52 @@ const SIZE = {
   small: 20, // ~10pt
 };
 
+// Section-label translation, keyed by the CANONICAL ENGLISH names that
+// markdownUtils.generateMarkdownFromDraft emits as `## ` headings. The markdown
+// itself stays English on purpose — it is the machine-readable layer that
+// markdownParser reads CVs back with — so translation happens here, at render
+// time, exactly like the on-screen/PDF templates do it.
+//
+// Keys are lowercased for lookup so "WORK HISTORY" / "Work history" both hit.
+// Anything unmapped falls through to the original text rather than rendering
+// blank, so a custom or future section degrades to English.
+const SECTION_LABELS = {
+  fr: {
+    "professional summary": "Résumé professionnel",
+    "work history": "Expérience professionnelle",
+    skills: "Compétences",
+    education: "Formation",
+    certifications: "Certifications",
+    projects: "Projets",
+    // Skill-category fallbacks markdownUtils can emit inside the Skills section.
+    "additional skills": "Compétences supplémentaires",
+    "technical skills": "Compétences techniques",
+    "soft skills": "Compétences comportementales",
+    "professional skills": "Compétences professionnelles",
+    // Placeholders markdownUtils emits when an education entry is incomplete.
+    degree: "Diplôme",
+    school: "École",
+    // Compact panel labels mirrored from the frontend cvLabels.js table (the
+    // Aria Studio live preview uses these short forms). The docx never emits
+    // these headings, so they're inert here — kept only to keep the two tables
+    // identical, as cvLabels.js requires.
+    contact: "Contact",
+    summary: "Résumé",
+    experience: "Expérience",
+  },
+};
+
+/**
+ * Map a canonical English CV section name to its display label in `lang`.
+ * Unmapped input (and English) returns the input unchanged.
+ */
+const sectionLabel = (name, lang) => {
+  const table = SECTION_LABELS[lang];
+  if (!table) return name;
+  const key = String(name || "").trim().toLowerCase();
+  return table[key] || name;
+};
+
 /**
  * Split a line into runs, turning **bold** spans into bold runs. baseOpts is
  * merged into every run (e.g. { bold: true } for headings). Best-effort — any
@@ -45,9 +91,11 @@ function parseInlineRuns(text, baseOpts = {}) {
  *
  * @param {string} markdown  The CV markdown body.
  * @param {object} userProfile  { firstName, otherName, lastName, email, phone, location, linkedinUrl }
+ * @param {"en"|"fr"} [outputLang]  the CV's DOCUMENT language (DraftCV.outputLang).
+ *   Only the section/category LABELS are translated; the markdown stays English.
  * @returns {Promise<Buffer>}
  */
-const generateDocx = async (markdown = "", userProfile = {}) => {
+const generateDocx = async (markdown = "", userProfile = {}, outputLang = "en") => {
   const children = [];
 
   try {
@@ -126,7 +174,9 @@ const generateDocx = async (markdown = "", userProfile = {}) => {
         children.push(
           new Paragraph({
             spacing: { before: 120, after: 20 },
-            children: parseInlineRuns(t.replace(/^###\s+/, "").trim(), {
+            // Real role/project/degree titles are USER content and fall straight
+            // through; only the literal "Degree" placeholder maps to a label.
+            children: parseInlineRuns(sectionLabel(t.replace(/^###\s+/, "").trim(), outputLang), {
               size: SIZE.body,
               bold: true,
             }),
@@ -145,7 +195,9 @@ const generateDocx = async (markdown = "", userProfile = {}) => {
             },
             children: [
               new TextRun({
-                text: t.replace(/^##\s+/, "").trim().toUpperCase(),
+                // Translate the DISPLAY label only — the markdown heading itself
+                // stays English so markdownParser can still read the CV back.
+                text: sectionLabel(t.replace(/^##\s+/, "").trim(), outputLang).toUpperCase(),
                 bold: true,
                 size: SIZE.section,
               }),
@@ -161,7 +213,15 @@ const generateDocx = async (markdown = "", userProfile = {}) => {
           new Paragraph({
             bullet: { level: 0 },
             spacing: { after: 20 },
-            children: parseInlineRuns(t.replace(/^[-*]\s+/, "").trim(), { size: SIZE.body }),
+            children: parseInlineRuns(
+              // Skills render as `- **Category:** a, b, c` — translate the bold
+              // category label, never the skill names after it.
+              t
+                .replace(/^[-*]\s+/, "")
+                .trim()
+                .replace(/^\*\*([^*:]+):\*\*/, (m, label) => `**${sectionLabel(label, outputLang)}:**`),
+              { size: SIZE.body }
+            ),
           })
         );
         continue;

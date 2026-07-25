@@ -91,6 +91,9 @@ app.use(
 
 app.use(express.json()); // Body parser
 
+// App language (X-App-Language) → req.lang, defaulting to "en".
+app.use(require("./middleware/language.middleware"));
+
 // Swagger Documentation
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 

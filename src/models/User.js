@@ -118,6 +118,13 @@ const userSchema = new mongoose.Schema(
       type: Number,
       default: 20, // Free starting credits
     },
+    // App language. Drives both the UI strings and the language every AI response
+    // comes back in (threaded to ai.service via req.lang → meta.lang → langDirective).
+    interfaceLang: {
+      type: String,
+      enum: ["en", "fr"],
+      default: "en",
+    },
     adStreak: {
       current: { type: Number, default: 0 },
       longest: { type: Number, default: 0 },
@@ -180,21 +187,6 @@ const userSchema = new mongoose.Schema(
     otherName: {
       type: String,
       default: "",
-    },
-    phone: {
-      type: String,
-      required: [true, "Please add a phone number"],
-      unique: true,
-      trim: true,
-      validate: {
-        validator: function (v) {
-          // E.164 format: +[country code][number]
-          // Must start with + followed by 1-15 digits
-          return /^\+[1-9]\d{1,14}$/.test(v);
-        },
-        message: (props) =>
-          `${props.value} is not a valid international phone number! Please include the country code (e.g., +1234567890)`,
-      },
     },
     resetPasswordToken: String,
     resetPasswordExpire: Date,

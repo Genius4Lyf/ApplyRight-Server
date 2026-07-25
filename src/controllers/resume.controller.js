@@ -1,5 +1,6 @@
 const { parseResume } = require("../services/resumeParser.service");
 const aiService = require("../services/ai.service");
+const langService = require("../services/language.service");
 const subscription = require("../services/subscription.service");
 const settingsService = require("../services/settings.service");
 const Resume = require("../models/Resume");
@@ -53,7 +54,7 @@ const uploadResume = async (req, res) => {
     }
 
     // Analyze using AI
-    const parsedData = await aiService.extractResumeProfile(rawText);
+    const parsedData = await aiService.extractResumeProfile(rawText, { userId: req.user?._id, lang: req.lang });
 
     // Save to DB
     // Assuming req.user is populated by auth middleware
@@ -149,7 +150,7 @@ const uploadAndCreateDraft = async (req, res) => {
     }
 
     // 3. AI extraction (single call — no duplication)
-    const extractedData = await aiService.extractResumeProfile(rawText);
+    const extractedData = await aiService.extractResumeProfile(rawText, { userId: req.user?._id, lang: req.lang });
 
     // 4. Generate structured skills
     const structuredSkills = await aiService.generateStructuredSkills(
@@ -159,7 +160,7 @@ const uploadAndCreateDraft = async (req, res) => {
         projects: extractedData.projects,
         targetJob: null,
       },
-      { model: aiService.resolveTextModel(user) }
+      { model: aiService.resolveTextModel(user), lang: langService.newCvLang(req) }
     );
 
     // 5. Deduct credits only after all AI work succeeds. spendCredits draws from
@@ -183,6 +184,7 @@ const uploadAndCreateDraft = async (req, res) => {
       userId: user._id,
       title: "Uploaded Resume",
       source: "upload",
+      outputLang: langService.newCvLang(req),
       personalInfo: {
         fullName: cvContact.fullName || userFullName || "Candidate",
         email: cvContact.email || user.email || "",

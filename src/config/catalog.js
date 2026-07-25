@@ -5,7 +5,7 @@
 // Marketing tiers map onto the existing User.tier enum (free/plus/pro) so the
 // requireTier middleware and TIER_RANK keep working unchanged:
 //   Starter Pack (2-week) / Monthly Pro -> "plus" (mini model)
-//   Monthly Premium          -> "pro"  (full gpt-realtime model)
+//   Monthly Premium          -> "pro"  (full gpt-realtime-2.1 model)
 // The marketing label, minute allowance, model and period live here, decoupled
 // from the coarse enum.
 
@@ -34,7 +34,7 @@ const MAX_SESSION_SEC_BY_TIER = {
   pro: 1200, // 20 min — Premium gets the longest sessions as a tier perk
 };
 
-// model: "mini" -> gpt-realtime-mini, "full" -> gpt-realtime (see subscription.service.modelForUser)
+// model: "mini" -> gpt-realtime-2.1-mini, "full" -> gpt-realtime-2.1 (see subscription.service.modelForUser)
 const CATALOG = {
   weekly_pro: {
     id: "weekly_pro",

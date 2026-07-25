@@ -1,6 +1,10 @@
 const DraftCV = require("../models/DraftCV");
 const { isPaidActive } = require("../services/subscription.service");
 
+// Accepted values for DraftCV.outputLang. `null` stays allowed implicitly by
+// simply never being set — see the guard in saveDraft.
+const OUTPUT_LANGS = ["en", "fr"];
+
 // @desc    Save/Update a Draft CV
 // @route   POST /api/cv/save
 // @access  Private
@@ -11,6 +15,14 @@ const saveDraft = async (req, res) => {
     // Mark complete when reaching finalize step
     if (data.currentStep === "finalize") {
       data.isComplete = true;
+    }
+
+    // outputLang (the language the CV DOCUMENT is written in). Same enum-guard
+    // style as interfaceLang: an unrecognised value is dropped rather than
+    // failing the whole save, so a bad client can't wedge the user's CV. Note
+    // findByIdAndUpdate doesn't run validators, so this guard is the only check.
+    if ("outputLang" in data && !OUTPUT_LANGS.includes(data.outputLang)) {
+      delete data.outputLang;
     }
 
     // If ID exists, update existing
@@ -39,10 +51,17 @@ const saveDraft = async (req, res) => {
       });
     }
 
-    // Else create new
+    // Else create new. A new CV inherits the creator's app language as its
+    // DOCUMENT language, so a French user's new CVs default to French output
+    // without them having to find the per-CV toggle. An explicit outputLang in
+    // the payload still wins. Falls back to the request language when the user
+    // record has none (older accounts predate interfaceLang).
     const draft = await DraftCV.create({
       userId: req.user.id,
       source: "scratch",
+      outputLang: OUTPUT_LANGS.includes(req.user.interfaceLang)
+        ? req.user.interfaceLang
+        : req.lang,
       ...data,
     });
 

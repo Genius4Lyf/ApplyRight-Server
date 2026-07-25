@@ -26,9 +26,9 @@ const generateToken = (id) => {
 // @access  Public
 const registerUser = async (req, res, next) => {
   try {
-    const { email, password, phone, referralCode, accountType } = req.body;
+    const { email, password, referralCode, accountType, interfaceLang } = req.body;
 
-    if (!email || !password || !phone) {
+    if (!email || !password) {
       return res.status(400).json({ message: "Please add all fields" });
     }
 
@@ -61,19 +61,8 @@ const registerUser = async (req, res, next) => {
       return res.status(400).json({ message: "Password must contain at least one number" });
     }
 
-    // Validate phone number format (E.164: +[country code][number])
-    const phoneRegex = /^\+[1-9]\d{1,14}$/;
-    if (!phoneRegex.test(phone)) {
-      return res.status(400).json({
-        message:
-          "Please enter a valid international phone number with country code (e.g., +12025551234)",
-      });
-    }
-
-    // Check if user exists (email or phone)
-    const userExists = await User.findOne({
-      $or: [{ email }, { phone }],
-    });
+    // Check if user exists
+    const userExists = await User.findOne({ email });
 
     if (userExists) {
       return res.status(400).json({ message: "User already exists" });
@@ -106,15 +95,20 @@ const registerUser = async (req, res, next) => {
     // requires the secret-key route. Defaults to a normal job-seeker account.
     const role = accountType === "agent" ? "agent" : "user";
 
+    // App language picked at signup. Invalid values are ignored (not fatal) and
+    // fall back to the request language, which the client already sent as
+    // X-App-Language — so a French visitor gets a French account either way.
+    const lang = ["en", "fr"].includes(interfaceLang) ? interfaceLang : req.lang;
+
     // Create user
     const user = await User.create({
       email,
-      phone,
       password: hashedPassword,
       role,
       referralCode: newReferralCode,
       credits: initialCredits,
       referredBy: referrer ? referrer._id : null,
+      interfaceLang: lang,
     });
 
     if (user) {
@@ -140,7 +134,6 @@ const registerUser = async (req, res, next) => {
       res.status(201).json({
         _id: user.id,
         email: user.email,
-        phone: user.phone,
         role: user.role,
         firstName: user.firstName,
         lastName: user.lastName,
@@ -148,6 +141,8 @@ const registerUser = async (req, res, next) => {
         credits: user.credits,
         settings: user.settings,
         unlockedTemplates: user.unlockedTemplates,
+        // Mirrors the login response so the client seeds its language the same way.
+        interfaceLang: user.interfaceLang,
         token: generateToken(user.id),
       });
     } else {
@@ -163,9 +158,9 @@ const registerUser = async (req, res, next) => {
 // @access  Public (Protected by Secret Key)
 const registerAdmin = async (req, res, next) => {
   try {
-    const { email, password, phone, adminSecret } = req.body;
+    const { email, password, adminSecret } = req.body;
 
-    if (!email || !password || !phone || !adminSecret) {
+    if (!email || !password || !adminSecret) {
       return res.status(400).json({ message: "Please add all fields including admin secret" });
     }
 
@@ -198,9 +193,7 @@ const registerAdmin = async (req, res, next) => {
     }
 
     // Check if user exists
-    const userExists = await User.findOne({
-      $or: [{ email }, { phone }],
-    });
+    const userExists = await User.findOne({ email });
 
     if (userExists) {
       return res.status(400).json({ message: "User already exists" });
@@ -213,7 +206,6 @@ const registerAdmin = async (req, res, next) => {
     // Create Admin User
     const user = await User.create({
       email,
-      phone,
       password: hashedPassword,
       role: "admin",
       credits: 9999, // Admins get more credits
@@ -285,7 +277,6 @@ const loginUser = async (req, res, next) => {
       res.json({
         _id: user.id,
         email: user.email,
-        phone: user.phone,
         role: user.role,
         firstName: user.firstName,
         lastName: user.lastName,
@@ -297,7 +288,6 @@ const loginUser = async (req, res, next) => {
         // Expiry-aware paid checks on the client (e.g. template unlock-all) read
         // subscription.expiresAt; include it so paid status reverts on expiry.
         subscription: user.subscription,
-        phoneNumber: user.phoneNumber,
         location: user.location,
         skills: user.skills,
         experience: user.experience,
@@ -306,6 +296,9 @@ const loginUser = async (req, res, next) => {
         onboardingCompleted: user.onboardingCompleted,
         referralCode: user.referralCode,
         unlockedTemplates: user.unlockedTemplates,
+        // App language — the client seeds localStorage.lang from this so a
+        // returning user gets their saved language on any device.
+        interfaceLang: user.interfaceLang,
         token: generateToken(user.id),
       });
     } else {
@@ -378,7 +371,6 @@ const updateProfile = async (req, res, next) => {
       res.json({
         _id: updatedUser.id,
         email: updatedUser.email,
-        phone: updatedUser.phone,
         firstName: updatedUser.firstName,
         lastName: updatedUser.lastName,
         // Client's EFFECTIVE (expiry-aware) paid status; raw DB field unchanged.

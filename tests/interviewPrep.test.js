@@ -535,7 +535,7 @@ describe("Interview Prep API", () => {
       realtimeService.mintRealtimeSession.mockResolvedValue({
         clientSecret: "ek_test_123",
         expiresAt: 1234567890,
-        model: "gpt-realtime",
+        model: "gpt-realtime-2.1",
         voice: "marin",
         maxSessionSec: 360,
       });
@@ -548,7 +548,7 @@ describe("Interview Prep API", () => {
       expect(res.statusCode).toEqual(200);
       expect(res.body.clientSecret).toBe("ek_test_123");
       expect(res.body.maxSessionSec).toBe(360);
-      expect(res.body.model).toBe("gpt-realtime");
+      expect(res.body.model).toBe("gpt-realtime-2.1");
       // The session echoes a reservation id for later reconciliation.
       expect(res.body.reservationId).toBeTruthy();
       // Grounding instructions are built from the candidate context + spine.

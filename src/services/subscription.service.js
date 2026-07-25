@@ -89,7 +89,7 @@ const hasPaidAccess = (user) => {
 
 /** Premium tier (pro) gets the sharper full model; everyone else the mini model. */
 const modelForUser = (user) =>
-  getEffectiveTier(user) === "pro" ? "gpt-realtime" : "gpt-realtime-mini";
+  getEffectiveTier(user) === "pro" ? "gpt-realtime-2.1" : "gpt-realtime-2.1-mini";
 
 /**
  * Text-AI (CV/content) model policy. CV agents are always paid (there are no free

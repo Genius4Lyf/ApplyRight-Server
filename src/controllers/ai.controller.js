@@ -7,6 +7,7 @@ const Application = require("../models/Application");
 const Resume = require("../models/Resume");
 const Job = require("../models/Job");
 const subscription = require("../services/subscription.service");
+const langService = require("../services/language.service");
 const settingsService = require("../services/settings.service");
 const modelSelection = require("../services/modelSelection.service");
 
@@ -189,7 +190,7 @@ const resolveJobKeywords = async ({ draftId, userId, targetJob }) => {
 // Shared by paid generation (generateBullets) and the free user's explicit
 // one-time reveal (revealAtsTaste). `real` is false when the AI service returned
 // its "Error generating…" sentinel (it does that instead of throwing).
-const generateAtsSuggestions = async ({ role, context, targetJob, draftId, userId, model }) => {
+const generateAtsSuggestions = async ({ role, context, targetJob, draftId, userId, model, lang }) => {
   const aiService = require("../services/ai.service");
   const keywords = await resolveJobKeywords({ draftId, userId, targetJob });
   const ats = await aiService.generateBulletPoints(role, context, "experience", targetJob, {
@@ -197,6 +198,7 @@ const generateAtsSuggestions = async ({ role, context, targetJob, draftId, userI
     keywords,
     count: PAID_ATS_SUGGESTIONS,
     model,
+    lang,
   });
   const list = Array.isArray(ats) ? ats : [];
   const real = list.length > 0 && !/^Error generating/i.test(list[0] || "");
@@ -216,11 +218,15 @@ const generateBullets = async (req, res) => {
 
   try {
     const aiService = require("../services/ai.service");
+    // DOCUMENT action — bullets are CV content, so they follow the CV's own
+    // language (falling back to the request language for CVs that have none).
+    const docLang = await langService.docLangById(draftId, req);
 
     // Summary & Project keep the original simple contract (no two-tier UI).
     if (type !== "experience") {
       const suggestions = await aiService.generateBulletPoints(role, context, type, targetJob, {
         model: resolveTextModel(req.user),
+        lang: docLang,
       });
       return res.json({ suggestions, lockedCount: 0 });
     }
@@ -239,6 +245,7 @@ const generateBullets = async (req, res) => {
         draftId,
         userId: req.user.id,
         model: resolveTextModel(req.user),
+        lang: docLang,
       });
       return res.json({
         isPaid: true,
@@ -256,6 +263,7 @@ const generateBullets = async (req, res) => {
     // available) vs the upgrade CTA (already used).
     const ai = await aiService.generateBulletPoints(role, context, "experience", "", {
       model: resolveTextModel(req.user),
+      lang: docLang,
     });
     const aiTrimmed = (Array.isArray(ai) ? ai : []).slice(0, FREE_AI_SUGGESTIONS);
     const atsTeaser = Array.from(
@@ -311,6 +319,8 @@ const revealAtsTaste = async (req, res) => {
         draftId,
         userId: req.user.id,
         model: resolveTextModel(req.user),
+        // DOCUMENT action — ATS bullets are CV content.
+        lang: await langService.docLangById(draftId, req),
       });
       if (!real) {
         // Refund so the user can try again.
@@ -362,6 +372,8 @@ const generateSummaries = async (req, res) => {
     const tonesToGenerate = isPaid ? SUMMARY_TONES : SUMMARY_TONES.slice(0, 1);
     const generated = await aiService.generateSummaries(role, context, tonesToGenerate, {
       model: resolveTextModel(req.user),
+      // DOCUMENT action — the summary is CV content.
+      lang: await langService.docLangById(req.body?.draftId, req),
     });
     const byKey = Object.fromEntries((generated || []).map((g) => [g.key, g.summary]));
 
@@ -505,7 +517,15 @@ const generateSkills = async (req, res) => {
       targetJob || "",
       isPaid,
       // Route through the selected model (multi-provider dispatcher).
-      { modelId, meta: { userId: req.user.id, operation: "generateSkills" } }
+      // DOCUMENT action — skills are CV content, so they follow the CV's language.
+      {
+        modelId,
+        meta: {
+          userId: req.user.id,
+          operation: "generateSkills",
+          lang: langService.docLang(draft, req),
+        },
+      }
     );
 
     // Deterministic best-for-role set (prefers cached richer JD keywords).
@@ -642,6 +662,7 @@ const getJobKeywords = async (req, res) => {
 
       const jobData = await require("../services/ai.service").extractJobRequirements(description, {
         userId: req.user.id,
+        lang: req.lang,
       });
       const keywords = mergeRequirementKeywords(jobData);
 
@@ -697,6 +718,7 @@ const getJobKeywords = async (req, res) => {
     if (title) {
       const { keywords = [] } = await require("../services/ai.service").inferRoleKeywords(title, {
         userId: req.user.id,
+        lang: req.lang,
       });
       return res.json({ keywords, source: "title" });
     }
@@ -766,6 +788,8 @@ const tightenSummary = async (req, res) => {
     const tightened = await aiService.tightenSummary(text, {
       userId: req.user.id,
       model: resolveTextModel(req.user),
+      // DOCUMENT action — the summary is CV content.
+      lang: await langService.docLangById(req.body?.draftId, req),
     });
 
     // Charge 1 credit atomically (balance-guarded). Paid tiers draw from their

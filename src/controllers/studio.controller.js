@@ -6,6 +6,7 @@ const subscription = require("../services/subscription.service");
 const settingsService = require("../services/settings.service");
 const modelSelection = require("../services/modelSelection.service");
 const atsCoach = require("../services/atsCoach.service");
+const langService = require("../services/language.service");
 const scoringEngine = require("../services/scoringEngine.service");
 const { scanSections } = require("../services/sectionScan.service");
 const { isPaidActive } = require("../services/subscription.service");
@@ -65,6 +66,7 @@ const briefPreview = async (req, res) => {
     const { brief } = await buildBriefForJd(description, title, {
       userId: req.user.id,
       operation: "studioBriefPreview",
+      lang: req.lang,
     });
     return res.json({ brief });
   } catch (error) {
@@ -149,6 +151,9 @@ const tailorStart = async (req, res) => {
       studioKind: "tailor", // marks this draft as a Studio session (see DraftCV.studioKind)
       tailoredFrom: source._id,
       tailoredFromTitle: src.title || "Untitled CV",
+      // A tailored copy keeps the SOURCE CV's document language — you are
+      // tailoring that CV, not starting a fresh one in your app language.
+      outputLang: source.outputLang || langService.newCvLang(req),
       tailoredForJob: { title },
       targetJob: {
         title,
@@ -169,6 +174,7 @@ const tailorStart = async (req, res) => {
       brief = await resolveDraftBrief(copy, {
         userId: req.user.id,
         operation: "studioTailorStart",
+        lang: req.lang,
       });
     } catch (briefError) {
       if (briefError instanceof aiService.AIUnavailableError) {
@@ -268,6 +274,7 @@ const scan = async (req, res) => {
       userId: req.user.id,
       modelId,
       operation: "studioScan",
+      lang: req.lang,
     });
 
     // AI succeeded — now charge the tier cost (flagship always meters; light free on paid).
@@ -460,6 +467,7 @@ const buildStart = async (req, res) => {
       title: title ? `CV for ${title}` : "Untitled CV",
       source: "scratch",
       studioKind: "build",
+      outputLang: langService.newCvLang(req),
       personalInfo,
       ...(hasJob ? { targetJob: { title, description } } : {}),
     });
@@ -473,6 +481,7 @@ const buildStart = async (req, res) => {
         const built = await buildBriefForJd(description, title, {
           userId: req.user.id,
           operation: "studioBuildStart",
+          lang: req.lang,
         });
         brief = built.brief;
         if (brief) {

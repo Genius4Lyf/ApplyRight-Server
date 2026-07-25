@@ -66,10 +66,10 @@ describe("subscription.service", () => {
       const future = new Date(Date.now() + 100000);
       expect(
         subscription.modelForUser({ subscription: { tier: "pro", expiresAt: future } })
-      ).toBe("gpt-realtime");
+      ).toBe("gpt-realtime-2.1");
     });
     it("uses mini otherwise", () => {
-      expect(subscription.modelForUser({})).toBe("gpt-realtime-mini");
+      expect(subscription.modelForUser({})).toBe("gpt-realtime-2.1-mini");
     });
   });
 

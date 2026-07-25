@@ -5,6 +5,7 @@ const DraftCV = require("../models/DraftCV");
 const subscription = require("../services/subscription.service");
 const settingsService = require("../services/settings.service");
 const aiService = require("../services/ai.service");
+const langService = require("../services/language.service");
 const modelSelection = require("../services/modelSelection.service");
 const { coachState } = require("../services/atsCoach.service");
 
@@ -115,7 +116,7 @@ const guide = async (req, res) => {
           gaps,
           signal: (signal || "").toString().slice(0, 200),
         },
-        { userId: req.user.id, operation: "coachGuide" }
+        { userId: req.user.id, operation: "coachGuide", lang: req.lang }
       );
     } catch (err) {
       if (err instanceof aiService.AIUnavailableError) {
@@ -174,7 +175,13 @@ const generateBullets = async (req, res) => {
     }
 
     const user = await User.findById(req.user.id).select("plan subscription credits");
-    const meta = { userId: req.user.id, operation: "coachGenerateBullets" };
+    // DOCUMENT action — bullets are CV content, so they follow the CV's language,
+    // not the language Aria is speaking in.
+    const meta = {
+      userId: req.user.id,
+      operation: "coachGenerateBullets",
+      lang: langService.docLang(draft, req),
+    };
 
     // Ground on the Role Brief. Non-fatal: fall back to a brief-less generation.
     let brief = null;
@@ -351,7 +358,13 @@ const summary = async (req, res) => {
         context,
         jobDescription: (draft.targetJob?.description || "").trim(),
         // Route through the selected model via meta.modelId (multi-provider dispatcher).
-        meta: { userId: req.user.id, operation: "coachSummary", modelId },
+        // DOCUMENT action — the summary is CV content (see coachGenerateBullets).
+        meta: {
+          userId: req.user.id,
+          operation: "coachSummary",
+          modelId,
+          lang: langService.docLang(draft, req),
+        },
       });
     } catch (genErr) {
       if (genErr instanceof aiService.AIUnavailableError) {
@@ -527,7 +540,7 @@ const askAria = async (req, res) => {
     }
 
     // Compact, cheap context: target title + one line of section-progress counts.
-    const meta = { userId: req.user.id, operation: "coachAskAria" };
+    const meta = { userId: req.user.id, operation: "coachAskAria", lang: req.lang };
     const targetTitle = (draft.targetJob?.title || draft.targetJob?.brief?.role || "").trim();
     const cvSummary = `${targetTitle ? `Target: ${targetTitle}. ` : ""}Progress: ${
       draft.experience?.length || 0
@@ -651,7 +664,7 @@ const chat = async (req, res) => {
     const mustFinish = !!focus && Number(buildTurns) >= INTERVIEW_TURN_CAP;
 
     // Route the turn through the selected model (multi-provider dispatcher).
-    const meta = { userId: req.user.id, operation: "coachChatTurn", modelId };
+    const meta = { userId: req.user.id, operation: "coachChatTurn", modelId, lang: req.lang };
     const targetTitle = (draft.targetJob?.title || draft.targetJob?.brief?.role || "").trim();
     const cvSummary = `${targetTitle ? `Target: ${targetTitle}. ` : ""}Progress: ${
       draft.experience?.length || 0
@@ -773,7 +786,7 @@ const getBrief = async (req, res) => {
       return res.json({ brief: null });
     }
 
-    const brief = await resolveDraftBrief(draft, { userId: req.user.id, operation: "coachGetBrief" });
+    const brief = await resolveDraftBrief(draft, { userId: req.user.id, operation: "coachGetBrief", lang: req.lang });
     return res.json({ brief });
   } catch (error) {
     if (error instanceof aiService.AIUnavailableError) {

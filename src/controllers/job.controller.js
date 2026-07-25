@@ -51,7 +51,7 @@ const extractJob = async (req, res) => {
 
       // If scraper returned weak metadata, use AI to extract from the scraped text
       if (isWeakMetadata(title, company) && jobDescription.length > 50) {
-        const aiMeta = await aiService.extractJobMetadata(jobDescription);
+        const aiMeta = await aiService.extractJobMetadata(jobDescription, { userId: req.user?.id, lang: req.lang });
         if (aiMeta.title) title = aiMeta.title;
         if (aiMeta.company) company = aiMeta.company;
       }
@@ -59,7 +59,7 @@ const extractJob = async (req, res) => {
       // ── Text Path: Use AI to extract title and company from pasted text ──
       jobDescription = description;
 
-      const aiMeta = await aiService.extractJobMetadata(description);
+      const aiMeta = await aiService.extractJobMetadata(description, { userId: req.user?.id, lang: req.lang });
       title = aiMeta.title || "Untitled Job";
       company = aiMeta.company || "Unknown Company";
     }

@@ -321,6 +321,19 @@ const applicationSchema = new mongoose.Schema(
           gaps: [String],
           nextSteps: [String],
           questionsAsked: [String], // the questions the interviewer actually asked
+          // Claims made in the room that the CV doesn't support. First-class, not
+          // buried in gaps: these are actions on the DOCUMENT (usually real
+          // experience that's simply missing from it), so the interview improves
+          // the CV instead of being a standalone exercise.
+          cvFindings: [{ claim: String, cvSays: String, action: String }],
+          // The stronger version of their weakest answers, built only from what
+          // they said + what's on their CV (never invented).
+          rewrites: [
+            { question: String, whatTheySaid: String, strongerVersion: String, why: String },
+          ],
+          // Measured delivery aggregates (hesitation, answer length, filler). Null
+          // for sessions with no telemetry — older runs and the turn-based mode.
+          delivery: { type: mongoose.Schema.Types.Mixed, default: null },
         },
       },
       // Rolling log of recent Interview Mode runs (kept to the last ~10). Powers
@@ -354,6 +367,43 @@ const applicationSchema = new mongoose.Schema(
       // all show the SAME people (and we don't re-pay generation each load). Each
       // seat carries a `description` of what that interview is like (the role
       // determines the interview TYPE — no separate style picker).
+      // VARIATION ENGINE — the index that stops three runs of the same job being
+      // the same interview. lastInterviewSession still holds the full latest
+      // assessment (with Phase 2's cvFindings/rewrites/delivery); this is the
+      // thin, capped record of what each run actually went at.
+      //
+      // Gists, not transcripts: it is a variation index, not an archive.
+      // `delivery` and `overallScore` are kept deliberately so cross-session
+      // progress ("your hesitation dropped from 9s to 3s") is possible later —
+      // nothing reads them yet.
+      sessionHistory: [
+        {
+          startedAt: { type: Date },
+          archetype: String,
+          openerStrategy: String,
+          competencies: [String], // what this run was steered toward
+          questionGists: [String], // short gists only
+          delivery: { type: mongoose.Schema.Types.Mixed, default: null },
+          overallScore: Number,
+        },
+      ],
+      // The plan computed at session mint, read back when the session is graded
+      // (a multi-voice panel mints several sessions for ONE interview, so the
+      // plan has to be decided once and reused by later seats).
+      pendingSession: {
+        startedAt: { type: Date },
+        openerStrategy: String,
+        competencies: [String],
+        archetypeKey: String, // so the debrief grades against the room that ran
+        careerStage: String,
+      },
+      // Competency pool for this role, built ONCE from already-cached data
+      // (fit analysis, panel seats, skills, JD keywords) and sampled per session.
+      // No AI call — see interviewVariation.service.
+      competencyPool: {
+        items: [String],
+        builtAt: { type: Date },
+      },
       panel: {
         generatedForStyle: { type: String }, // legacy; no longer used for caching
         generatedAt: { type: Date },

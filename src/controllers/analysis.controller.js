@@ -10,6 +10,7 @@ const cvOptimizer = require("../services/cvOptimizer.service");
 const metricCapture = require("../services/metricCapture.service");
 const subscription = require("../services/subscription.service");
 const settingsService = require("../services/settings.service");
+const langService = require("../services/language.service");
 
 // Credit costs are the single source of truth in config/creditCosts.js, resolved
 // (with any admin overrides) via settingsService.getCreditCosts(). Each handler
@@ -267,7 +268,7 @@ const analyzeFit = async (req, res) => {
       }
       checkCredits(user, COSTS.CREATE_FROM_UPLOAD);
 
-      const meta = { userId };
+      const meta = { userId, lang: langService.newCvLang(req) };
       const extractedData = await aiService.extractResumeProfile(resume.rawText, meta);
 
       const structuredSkills = await aiService.generateStructuredSkills(
@@ -290,6 +291,7 @@ const analyzeFit = async (req, res) => {
         userId,
         title: "Uploaded Resume",
         source: "upload",
+        outputLang: langService.newCvLang(req),
         personalInfo: {
           fullName: cvContact.fullName || userFullName || "Candidate",
           email: cvContact.email || user.email || "",
@@ -358,6 +360,7 @@ const analyzeFit = async (req, res) => {
     const aiResult = await aiService.analyzeProfile(cvText, job.description, {
       userId,
       model: aiService.resolveTextModel(user),
+      lang: req.lang,
     });
 
     // AI succeeded — now charge the user
@@ -508,12 +511,14 @@ const runCVGenerationPipeline = async ({
   templateId,
   chargeOnSuccess = true,
   providedMetrics = {},
+  // DOCUMENT language for the CV this pipeline writes (see language.service).
+  lang = "en",
 }) => {
   const userId = user._id;
   const applicationId = application._id;
   // tier-based text model (paid/agent → gpt-4o, free → gpt-4o-mini) — flows to
   // every callJSON/callText in this CV-generation pipeline via meta.model.
-  const meta = { userId, applicationId, model: aiService.resolveTextModel(user) };
+  const meta = { userId, applicationId, model: aiService.resolveTextModel(user), lang };
   const COSTS = await settingsService.getCreditCosts();
 
   try {
@@ -629,7 +634,7 @@ const runCVGenerationPipeline = async ({
     }
 
     // Create DraftCV and persist results onto the Application
-    const draft = await DraftCV.create({ userId, ...draftData });
+    const draft = await DraftCV.create({ userId, outputLang: lang, ...draftData });
     const markdownCV = buildMarkdownFromDraft(draftData);
 
     const fresh = await Application.findById(applicationId);
@@ -724,9 +729,15 @@ const generateApplicationCV = async (req, res) => {
     // pipeline only reads `resume.rawText`, so for a draft we hand it a
     // lightweight object carrying the markdown-serialized draft.
     let resume = resumeDoc;
+    // DOCUMENT language for the generated CV: inherit the SOURCE CV's language when
+    // we are regenerating from a saved draft, else the user's app language.
+    let cvLang = langService.newCvLang(req);
     if (!resume && application.draftCVId) {
       const draft = await DraftCV.findById(application.draftCVId);
-      if (draft) resume = { rawText: buildMarkdownFromDraft(draft) };
+      if (draft) {
+        resume = { rawText: buildMarkdownFromDraft(draft) };
+        cvLang = langService.docLang(draft, req);
+      }
     }
 
     if (!resume || !job) {
@@ -754,7 +765,7 @@ const generateApplicationCV = async (req, res) => {
 
     // Fire-and-forget: pipeline runs after the response is sent. Errors are
     // caught inside runCVGenerationPipeline and persisted to generationStatus.
-    runCVGenerationPipeline({ application, resume, job, user, templateId, providedMetrics }).catch(
+    runCVGenerationPipeline({ application, resume, job, user, templateId, providedMetrics, lang: cvLang }).catch(
       (e) => {
         console.error("[CV Pipeline] Unhandled top-level error:", e);
       }
@@ -875,6 +886,9 @@ const generateApplicationCoverLetter = async (req, res) => {
 
     // Resolve resume text
     let resumeText = "";
+    // DOCUMENT language — a cover letter accompanies the CV, so it is written in
+    // the CV's language, not the language Aria is speaking.
+    let docLang = langService.newCvLang(req);
     const resume = await Resume.findById(application.resumeId);
     if (resume) {
       resumeText = resume.rawText;
@@ -883,6 +897,7 @@ const generateApplicationCoverLetter = async (req, res) => {
       const draft = await DraftCV.findById(application.draftCVId || application.resumeId);
       if (draft) {
         resumeText = buildMarkdownFromDraft(draft);
+        docLang = langService.docLang(draft, req);
       }
     }
 
@@ -900,6 +915,7 @@ const generateApplicationCoverLetter = async (req, res) => {
       userId,
       applicationId: application._id,
       model: aiService.resolveTextModel(user),
+      lang: docLang,
     });
 
     // AI succeeded — now charge the user
@@ -910,6 +926,7 @@ const generateApplicationCoverLetter = async (req, res) => {
     const coverLetterWarnings = await aiService.factCheckCoverLetter(resumeText, coverLetter, {
       userId,
       applicationId: application._id,
+      lang: req.lang,
     });
 
     application.coverLetter = coverLetter;
@@ -965,6 +982,7 @@ const generateApplicationInterview = async (req, res) => {
       candidateContext = await buildInterviewCandidateContext(application, {
         userId,
         applicationId: application._id,
+        lang: req.lang,
       });
     } catch (e) {
       console.error("[Interview] Failed to build candidate context:", e.message);
@@ -984,7 +1002,7 @@ const generateApplicationInterview = async (req, res) => {
     const aiResult = await aiService.generateInterviewQuestions(
       jobData.description,
       candidateContext,
-      { userId, applicationId: application._id }
+      { userId, applicationId: application._id, lang: req.lang }
     );
 
     // AI succeeded — now charge the user
@@ -996,7 +1014,7 @@ const generateApplicationInterview = async (req, res) => {
     const fabricationWarnings = await aiService.factCheckInterviewQuestions(
       candidateContext,
       aiResult.jobQuestions || [],
-      { userId, applicationId: application._id }
+      { userId, applicationId: application._id, lang: req.lang }
     );
 
     // Persist to the unified interviewPrep schema. Legacy fields
@@ -1105,6 +1123,7 @@ const startDirectInterview = async (req, res) => {
       candidateContext = await buildInterviewCandidateContext(application, {
         userId,
         applicationId: application._id,
+        lang: req.lang,
       });
     } catch (e) {
       console.error("[DirectInterview] Failed to build candidate context:", e.message);
@@ -1121,13 +1140,13 @@ const startDirectInterview = async (req, res) => {
     const aiResult = await aiService.generateInterviewQuestions(
       job.description,
       candidateContext,
-      { userId, applicationId: application._id }
+      { userId, applicationId: application._id, lang: req.lang }
     );
 
     const fabricationWarnings = await aiService.factCheckInterviewQuestions(
       candidateContext,
       aiResult.jobQuestions || [],
-      { userId, applicationId: application._id }
+      { userId, applicationId: application._id, lang: req.lang }
     );
 
     application.interviewPrep = application.interviewPrep || {};
@@ -1184,6 +1203,7 @@ const generateMoreApplicationInterview = async (req, res) => {
       candidateContext = await buildInterviewCandidateContext(application, {
         userId,
         applicationId: application._id,
+        lang: req.lang,
       });
     } catch (e) {
       console.error("[Interview-More] Failed to build candidate context:", e.message);
@@ -1205,7 +1225,7 @@ const generateMoreApplicationInterview = async (req, res) => {
     const aiResult = await aiService.generateInterviewQuestions(
       jobData.description,
       candidateContext,
-      { userId, applicationId: application._id, operation: "generateMoreInterviewQuestions" },
+      { userId, applicationId: application._id, operation: "generateMoreInterviewQuestions", lang: req.lang },
       { existingQuestions: existingTexts }
     );
 
@@ -1234,7 +1254,7 @@ const generateMoreApplicationInterview = async (req, res) => {
     const newWarnings = await aiService.factCheckInterviewQuestions(
       candidateContext,
       newJobQuestions,
-      { userId, applicationId: application._id }
+      { userId, applicationId: application._id, lang: req.lang }
     );
     // Re-index new warnings to match their final position in the merged list.
     const shiftedNewWarnings = newWarnings.map((w) => ({
@@ -1304,6 +1324,7 @@ const generateApplicationStories = async (req, res) => {
       candidateContext = await buildInterviewCandidateContext(application, {
         userId,
         applicationId: application._id,
+        lang: req.lang,
       });
     } catch (e) {
       console.error("[Stories] Failed to build candidate context:", e.message);
@@ -1322,6 +1343,7 @@ const generateApplicationStories = async (req, res) => {
     const aiResult = await aiService.generateInterviewStories(jobData.description, candidateContext, {
       userId,
       applicationId: application._id,
+      lang: req.lang,
     });
 
     const remainingCredits = await deductCredits(user, COSTS.GENERATE_STORIES);
@@ -1349,6 +1371,7 @@ const generateApplicationStories = async (req, res) => {
     const storyFabricationWarnings = await aiService.factCheckStories(candidateContext, stories, {
       userId,
       applicationId: application._id,
+      lang: req.lang,
     });
 
     application.interviewPrep = application.interviewPrep || {};
@@ -1414,6 +1437,7 @@ const generateApplicationEssential = async (req, res) => {
       candidateContext = await buildInterviewCandidateContext(application, {
         userId,
         applicationId: application._id,
+        lang: req.lang,
       });
     } catch (e) {
       console.error("[Essential] Failed to build candidate context:", e.message);
@@ -1431,7 +1455,7 @@ const generateApplicationEssential = async (req, res) => {
       kind,
       jobData.description,
       candidateContext,
-      { userId, applicationId: application._id }
+      { userId, applicationId: application._id, lang: req.lang }
     );
 
     const remainingCredits = await deductCredits(user, COSTS.GENERATE_ESSENTIAL);
@@ -1439,6 +1463,7 @@ const generateApplicationEssential = async (req, res) => {
     const warns = await aiService.factCheckInterviewQuestions(candidateContext, [newQuestion], {
       userId,
       applicationId: application._id,
+      lang: req.lang,
     });
 
     application.interviewPrep = application.interviewPrep || {};
@@ -1522,7 +1547,7 @@ const generateDressGuide = async (req, res) => {
         jobTitle: application.jobTitle || jobData.title || "",
         company: application.jobCompany || jobData.company || "",
       },
-      { userId, applicationId: application._id }
+      { userId, applicationId: application._id, lang: req.lang }
     );
 
     const remainingCredits = await deductCredits(user, COSTS.GENERATE_DRESS_GUIDE);
@@ -1615,6 +1640,11 @@ const generateApplicationBundle = async (req, res) => {
       bundle: true,
     });
 
+    // DOCUMENT language for everything this bundle writes (CV + cover letter).
+    // The bundle always starts from an uploaded resume, so there is no source CV
+    // to inherit from — the user's app language is the sensible default.
+    const bundleLang = langService.newCvLang(req);
+
     // Fire-and-forget bundle pipeline. Errors caught inside, never bubble out.
     (async () => {
       try {
@@ -1627,6 +1657,7 @@ const generateApplicationBundle = async (req, res) => {
           templateId,
           chargeOnSuccess: false,
           providedMetrics,
+          lang: bundleLang,
         });
 
         // Stage 2: Cover letter (resume text from raw resume)
@@ -1634,11 +1665,12 @@ const generateApplicationBundle = async (req, res) => {
           userId,
           applicationId: application._id,
           model: aiService.resolveTextModel(user),
+          lang: bundleLang,
         });
         const coverLetterWarnings = await aiService.factCheckCoverLetter(
           resume.rawText,
           coverLetter,
-          { userId, applicationId: application._id }
+          { userId, applicationId: application._id, lang: req.lang }
         );
 
         // Stage 3: Interview prep — pass full candidate context so AI can ground
@@ -1647,7 +1679,7 @@ const generateApplicationBundle = async (req, res) => {
         try {
           candidateContext = await buildInterviewCandidateContext(
             { ...application.toObject(), draftCVId: cvResult.draftId },
-            { userId, applicationId: application._id }
+            { userId, applicationId: application._id, lang: req.lang }
           );
         } catch (e) {
           console.error("[Bundle] Failed to build candidate context:", e.message);
@@ -1664,12 +1696,12 @@ const generateApplicationBundle = async (req, res) => {
           interviewResult = await aiService.generateInterviewQuestions(
             job.description,
             candidateContext,
-            { userId, applicationId: application._id }
+            { userId, applicationId: application._id, lang: req.lang }
           );
           interviewWarnings = await aiService.factCheckInterviewQuestions(
             candidateContext,
             interviewResult?.jobQuestions || [],
-            { userId, applicationId: application._id }
+            { userId, applicationId: application._id, lang: req.lang }
           );
         } else {
           console.log(
@@ -1759,7 +1791,7 @@ const preflightMetrics = async (req, res) => {
       return res.status(404).json({ message: "Resume or Job not found" });
     }
 
-    const meta = { userId, applicationId: application._id };
+    const meta = { userId, applicationId: application._id, lang: req.lang };
     const [candidateData, jobData] = await Promise.all([
       aiService.extractCandidateData(resume.rawText, meta),
       aiService.extractJobRequirements(job.description, meta),
@@ -1815,7 +1847,7 @@ const editApplication = async (req, res) => {
     }
 
     // Extract structured data from the optimized CV markdown
-    const extractedData = await aiService.extractResumeProfile(cvText);
+    const extractedData = await aiService.extractResumeProfile(cvText, { userId: req.user._id, lang: req.lang });
 
     // Use stored skills if available, otherwise regenerate
     let structuredSkills = [];
@@ -1833,7 +1865,7 @@ const editApplication = async (req, res) => {
           projects: extractedData.projects,
           targetJob: null,
         },
-        { model: aiService.resolveTextModel(req.user) }
+        { model: aiService.resolveTextModel(req.user), lang: langService.newCvLang(req) }
       );
       structuredSkills = structuredSkills.map((s) => ({ ...s, isAutoGenerated: true }));
     }
@@ -1841,6 +1873,7 @@ const editApplication = async (req, res) => {
     const draft = await DraftCV.create({
       userId,
       sourceApplicationId: application._id,
+      outputLang: langService.newCvLang(req),
       title: `Edit of ${application.jobId ? (await Job.findById(application.jobId))?.title || "Application" : "Application"}`,
       personalInfo: {
         fullName: req.user.firstName ? `${req.user.firstName} ${req.user.lastName}` : "Candidate",
