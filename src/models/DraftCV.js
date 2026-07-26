@@ -80,6 +80,8 @@ const draftCVSchema = new mongoose.Schema(
       address: String,
       linkedin: String,
       website: String,
+      photoUrl: String,
+      nationality: String,
     },
     professionalSummary: {
       type: String,

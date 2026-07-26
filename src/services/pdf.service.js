@@ -49,8 +49,12 @@ class PdfService {
         timeout: 30000,
       });
 
-      // Give Tailwind CDN and fonts time to process after DOM is ready
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Wait for fonts to actually finish loading (capped, so a stuck/blocked
+      // font CDN can't hang PDF generation forever)
+      await Promise.race([
+        page.evaluate(() => document.fonts.ready.then(() => true)),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]);
       console.log("--- [PdfService] Page content set. Generating PDF... ---");
 
       // Specific PDF options for CVs
