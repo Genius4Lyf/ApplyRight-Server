@@ -6,6 +6,7 @@ const Transaction = require("../models/Transaction");
 const SettingsService = require("../services/settings.service");
 const subscription = require("../services/subscription.service");
 const { sendPasswordResetOTP } = require("../utils/email.service");
+const { validateRegistrationEmail } = require("../utils/emailValidation");
 
 const generateReferralCode = () => {
   // Basic code generation: Random 8 char alphanumeric
@@ -33,14 +34,9 @@ const registerUser = async (req, res, next) => {
     }
 
     // Validate email format and domain
-    const emailRegex =
-      /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|org|net|edu|gov|mil|co|io|ai|tech|dev|app|uk|ca|au|de|fr|jp|cn|in|br|mx|es|it|nl|se|no|dk|fi|ch|at|be|ie|nz|sg|hk|my|ph|th|vn|id|kr|tw|za|ae|sa|eg|ng|ke|gh|tz|ug|zm|zw|bw|mw|na|sz|ls|gm|sl|lr|sn|ml|bf|ne|td|cf|cm|ga|cg|cd|ao|mz|mg|sc|mu|re|yt|km|dj|so|et|er|sd|ss|ly|tn|dz|ma|eh|mr|cv|st|gq|gw|bi|rw|vu|fj|pg|sb|nc|pf|ws|to|tv|ki|nr|fm|mh|pw|mp|gu|as|vi|pr|do|jm|tt|bb|gd|lc|vc|ag|kn|dm|bs|ky|bm|tc|vg|ai|ms|gl|fo|is|li|mc|sm|va|ad|mt|cy|tr|gr|bg|ro|hu|cz|sk|pl|ua|by|ru|lt|lv|ee|md|ge|am|az|kz|uz|tm|kg|tj|mn|kp|mm|la|kh|bn|mv|bt|np|lk|bd|pk|af|ir|iq|sy|lb|jo|il|ps|ye|om|kw|bh|qa|info|biz|name|pro|coop|aero|museum|travel|jobs|mobi|tel|xxx|asia|cat|post|xxx)$/i;
-
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({
-        message:
-          "Please enter a valid email address with a recognized domain (e.g., @gmail.com, @outlook.com, @company.com)",
-      });
+    const emailCheck = validateRegistrationEmail(email);
+    if (!emailCheck.ok) {
+      return res.status(400).json({ message: emailCheck.message });
     }
 
     // Validate password strength

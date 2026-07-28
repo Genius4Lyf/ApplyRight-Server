@@ -164,6 +164,38 @@ const CATALOG = {
     amountUsd: 3.5,
     minutes: 15,
   },
+  topup_30: {
+    id: "topup_30",
+    label: "30 min top-up",
+    purpose: "topup",
+    amountNgn: 4500,
+    amountUsd: 6,
+    minutes: 30,
+  },
+  topup_60: {
+    id: "topup_60",
+    label: "1 hr top-up",
+    purpose: "topup",
+    amountNgn: 8000,
+    amountUsd: 10,
+    minutes: 60,
+  },
+  topup_120: {
+    id: "topup_120",
+    label: "2 hr top-up",
+    purpose: "topup",
+    amountNgn: 15000,
+    amountUsd: 19,
+    minutes: 120,
+  },
+  topup_300: {
+    id: "topup_300",
+    label: "5 hr top-up",
+    purpose: "topup",
+    amountNgn: 34000,
+    amountUsd: 42,
+    minutes: 300,
+  },
   // One-time clean CV download (after the free first download). Priced for the
   // reseller case: a CV agent charges their client ~₦1,000 and keeps ₦250.
   download_single: {
