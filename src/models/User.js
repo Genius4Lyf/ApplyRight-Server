@@ -136,6 +136,12 @@ const userSchema = new mongoose.Schema(
       date: String, // 'YYYY-MM-DD' of the current window
       count: { type: Number, default: 0 }, // messages used in that window
     },
+    // Free daily cover letter (free tier only). Resets by calendar date, same
+    // shape as ariaChat. Paid users don't draw from this — they pay credits.
+    coverLetterFree: {
+      date: String, // 'YYYY-MM-DD' of the current window
+      count: { type: Number, default: 0 },
+    },
     hasEverPurchased: {
       type: Boolean,
       default: false,

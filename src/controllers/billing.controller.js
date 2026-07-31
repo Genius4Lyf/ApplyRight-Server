@@ -26,6 +26,15 @@ exports.getBalance = async (req, res) => {
       credits: subscription.availableCredits(user),
       walletCredits: user.credits,
       planCredits: subscription.isPaidActive(user) ? user.subscription?.creditsRemaining || 0 : 0,
+      coverLetterFreeRemaining: subscription.isPaidActive(user)
+        ? 0
+        : Math.max(
+            0,
+            1 -
+              (user.coverLetterFree?.date === new Date().toISOString().slice(0, 10)
+                ? user.coverLetterFree.count || 0
+                : 0)
+          ),
     });
   } catch (error) {
     console.error(error);
@@ -282,7 +291,8 @@ const entitlementFor = (user) => {
   // Human-readable plan name for the UI. Only meaningful while the subscription is
   // still active (tier !== "free"); an expired plan falls back to no label so the
   // card reads "Free plan" rather than a stale marketing name.
-  const planItem = tier !== "free" && user.subscription?.planId ? getItem(user.subscription.planId) : null;
+  const planItem =
+    tier !== "free" && user.subscription?.planId ? getItem(user.subscription.planId) : null;
   return {
     tier,
     // Client's EFFECTIVE (expiry-aware) paid status — expired subscribers read
@@ -464,7 +474,9 @@ exports.verifyPaymentRedirect = async (req, res) => {
     });
   } catch (error) {
     if (error.code === "FLW_UNAVAILABLE") {
-      return res.status(503).json({ message: "Could not verify payment yet.", code: "FLW_UNAVAILABLE" });
+      return res
+        .status(503)
+        .json({ message: "Could not verify payment yet.", code: "FLW_UNAVAILABLE" });
     }
     console.error("verifyPaymentRedirect error:", error.message);
     return res.status(500).json({ message: "Failed to verify payment" });

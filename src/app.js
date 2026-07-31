@@ -25,6 +25,7 @@ const allowedOrigins = [
   "capacitor://localhost", // Capacitor iOS default
   "http://localhost:5173", // Vite dev server
   "http://localhost:5174", // Vite dev server
+  "http://localhost:4173", // Vite preview server
 ].filter(Boolean);
 
 const corsOptions = {

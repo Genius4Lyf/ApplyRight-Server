@@ -589,6 +589,7 @@ const askAria = async (req, res) => {
 // Hard per-round turn cap for focused build-with in /coach/chat: at the cap, the
 // model is forced to wrap up to a draft so the conversation always converges.
 const INTERVIEW_TURN_CAP = 6;
+const STUDIO_INTERVIEW_TURN_CAP = 10;
 
 // @desc    Aria's UNIFIED chat — ONE front door. Focus-aware + intent-classified on
 //          the CHEAP base model: a focused 'building'/'ready' turn is FREE (build-with);
@@ -597,7 +598,8 @@ const INTERVIEW_TURN_CAP = 6;
 // @route   POST /api/coach/chat
 // @access  Private (job-seekers only — not CV-agent client CVs)
 const chat = async (req, res) => {
-  const { draftId, currentStepId, messages, focus, buildTurns, stage } = req.body || {};
+  const { draftId, currentStepId, messages, focus, buildTurns, stage, studioInterview } =
+    req.body || {};
   if (!draftId) {
     return res.status(400).json({ message: "draftId is required" });
   }
@@ -661,7 +663,8 @@ const chat = async (req, res) => {
     });
 
     // The per-interview turn cap only bounds focused BUILDING (forces a draft).
-    const mustFinish = !!focus && Number(buildTurns) >= INTERVIEW_TURN_CAP;
+    const turnCap = studioInterview === true ? STUDIO_INTERVIEW_TURN_CAP : INTERVIEW_TURN_CAP;
+    const mustFinish = !!focus && Number(buildTurns) >= turnCap;
 
     // Route the turn through the selected model (multi-provider dispatcher).
     const meta = { userId: req.user.id, operation: "coachChatTurn", modelId, lang: req.lang };
@@ -680,7 +683,9 @@ const chat = async (req, res) => {
     }
 
     const stepLabel = STEP_LABELS[currentStepId] || "your CV";
-    const window = turns.slice(-12); // bounded memory sent to the model
+    // Studio can unpack several activities across ten user turns, so retain the opening
+    // activity list for that whole interview. Other coach surfaces keep the smaller window.
+    const window = turns.slice(-(studioInterview === true ? 22 : 12));
 
     // NO focus → every turn is a general answer (metered like /coach/ask). Pre-check
     // the balance BEFORE spending an AI call the user can't pay for — but only when the
@@ -700,6 +705,7 @@ const chat = async (req, res) => {
         focus: !!focus,
         entryTitle: entry?.title || "this role",
         entryCompany: (entry?.company || "").trim(),
+        entryType: entry?.entryType || "",
         section: focus?.section || "",
         // Career stage forks the experience coaching: explicit chip choice wins; else
         // inferred from the draft (real job → experienced, else entry-level 'grad').

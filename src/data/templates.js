@@ -18,6 +18,8 @@ module.exports = [
   { id: "executive-board", name: "Boardroom Director" },
   { id: "executive-strategy", name: "Strategic Vision" },
   { id: "executive-corporate", name: "Corporate Clean" },
+  { id: "the-ascent", name: "The Ascent" },
+  { id: "the-profile", name: "The Profile" },
   { id: "tech", name: "Tech Stack" },
   { id: "tech-devops", name: "DevOps Terminal" },
   { id: "tech-silicon", name: "Silicon Valley" },

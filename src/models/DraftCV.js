@@ -87,12 +87,21 @@ const draftCVSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    // The user's picked career stage for this CV ('experienced'|'grad'|'changer'), asked
+    // once via Aria Studio's CareerStageAskCard. Persisted so a reload/session-resume
+    // doesn't silently fall back to backend inference. No enum constraint — only ever
+    // written by our own frontend.
+    careerStage: {
+      type: String,
+      default: null,
+    },
     experience: [
       {
         // Stable per-entry id the builder assigns (uuid). Declared here so it
         // survives Mongoose strict-mode saves — the ATS coach keys role-targeted
         // rewrites/red-flags off it, and it lets drag-reorder persist across reloads.
         _sortId: String,
+        entryType: String,
         title: String,
         company: String,
         startDate: String,
@@ -352,6 +361,9 @@ const draftCVSchema = new mongoose.Schema(
     // Per-entry generation state so the FIRST re-roll of an identical request is free.
     // { [sortId]: { hash: String, freeRerollAvailable: Boolean } }
     genState: { type: Object, default: {} },
+    // A paid Studio generation remains recoverable until the user applies or discards it.
+    // Only one generation card can be active in a Studio session at a time.
+    studioPending: { type: mongoose.Schema.Types.Mixed, default: null },
     // Aria's per-section conversation, persisted ON the draft so it survives step
     // navigation, refresh, and other devices. { [stepId]: [{ who, text }] }. Session
     // flags (skip choice, always-allow, target ack) stay in the frontend coachState.

@@ -87,6 +87,40 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
     expect(res.body.freeRemaining).toBe(15); // 15 - used(0), unchanged
   });
 
+  it("gives Aria Studio ten focused turns before forcing bullet generation", async () => {
+    aiService.coachChatTurn.mockResolvedValue({
+      reply: "Let's unpack the next activity.",
+      intent: "building",
+      description: "",
+    });
+
+    const beforeCap = await post({
+      draftId,
+      currentStepId: "history",
+      focus,
+      messages: buildMsgs("I handled bookings. I organised documents."),
+      buildTurns: 6,
+      studioInterview: true,
+    });
+    expect(beforeCap.body.readyToDraft).toBe(false);
+    expect(aiService.coachChatTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mustFinish: false })
+    );
+
+    const atCap = await post({
+      draftId,
+      currentStepId: "history",
+      focus,
+      messages: buildMsgs("I handled bookings. I organised documents."),
+      buildTurns: 10,
+      studioInterview: true,
+    });
+    expect(atCap.body.readyToDraft).toBe(true);
+    expect(aiService.coachChatTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mustFinish: true })
+    );
+  });
+
   it("focused + READY → free, description + readyToDraft populated", async () => {
     aiService.coachChatTurn.mockResolvedValue({
       reply: "Love it — I've got what I need ✍️",

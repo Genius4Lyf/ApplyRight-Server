@@ -55,6 +55,24 @@ const deductCredits = async (user, cost) => {
   return res.remainingCredits;
 };
 
+// One free cover letter per calendar day, FREE TIER ONLY. Paid users pay
+// credits from their plan allowance as before.
+const FREE_DAILY_COVER_LETTERS = 1;
+
+// Pre-check BEFORE the AI call: is this letter free for this user right now?
+const coverLetterAllowance = (user) => {
+  const today = new Date().toISOString().slice(0, 10);
+  if (subscription.isPaidActive(user)) return { today, used: 0, isFree: false };
+  const used = user.coverLetterFree?.date === today ? user.coverLetterFree.count || 0 : 0;
+  return { today, used, isFree: used < FREE_DAILY_COVER_LETTERS };
+};
+
+// Commit AFTER the AI succeeds — bumps the free counter for the day.
+const commitFreeCoverLetter = async (user, pre) => {
+  user.coverLetterFree = { date: pre.today, count: pre.used + 1 };
+  await user.save();
+};
+
 /**
  * Helper: Map an error to a JSON response. Returns true if handled.
  * Centralizes credit + AI-availability error handling so each controller
@@ -907,9 +925,12 @@ const generateApplicationCoverLetter = async (req, res) => {
       return res.status(404).json({ message: "Resume or Job not found" });
     }
 
-    // Pre-flight balance check
+    // Free-tier users get one free letter per calendar day; past that (and for
+    // paid users) it's the normal credit charge. Checked BEFORE the AI call so a
+    // user short on credits is never sent through a generation they can't pay for.
     const COSTS = await settingsService.getCreditCosts();
-    checkCredits(user, COSTS.GENERATE_COVER_LETTER);
+    const clPre = coverLetterAllowance(user);
+    if (!clPre.isFree) checkCredits(user, COSTS.GENERATE_COVER_LETTER);
 
     const coverLetter = await aiService.generateCoverLetter(resumeText, jobData.description, {
       userId,
@@ -918,8 +939,14 @@ const generateApplicationCoverLetter = async (req, res) => {
       lang: docLang,
     });
 
-    // AI succeeded — now charge the user
-    const remainingCredits = await deductCredits(user, COSTS.GENERATE_COVER_LETTER);
+    // AI succeeded — spend the day's free letter, or charge credits.
+    let remainingCredits;
+    if (clPre.isFree) {
+      await commitFreeCoverLetter(user, clPre);
+      remainingCredits = subscription.availableCredits(user);
+    } else {
+      remainingCredits = await deductCredits(user, COSTS.GENERATE_COVER_LETTER);
+    }
 
     // Best-effort post-generation fact check. The function never throws —
     // failures return [] so the user always sees their letter.
@@ -937,6 +964,10 @@ const generateApplicationCoverLetter = async (req, res) => {
       coverLetter,
       coverLetterWarnings,
       remainingCredits,
+      coverLetterWasFree: clPre.isFree,
+      coverLetterFreeRemaining: clPre.isFree
+        ? Math.max(0, FREE_DAILY_COVER_LETTERS - (clPre.used + 1))
+        : 0,
     });
   } catch (error) {
     if (handleAIError(res, error)) return;
@@ -1821,7 +1852,27 @@ const editApplication = async (req, res) => {
       return res.status(404).json({ message: "Application not found" });
     }
 
-    const cvText = application.optimizedCV || "";
+    let cvText = application.optimizedCV || "";
+    if (!cvText) {
+      // No optimized CV yet — resolve the ORIGINAL source instead of failing
+      // outright, so callers can open an edit/tailor session straight off an
+      // analysis result, before CV generation has run. A saved-CV analysis
+      // already points at a real DraftCV via draftCVId (only overwritten with
+      // the optimized copy once generation runs, at which point cvText above
+      // is already non-empty and this branch is unreachable); an
+      // uploaded-resume analysis has raw text via resumeId.
+      if (application.draftCVId) {
+        return res.status(200).json({
+          message: "Existing draft returned",
+          draftId: application.draftCVId,
+          cached: true,
+        });
+      }
+      if (application.resumeId) {
+        const sourceResume = await Resume.findById(application.resumeId);
+        cvText = sourceResume?.rawText || "";
+      }
+    }
     if (!cvText) {
       return res.status(400).json({ message: "No CV content to edit. Generate a CV first." });
     }
