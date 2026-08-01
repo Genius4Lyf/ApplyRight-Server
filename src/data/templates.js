@@ -1,5 +1,6 @@
 module.exports = [
   { id: "ats-clean", name: "ATS Clean" },
+  { id: "applyright-band-twin", name: "ApplyRight Band Twin" },
   { id: "student-ats", name: "Student ATS" },
   { id: "modern-professional", name: "Modern Professional" },
   { id: "modern", name: "Modern Clean" },
@@ -25,6 +26,7 @@ module.exports = [
   { id: "tech-silicon", name: "Silicon Valley" },
   { id: "tech-google", name: "Tech Titan" },
   { id: "executive-energy", name: "Energy Professional" },
+  { id: "operations-blueprint", name: "Operations Blueprint" },
   { id: "energy-slb", name: "Schlumberger Style" },
   { id: "energy-total", name: "Total Energy" },
   { id: "energy-seplat", name: "Seplat Green" },
