@@ -228,12 +228,12 @@ const grantEntitlement = async (payment) => {
 /**
  * Snapshot of a user's CV-download entitlement for the UI.
  * Paid tiers download unlimited (PDF gen is ~free for us); free users get one
- * lifetime taste, then ₦500 single-download passes.
+ * lifetime taste, then ₦1,000 single-download passes.
  */
 const downloadStatus = (user) => {
   const unlimited = isPaidActive(user);
   const passRemaining = user?.downloads?.passRemaining || 0;
-  // Free downloads removed — web users pay ₦500/CV (single pass) or subscribe.
+  // Free downloads removed — web users pay ₦1,000/CV (single pass) or subscribe.
   return {
     unlimited,
     passRemaining,
@@ -251,7 +251,7 @@ const downloadStatus = (user) => {
 const consumeDownload = async (user) => {
   if (isPaidActive(user)) return { ok: true, method: "subscription" };
 
-  // No more free downloads — a purchased ₦500 pass is the only non-subscription path.
+  // No more free downloads — a purchased ₦1,000 pass is the only non-subscription path.
   const pass = await User.updateOne(
     { _id: user._id, "downloads.passRemaining": { $gte: 1 } },
     { $inc: { "downloads.passRemaining": -1 } }

@@ -65,6 +65,23 @@ describe("Billing — Flutterwave payments", () => {
       expect(res.statusCode).toBe(400);
       expect(res.body.code).toBe("UNKNOWN_PLAN");
     });
+
+    it("rejects a RETIRED plan — it stays in the catalog for historical payments only", async () => {
+      // agent_yearly is kept so admin revenue views can still resolve its label and
+      // existing Payment rows stay readable, but it must not be purchasable again.
+      expect(getItem("agent_yearly").retired).toBe(true);
+
+      const res = await request(app)
+        .post("/api/billing/checkout")
+        .set("Authorization", "Bearer mock")
+        .send({ planId: "agent_yearly" });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.code).toBe("PLAN_RETIRED");
+      // No pending Payment and no Flutterwave link for a plan we no longer sell.
+      expect(Payment.create).not.toHaveBeenCalled();
+      expect(flutterwave.buildCheckout).not.toHaveBeenCalled();
+    });
   });
 
   describe("POST /api/billing/flutterwave-webhook", () => {

@@ -13,7 +13,7 @@ exports.generateCvPdf = async (req, res) => {
 
     // Download entitlement (WEB only). The native app keeps its own AdMob-rewarded
     // download model, so native requests are exempt (see api.js X-Client-Platform).
-    // On web: first download is free (lifetime taste); after that a ₦500 single-
+    // On web: first download is free (lifetime taste); after that a ₦1,000 single-
     // download pass or any paid subscription (unlimited). Consume BEFORE generating
     // and refund on failure, so a failed PDF never burns a unit and concurrent
     // requests can't double-spend.
@@ -24,7 +24,7 @@ exports.generateCvPdf = async (req, res) => {
       if (!consumed.ok) {
         return res.status(402).json({
           message:
-            "Pay ₦500 to download this CV as an ATS-ready PDF, or go unlimited with a plan.",
+            "Pay ₦1,000 to download this CV as an ATS-ready PDF, or go unlimited with a plan.",
           code: "NEED_DOWNLOAD",
         });
       }

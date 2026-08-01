@@ -80,11 +80,14 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
     expect(res.body.intent).toBe("building");
     expect(res.body.charged).toBe(false);
     expect(res.body.readyToDraft).toBe(false);
-    // FREE: nothing charged, counter NOT bumped.
+    // FREE on light: no credit spent and the CHAT allowance is untouched…
     expect(Transaction.create).not.toHaveBeenCalled();
     expect(User.updateOne).not.toHaveBeenCalled();
-    expect(mockUser.save).not.toHaveBeenCalled();
     expect(res.body.freeRemaining).toBe(15); // 15 - used(0), unchanged
+    // …but the BUILD counter still bumps — that ceiling is abuse prevention and
+    // applies to every tier, paid or not.
+    expect(mockUser.ariaBuild).toEqual({ date: today, count: 1 });
+    expect(mockUser.save).toHaveBeenCalledTimes(1);
   });
 
   it("gives Aria Studio ten focused turns before forcing bullet generation", async () => {
@@ -136,7 +139,8 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
     expect(res.body.description).toMatch(/wireline/i);
     expect(res.body.charged).toBe(false);
     expect(Transaction.create).not.toHaveBeenCalled();
-    expect(mockUser.save).not.toHaveBeenCalled();
+    // Free on light, but the build counter still bumps (see the BUILDING case above).
+    expect(mockUser.ariaBuild).toEqual({ date: today, count: 1 });
   });
 
   it("focused + ANSWER (general Q) in the free window → spends a free chat (counter drops, no credit)", async () => {
@@ -297,7 +301,7 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       );
     });
 
-    it("a focused BUILD-WITH turn stays FREE even on a flagship model", async () => {
+    it("a focused BUILD-WITH turn is FREE on the LIGHT model (and bumps the build counter)", async () => {
       setUser({ credits: 5, ariaChat: { date: today, count: 15 } }); // past the free daily pool
       aiService.coachChatTurn.mockResolvedValue({ reply: "and then?", intent: "building", description: "" });
 
@@ -305,17 +309,102 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
         draftId,
         currentStepId: "history",
         focus,
-        model: "gpt-5", // flagship
+        // no model → default gpt-4o-mini (light)
         messages: buildMsgs("I operated the tools"),
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.body.charged).toBe(false); // building never charges, regardless of model
+      expect(res.body.charged).toBe(false); // building is free on Standard — the point of Studio
       expect(Transaction.create).not.toHaveBeenCalled();
-      // …and it still ran on the picked flagship model.
+      expect(mockUser.credits).toBe(5); // untouched
+      expect(mockUser.ariaBuild).toEqual({ date: today, count: 1 });
       expect(aiService.coachChatTurn).toHaveBeenCalledWith(
-        expect.objectContaining({ meta: expect.objectContaining({ modelId: "gpt-5" }) })
+        expect.objectContaining({ meta: expect.objectContaining({ modelId: "gpt-4o-mini" }) })
       );
+    });
+
+    it("the same BUILD-WITH turn on FLAGSHIP charges the flagship cost (10) and still bumps the counter", async () => {
+      setUser({ credits: 25, ariaChat: { date: today, count: 0 } }); // free pool untouched
+      aiService.coachChatTurn.mockResolvedValue({ reply: "and then?", intent: "building", description: "" });
+
+      const res = await post({
+        draftId,
+        currentStepId: "history",
+        focus,
+        model: "claude-sonnet-5", // flagship
+        messages: buildMsgs("I operated the tools"),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.charged).toBe(true); // no free Sonnet-class interviews
+      expect(Transaction.create).toHaveBeenCalledTimes(1);
+      expect(mockUser.credits).toBe(15); // 25 - 10 (ARIA_CHAT_MESSAGE, flagship)
+      // The abuse ceiling applies regardless of model or payment.
+      expect(mockUser.ariaBuild).toEqual({ date: today, count: 1 });
+      expect(aiService.coachChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ meta: expect.objectContaining({ modelId: "claude-sonnet-5" }) })
+      );
+    });
+
+    it("a FLAGSHIP build-with turn the user can't afford is refused BEFORE the AI call", async () => {
+      setUser({ credits: 3, ariaChat: { date: today, count: 0 } }); // 3 < 10
+      aiService.coachChatTurn.mockResolvedValue({ reply: "LEAKED", intent: "building", description: "" });
+
+      const res = await post({
+        draftId,
+        currentStepId: "history",
+        focus,
+        model: "claude-sonnet-5",
+        messages: buildMsgs("I operated the tools"),
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.body.code).toBe("INSUFFICIENT_CREDITS");
+      expect(res.body.required).toBe(10);
+      // The message must point at the free way out, not only at topping up.
+      expect(res.body.message).toMatch(/Standard/);
+      // No API call was spent on a turn that could never be paid for.
+      expect(aiService.coachChatTurn).not.toHaveBeenCalled();
+      expect(Transaction.create).not.toHaveBeenCalled();
+    });
+
+    it("a FLAGSHIP general chat charges on the FIRST message of the day — it never rides the free pool", async () => {
+      setUser({ credits: 25, ariaChat: { date: today, count: 0 } }); // pool completely unused
+      aiService.coachChatTurn.mockResolvedValue({ reply: "here you go", intent: "answer", description: "" });
+
+      const res = await post({
+        draftId,
+        currentStepId: "history",
+        model: "claude-sonnet-5", // flagship, no focus → forced 'answer'
+        messages: buildMsgs("how long should my summary be?"),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.charged).toBe(true);
+      expect(mockUser.credits).toBe(15); // 25 - 10
+      expect(Transaction.create).toHaveBeenCalledTimes(1);
+      // The free pool is a LIGHT perk — a charged flagship turn must not consume a slot.
+      expect(res.body.freeRemaining).toBe(15);
+      expect(mockUser.ariaChat).toEqual({ date: today, count: 0 });
+    });
+
+    it("a FLAGSHIP general chat with no credits → 403 INSUFFICIENT_CREDITS, not CHAT_LIMIT_REACHED", async () => {
+      // Free pool wide open — this user is NOT out of chats, they just can't afford Pro.
+      setUser({ credits: 0, ariaChat: { date: today, count: 0 } });
+      aiService.coachChatTurn.mockResolvedValue({ reply: "SECRET", intent: "answer", description: "" });
+
+      const res = await post({
+        draftId,
+        currentStepId: "history",
+        model: "claude-sonnet-5",
+        messages: buildMsgs("how long should my summary be?"),
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.body.code).toBe("INSUFFICIENT_CREDITS");
+      expect(res.body.message).toMatch(/Standard/);
+      expect(res.body.reply).toBeUndefined();
+      expect(aiService.coachChatTurn).not.toHaveBeenCalled();
     });
 
     it("a metered general answer on FLAGSHIP charges the flagship cost, even on a paid plan", async () => {

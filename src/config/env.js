@@ -35,6 +35,9 @@ const envSchema = z.object({
   ADMOB_REWARD_AMOUNT_ANDROID: z.coerce.number().int().positive().default(10),
   ADMOB_COOLDOWN_SECONDS: z.coerce.number().int().nonnegative().default(60),
   ADMOB_DAILY_CAP: z.coerce.number().int().positive().default(10),
+  // Free build-with anti-abuse ceiling (see coach.controller.js buildAllowance). Tunable
+  // from Render without a deploy if a real build ever needs more than 60 turns/day.
+  ARIA_BUILD_DAILY_CAP: z.coerce.number().int().positive().default(60),
   ADMOB_REWARDED_UNIT_ID_ALLOWLIST: z.string().optional(),
   // Flutterwave one-time payments. Optional so the app still boots without them
   // (checkout/webhook will 503 until configured), mirroring the AI-key pattern.

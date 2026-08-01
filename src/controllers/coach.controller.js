@@ -1,5 +1,7 @@
 const mongoose = require("mongoose");
 const crypto = require("crypto");
+const env = require("../config/env");
+const logger = require("../utils/logger");
 const User = require("../models/User");
 const DraftCV = require("../models/DraftCV");
 const subscription = require("../services/subscription.service");
@@ -464,12 +466,25 @@ const chatAllowance = (user) => {
   return { today, used, willCharge: used >= FREE_DAILY_CHATS };
 };
 
-// Commit a chat turn AFTER the AI succeeds. Past the free daily pool it charges the
-// (action, tier) cost via the TIER-AWARE charge — flagship always meters, LIGHT is free on
-// an active paid plan (the "unlimited light on paid" perk). Within the pool it just bumps
-// the free counter. `tier` defaults to 'light' so the model-agnostic /coach/ask path keeps
-// working. Returns { insufficient } on a lost charge race, else { charged, freeRemaining }.
+// Commit a chat turn AFTER the AI succeeds. FLAGSHIP charges on EVERY turn (it never
+// touches the free pool). LIGHT rides the free daily pool first, then charges the
+// (action, tier) cost — and is free entirely on an active paid plan (the "unlimited
+// light on paid" perk). `tier` defaults to 'light' so the model-agnostic /coach/ask path
+// keeps working. Returns { insufficient } on a lost charge race, else { charged, freeRemaining }.
 const commitChatTurn = async (user, pre, cost, tier = "light") => {
+  // FLAGSHIP never draws from the free daily pool — it always meters, per
+  // modelSelection.service's locked rule. The pool is a LIGHT-model perk; 15 free
+  // Sonnet-class turns a day per user is the same blow-out the build-with metering
+  // below closes. A charged flagship turn does NOT consume a free-pool slot.
+  if (tier === "flagship") {
+    const r = await modelSelection.chargeForModel(user, cost, tier, {
+      type: "aria_chat",
+      description: "Aria chat (Pro model)",
+    });
+    if (r.insufficient) return { insufficient: true };
+    await user.save();
+    return { charged: r.charged, freeRemaining: Math.max(0, FREE_DAILY_CHATS - pre.used) };
+  }
   if (pre.willCharge) {
     const r = await modelSelection.chargeForModel(user, cost, tier, {
       type: "aria_chat",
@@ -486,11 +501,46 @@ const commitChatTurn = async (user, pre, cost, tier = "light") => {
   return { charged: false, freeRemaining: Math.max(0, FREE_DAILY_CHATS - (pre.used + 1)) };
 };
 
-// Will this metered turn ACTUALLY spend credits? Past the free pool, yes — UNLESS it's a
-// light model on an active paid plan (unlimited light). Drives the pre-flight balance
-// check so a paid light user is never wrongly blocked with CHAT_LIMIT_REACHED.
+// Will this turn ACTUALLY spend credits? FLAGSHIP always does — it never rides the free
+// pool, so the tier check must come FIRST (gating on pre.willCharge would report "won't
+// meter" for a flagship turn inside the pool and skip the pre-flight balance check).
+// LIGHT only past the pool, and never on an active paid plan (unlimited light) — so a
+// paid light user is never wrongly blocked with CHAT_LIMIT_REACHED.
 const turnWillMeter = (user, pre, tier) =>
-  pre.willCharge && (tier === "flagship" || !subscription.isPaidActive(user));
+  tier === "flagship" || (pre.willCharge && !subscription.isPaidActive(user));
+
+// Refuse a turn the user can't pay for. The two tiers fail for DIFFERENT reasons and
+// must not share a message: a LIGHT user has genuinely burned the day's free pool and
+// their credits ("come back tomorrow" is true). A FLAGSHIP user may have the whole free
+// pool left — Pro simply never rides it — so "you've used today's free chats" is wrong,
+// and it hides the actual way out: switch back to Standard, which is still free.
+const refuseChatTurn = (res, { tier, cost, user, pre, building = false }) => {
+  if (tier === "flagship") {
+    return res.status(403).json({
+      code: "INSUFFICIENT_CREDITS",
+      message: building
+        ? "Building with the Pro model costs credits. Switch to Standard — it's free — or top up."
+        : "The Pro model costs credits per message. Switch to Standard — it's free — or top up.",
+      required: cost,
+      remainingCredits: subscription.availableCredits(user),
+      freeRemaining: Math.max(0, FREE_DAILY_CHATS - (pre?.used || 0)),
+    });
+  }
+  return res.status(402).json({
+    code: "CHAT_LIMIT_REACHED",
+    message: "You've used today's free chats — top up or come back tomorrow.",
+    freeRemaining: 0,
+  });
+};
+
+// Free build-with turns are never charged, but they ARE bounded per day so a
+// tampered/looping client can't run unlimited AI calls. A real CV build uses
+// ~40 turns total, so this ceiling is invisible in normal use.
+const buildAllowance = (user) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const used = user.ariaBuild?.date === today ? user.ariaBuild.count || 0 : 0;
+  return { today, used, exhausted: used >= env.ARIA_BUILD_DAILY_CAP };
+};
 
 // @desc    Aria's free-form coach chat. Warm, on-task, guardrailed Q&A about the
 //          current CV/section/target role on the CHEAP base model. Draws from the
@@ -646,8 +696,9 @@ const chat = async (req, res) => {
       }
     }
 
-    const user = await User.findById(req.user.id).select("plan subscription credits ariaChat");
+    const user = await User.findById(req.user.id).select("plan subscription credits ariaChat ariaBuild");
     const pre = chatAllowance(user);
+    const preBuild = buildAllowance(user);
     // Resolve the session's model (session pick → draft.studioModelId → user default →
     // DEFAULT_MODEL), gate it, and price a metered turn by its TIER (flagship chat costs
     // more). The turn RUNS on this model via meta.modelId below.
@@ -689,13 +740,34 @@ const chat = async (req, res) => {
 
     // NO focus → every turn is a general answer (metered like /coach/ask). Pre-check
     // the balance BEFORE spending an AI call the user can't pay for — but only when the
-    // turn will actually meter (a paid light user is unlimited and never blocked here).
+    // turn will actually meter (a paid light user is unlimited and never blocked here;
+    // a flagship user always meters, pool or no pool).
     if (!focus && turnWillMeter(user, pre, tier) && subscription.availableCredits(user) < cost) {
+      return refuseChatTurn(res, { tier, cost, user, pre });
+    }
+
+    // Build-with is free but bounded — block BEFORE spending an AI call once the
+    // daily anti-abuse ceiling is hit. Client-supplied buildTurns/mustFinish above
+    // is a conversation-quality cap, not a cost control; this is the real backstop.
+    if (focus && preBuild.exhausted) {
+      await User.updateOne(
+        { _id: req.user.id },
+        { $inc: { "ariaBuild.capHits": 1 }, $set: { "ariaBuild.lastCapHitAt": new Date() } }
+      ).catch((e) => logger.warn(`ariaBuild capHit write failed: ${e.message}`));
+      logger.warn(
+        `Aria build cap hit — user=${req.user.id} draft=${draftId} cap=${env.ARIA_BUILD_DAILY_CAP}`
+      );
       return res.status(402).json({
-        code: "CHAT_LIMIT_REACHED",
-        message: "You've used today's free chats — top up or come back tomorrow.",
-        freeRemaining: 0,
+        code: "BUILD_LIMIT_REACHED",
+        message: "You've done a lot of building today — let's pick this up tomorrow.",
+        buildRemaining: 0,
       });
+    }
+
+    // Flagship build-with still METERS (light stays free) — pre-check the balance
+    // BEFORE spending an AI call the user can't pay for. See modelSelection.service:8-10.
+    if (focus && tier === "flagship" && subscription.availableCredits(user) < cost) {
+      return refuseChatTurn(res, { tier, cost, user, pre, building: true });
     }
 
     let result;
@@ -727,23 +799,37 @@ const chat = async (req, res) => {
     // No focus → always a general answer; focused → trust the classifier.
     const intent = focus ? result.intent : "answer";
 
-    // SMART PER-MESSAGE charging: only a general 'answer' spends the allowance;
-    // 'building'/'ready' (focused build-with) is FREE — no charge, no counter bump.
+    // SMART PER-MESSAGE charging: a general 'answer' spends the chat allowance;
+    // 'building'/'ready' (focused build-with) is free on LIGHT, metered on FLAGSHIP.
     let charged = false;
     let freeRemaining = Math.max(0, FREE_DAILY_CHATS - pre.used);
     if (intent === "answer") {
       const c = await commitChatTurn(user, pre, cost, tier);
       if (c.insufficient) {
-        // They can't pay for a general answer — don't leak the reply. (They can still
-        // build for free on a focused role.)
-        return res.status(402).json({
-          code: "CHAT_LIMIT_REACHED",
-          message: "You've used today's free chats — top up or come back tomorrow.",
-          freeRemaining: 0,
-        });
+        // They can't pay for a general answer — don't leak the reply. (On LIGHT they
+        // can still build for free on a focused role.)
+        return refuseChatTurn(res, { tier, cost, user, pre });
       }
       charged = c.charged;
       freeRemaining = c.freeRemaining;
+    } else if (focus) {
+      // Build-with is FREE on the LIGHT model — that's the point of Aria Studio.
+      // FLAGSHIP meters even here: an unlimited Sonnet interview is exactly the
+      // cost blow-out modelSelection.service is written to prevent.
+      if (tier === "flagship") {
+        const r = await modelSelection.chargeForModel(user, cost, tier, {
+          type: "aria_chat",
+          description: "Aria build-with (Pro model)",
+        });
+        if (r.insufficient) {
+          return refuseChatTurn(res, { tier, cost, user, pre, building: true });
+        }
+        charged = r.charged;
+      }
+      // Free focused turn (building/ready) — doesn't touch the chat allowance, but
+      // bumps the build anti-abuse counter so a looping client eventually gets capped.
+      user.ariaBuild = { date: preBuild.today, count: preBuild.used + 1 };
+      await user.save();
     }
 
     return res.json({
@@ -757,6 +843,7 @@ const chat = async (req, res) => {
       suggestionsLabel: intent === "building" ? result.suggestionsLabel || "" : "",
       freeRemaining,
       charged,
+      buildRemaining: Math.max(0, env.ARIA_BUILD_DAILY_CAP - (preBuild.used + (intent === "answer" ? 0 : 1))),
     });
   } catch (error) {
     console.error("Coach Chat Error:", error);

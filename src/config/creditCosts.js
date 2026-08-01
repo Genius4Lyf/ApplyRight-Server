@@ -47,11 +47,13 @@ const DEFAULT_CREDIT_COSTS = Object.freeze({
 // FLAGSHIP-tier credit costs. A model-tier can charge a DIFFERENT credit cost per action:
 // the flagship (Sonnet-class) models cost more to run, so their actions cost more credits.
 // This is a sparse DELTA map — only the actions that differ from LIGHT are listed; every
-// other action inherits the LIGHT (default) cost. So flagship chat = 3 but flagship cover
+// other action inherits the LIGHT (default) cost. So flagship chat = 10 but flagship cover
 // letter falls through to the light cost. Admin-overridable via SystemSettings.
 // flagshipCreditCosts, mirroring the light-tier override map. LIGHT === today's costs.
 const DEFAULT_FLAGSHIP_CREDIT_COSTS = Object.freeze({
-  ARIA_CHAT_MESSAGE: 3, // chat: 1 → 3
+  // Deliberately conservative pending real usage data from AICallLog — revisit once
+  // we have actual flagship build-with token counts to price against.
+  ARIA_CHAT_MESSAGE: 10, // chat: 1 → 10
   ANALYSIS: 15, // scan / fit-analysis: 10 → 15
   GENERATE_BULLET: 2, // per-bullet: 1 → 2
   GENERATE_SUMMARY: 5, // summary: 3 → 5

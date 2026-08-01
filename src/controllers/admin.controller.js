@@ -1,3 +1,4 @@
+const env = require("../config/env");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const Resume = require("../models/Resume");
@@ -1028,6 +1029,36 @@ exports.getEngagementStats = async (req, res) => {
     );
     const totalAiSpendNgn = textTotalNgn + liveCostNgn;
 
+    // --- Build-with guard: is the free-build ceiling actually firing, and on whom? ---
+    const [buildGuardAgg] = await User.aggregate([
+      { $match: { "ariaBuild.capHits": { $gt: 0 } } },
+      {
+        $group: {
+          _id: null,
+          usersHit: { $sum: 1 },
+          totalHits: { $sum: "$ariaBuild.capHits" },
+          lastHitAt: { $max: "$ariaBuild.lastCapHitAt" },
+        },
+      },
+    ]);
+    const buildGuardTop = await User.find({ "ariaBuild.capHits": { $gt: 0 } })
+      .sort({ "ariaBuild.capHits": -1 })
+      .limit(10)
+      .select("email firstName ariaBuild.capHits ariaBuild.lastCapHitAt")
+      .lean();
+    const buildGuard = {
+      cap: env.ARIA_BUILD_DAILY_CAP,
+      usersHit: buildGuardAgg?.usersHit || 0,
+      totalHits: buildGuardAgg?.totalHits || 0,
+      lastHitAt: buildGuardAgg?.lastHitAt || null,
+      top: buildGuardTop.map((u) => ({
+        email: u.email,
+        name: u.firstName || "",
+        hits: u.ariaBuild?.capHits || 0,
+        lastAt: u.ariaBuild?.lastCapHitAt || null,
+      })),
+    };
+
     // --- Conversion funnel + churn (all-time, non-admin) ---
     const nonAdmin = { role: { $ne: "admin" } };
     const [signups, createdCvUsers, createdAppUsers, paidEver, activePaid, churned] =
@@ -1057,6 +1088,7 @@ exports.getEngagementStats = async (req, res) => {
         liveUsage,
         aiTextCost,
         totalAiSpendNgn,
+        buildGuard,
         funnel: { signups, createdCv: createdCvUsers, createdApplication: createdAppUsers, paid: paidEver },
         subscriptions: { activePaid, churned },
       },

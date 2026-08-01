@@ -77,7 +77,7 @@ const userSchema = new mongoose.Schema(
       },
     },
     // CV PDF downloads. Free users get one clean download (lifetime taste); after
-    // that they buy ₦500 single-download passes or subscribe (paid = unlimited).
+    // that they buy ₦1,000 single-download passes or subscribe (paid = unlimited).
     downloads: {
       freeDownloadUsed: { type: Boolean, default: false },
       passRemaining: { type: Number, default: 0 },
@@ -135,6 +135,16 @@ const userSchema = new mongoose.Schema(
     ariaChat: {
       date: String, // 'YYYY-MM-DD' of the current window
       count: { type: Number, default: 0 }, // messages used in that window
+    },
+    // Aria free BUILD-WITH daily budget (resets by calendar date, same shape as
+    // ariaChat). Build-with is never charged — this is an anti-abuse ceiling only.
+    ariaBuild: {
+      date: String, // 'YYYY-MM-DD' of the current window
+      count: { type: Number, default: 0 },
+      // Lifetime cap-hit telemetry (never reset) — powers the admin guard view.
+      // A real user hits this 0-1 times ever; a looping client racks up dozens.
+      capHits: { type: Number, default: 0 },
+      lastCapHitAt: { type: Date, default: null },
     },
     // Free daily cover letter (free tier only). Resets by calendar date, same
     // shape as ariaChat. Paid users don't draw from this — they pay credits.

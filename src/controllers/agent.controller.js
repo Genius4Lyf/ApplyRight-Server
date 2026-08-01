@@ -18,7 +18,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const getSummary = async (req, res) => {
   try {
     const userId = req.user._id;
-    const rateNgn = CATALOG.download_single?.amountNgn || 500;
+    const rateNgn = CATALOG.download_single?.amountNgn || 1000;
 
     // Default range: the current billing period (or the last 30 days if none).
     const periodStart = req.user.subscription?.currentPeriodStart || null;

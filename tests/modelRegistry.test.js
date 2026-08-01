@@ -59,7 +59,7 @@ describe("per-(action, tier) credit cost resolver", () => {
 
   it("flagship = tuned deltas, inheriting light for the rest", async () => {
     const f = await settings.getCreditCostsForTier("flagship");
-    expect(f.ARIA_CHAT_MESSAGE).toBe(3); // chat 1 → 3
+    expect(f.ARIA_CHAT_MESSAGE).toBe(10); // chat 1 → 10
     expect(f.ANALYSIS).toBe(15); // scan 10 → 15
     expect(f.GENERATE_BULLET).toBe(2); // bullet 1 → 2
     expect(f.GENERATE_SUMMARY).toBe(5); // summary 3 → 5

@@ -333,6 +333,9 @@ exports.createCheckout = async (req, res) => {
     if (!item) {
       return res.status(400).json({ message: "Unknown plan", code: "UNKNOWN_PLAN" });
     }
+    if (item.retired === true) {
+      return res.status(400).json({ message: "This plan is no longer available", code: "PLAN_RETIRED" });
+    }
 
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });

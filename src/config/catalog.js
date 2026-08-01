@@ -73,7 +73,7 @@ const CATALOG = {
     periodDays: 30,
   },
   // CV Agent plans — for people who create CVs for clients. Each grants a pool of
-  // CV credits (for tailoring) + UNLIMITED downloads (isPaidActive skips the ₦750
+  // CV credits (for tailoring) + UNLIMITED downloads (isPaidActive skips the ₦1,000
   // download charge), and NO live interview minutes (minutes: 0). Map to "plus" so
   // they count as paid. weekly / monthly / yearly cycles. Drives the agent role +
   // earnings dashboard (/agent).
@@ -93,14 +93,20 @@ const CATALOG = {
     id: "agent_monthly",
     label: "Big Taker",
     purpose: "subscription",
-    amountNgn: 10000,
-    amountUsd: 14,
+    amountNgn: 15000,
+    amountUsd: 20,
     tier: "plus",
     model: "mini",
     minutes: 0,
-    credits: 1200,
+    credits: 1500,
     periodDays: 30,
   },
+  // RETIRED: a 365-day locked price on a cost base that moves (claude-sonnet-5 intro
+  // pricing expires 2026-08-31) isn't safe to keep selling. Left in the catalog —
+  // don't delete — because admin.controller.js resolves plan labels from here for
+  // historical payment display, and existing subscribers' Payment records reference
+  // this id. Rejected at checkout (billing.controller.js createCheckout); existing
+  // holders are unaffected since these are one-time expiring purchases, no auto-renew.
   agent_yearly: {
     id: "agent_yearly",
     label: "Odogwu",
@@ -112,6 +118,7 @@ const CATALOG = {
     minutes: 0,
     credits: 18000,
     periodDays: 365,
+    retired: true,
   },
   // Credit top-up packs — bought when the credit balance runs low. Added to the
   // PERSISTENT wallet (never reset), unlike the per-tier allowance.
@@ -196,14 +203,16 @@ const CATALOG = {
     amountUsd: 42,
     minutes: 300,
   },
-  // One-time clean CV download (after the free first download). Priced for the
-  // reseller case: a CV agent charges their client ~₦1,000 and keeps ₦250.
+  // One-time clean CV download (after the free first download). Priced at about
+  // what a casual reseller charges their client for a CV — this deliberately
+  // steers repeat resellers toward an agent subscription (unlimited downloads
+  // from ₦3,500) instead of paying per-download.
   download_single: {
     id: "download_single",
     label: "CV Download",
     purpose: "download",
-    amountNgn: 750,
-    amountUsd: 1.15,
+    amountNgn: 1000,
+    amountUsd: 1.5,
     downloads: 1,
   },
 };
