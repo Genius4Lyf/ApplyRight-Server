@@ -291,10 +291,8 @@ const generateBullets = async (req, res) => {
 // @access  Private
 const summary = async (req, res) => {
   const { draftId, stage } = req.body || {};
-  if (!draftId || !["experienced", "grad", "changer"].includes(stage)) {
-    return res
-      .status(400)
-      .json({ message: "draftId and stage ('experienced'|'grad'|'changer') are required" });
+  if (!draftId) {
+    return res.status(400).json({ message: "draftId is required" });
   }
 
   try {
@@ -308,6 +306,7 @@ const summary = async (req, res) => {
     if (draft.userId.toString() !== req.user.id) {
       return res.status(403).json({ message: "Not authorized to edit this CV" });
     }
+    const careerStage = aiService.resolveCareerStage({ stage, draft });
 
     const user = await User.findById(req.user.id).select("plan subscription credits");
     // Resolve + gate the session model, priced by its tier (flagship summary costs more).
@@ -354,7 +353,7 @@ const summary = async (req, res) => {
     let result;
     try {
       result = await aiService.generateSummaryForStage({
-        stage,
+        stage: careerStage,
         role: draft.targetJob?.title || "Professional",
         context,
         jobDescription: (draft.targetJob?.description || "").trim(),
@@ -612,10 +611,18 @@ const askAria = async (req, res) => {
     }
 
     const stepLabel = STEP_LABELS[currentStepId] || "your CV";
+    const careerStage = aiService.resolveCareerStage({ draft });
 
     let answer;
     try {
-      answer = await aiService.answerCoachQuestion({ question: q, stepLabel, cvSummary, brief, meta });
+      answer = await aiService.answerCoachQuestion({
+        question: q,
+        stepLabel,
+        cvSummary,
+        brief,
+        careerStage,
+        meta,
+      });
     } catch (aiErr) {
       if (aiErr instanceof aiService.AIUnavailableError) {
         return res.status(503).json({ message: "AI is not configured right now. Please try again later." });
