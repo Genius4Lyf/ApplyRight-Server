@@ -1029,6 +1029,86 @@ exports.getEngagementStats = async (req, res) => {
     );
     const totalAiSpendNgn = textTotalNgn + liveCostNgn;
 
+    // --- Flagship cost check: is the 10cr/turn price backed by real usage yet? ---
+    const models = await SettingsService.getModels();
+    const flagshipRows = Object.entries(models).filter(([, m]) => m.tier === "flagship" && m.exposed);
+    const apiModelToRow = {}; // apiModel name -> { modelId, inUsdPer1M, outUsdPer1M }
+    flagshipRows.forEach(([modelId, m]) => {
+      apiModelToRow[m.apiModel] = { modelId, inUsdPer1M: m.inUsdPer1M, outUsdPer1M: m.outUsdPer1M };
+    });
+    const flagshipModelNames = Object.keys(apiModelToRow);
+    const flagshipCreditCosts = await SettingsService.getCreditCostsForTier("flagship");
+    const flagshipRaw = flagshipModelNames.length
+      ? await AICallLog.aggregate([
+          {
+            $match: {
+              createdAt: { $gte: monthAgo },
+              model: { $in: flagshipModelNames },
+              tokensInput: { $ne: null },
+            },
+          },
+          {
+            $group: {
+              _id: { operation: "$operation", model: "$model" },
+              calls: { $sum: 1 },
+              avgIn: { $avg: "$tokensInput" },
+              avgOut: { $avg: "$tokensOutput" },
+              avgCacheWrite: { $avg: "$tokensCacheWrite" },
+              avgCacheRead: { $avg: "$tokensCacheRead" },
+            },
+          },
+          { $sort: { calls: -1 } },
+        ])
+      : [];
+    const RETAIL_NGN_PER_CREDIT = 500 / 75; // credits_500 pack — the standing retail reference
+    // AICallLog.operation records the internal function name; flagshipCreditCosts is
+    // keyed by the billing action name. They don't share a vocabulary — this is the
+    // explicit bridge. Extend it if a new flagship-priced action is added.
+    const OPERATION_TO_ACTION = {
+      coachChatTurn: "ARIA_CHAT_MESSAGE",
+      coachGenerateBullets: "GENERATE_BULLET",
+      coachSummary: "GENERATE_SUMMARY",
+      studioScan: "ANALYSIS",
+    };
+    const flagshipCostCheck = {
+      hasData: flagshipRaw.length > 0,
+      windowDays: 30,
+      rows: flagshipRaw.map((r) => {
+        const { inUsdPer1M, outUsdPer1M } = apiModelToRow[r._id.model] || {};
+        // Anthropic ephemeral-cache rates, relative to the base input rate. The write
+        // premium assumes the 5-minute (default) TTL we request in ai.service.js; the
+        // 1-hour TTL bills at 2x instead. Re-check both against current Anthropic
+        // pricing when revisiting — same caveat as the claude-sonnet-5 intro-pricing
+        // note in catalog.js.
+        const CACHE_WRITE_MULT = 1.25; // Anthropic ephemeral cache write premium
+        const CACHE_READ_MULT = 0.1; // Anthropic cache read discount
+        const estCostNgn =
+          inUsdPer1M != null
+            ? (((r.avgIn || 0) / 1e6) * inUsdPer1M +
+                ((r.avgCacheWrite || 0) / 1e6) * inUsdPer1M * CACHE_WRITE_MULT +
+                ((r.avgCacheRead || 0) / 1e6) * inUsdPer1M * CACHE_READ_MULT +
+                ((r.avgOut || 0) / 1e6) * outUsdPer1M) *
+              NGN_PER_USD
+            : null;
+        const action = OPERATION_TO_ACTION[r._id.operation];
+        const creditsCharged = action ? (flagshipCreditCosts[action] ?? null) : null;
+        const chargedNgn = creditsCharged != null ? creditsCharged * RETAIL_NGN_PER_CREDIT : null;
+        const marginPct =
+          estCostNgn != null && chargedNgn ? Math.round((1 - estCostNgn / chargedNgn) * 100) : null;
+        return {
+          operation: r._id.operation,
+          model: r._id.model,
+          calls: r.calls,
+          avgTokensIn: Math.round(r.avgIn || 0),
+          avgTokensOut: Math.round(r.avgOut || 0),
+          avgTokensCacheRead: Math.round(r.avgCacheRead || 0),
+          estCostNgn: estCostNgn != null ? Math.round(estCostNgn) : null,
+          creditsCharged,
+          marginPct,
+        };
+      }),
+    };
+
     // --- Build-with guard: is the free-build ceiling actually firing, and on whom? ---
     const [buildGuardAgg] = await User.aggregate([
       { $match: { "ariaBuild.capHits": { $gt: 0 } } },
@@ -1088,6 +1168,8 @@ exports.getEngagementStats = async (req, res) => {
         liveUsage,
         aiTextCost,
         totalAiSpendNgn,
+        flagshipCostCheck,
+        retailNgnPerCredit: RETAIL_NGN_PER_CREDIT,
         buildGuard,
         funnel: { signups, createdCv: createdCvUsers, createdApplication: createdAppUsers, paid: paidEver },
         subscriptions: { activePaid, churned },

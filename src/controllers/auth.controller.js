@@ -505,7 +505,7 @@ const getConfig = async (req, res) => {
     res.status(200).json({
       features: {
         maintenanceMode: settings.features.maintenanceMode,
-        aiAvailable: activeProvider !== "mock",
+        aiAvailable: activeProvider !== "mock" || !!process.env.ANTHROPIC_API_KEY,
         admobEnabled: settings.features.admobEnabled === true,
       },
       credits: settings.credits,

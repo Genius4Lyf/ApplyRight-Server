@@ -5,7 +5,6 @@ const logger = require("../utils/logger");
 const User = require("../models/User");
 const DraftCV = require("../models/DraftCV");
 const subscription = require("../services/subscription.service");
-const settingsService = require("../services/settings.service");
 const aiService = require("../services/ai.service");
 const langService = require("../services/language.service");
 const modelSelection = require("../services/modelSelection.service");
@@ -548,7 +547,7 @@ const buildAllowance = (user) => {
 // @route   POST /api/coach/ask
 // @access  Private (job-seekers only — not CV-agent client CVs)
 const askAria = async (req, res) => {
-  const { draftId, currentStepId, question } = req.body || {};
+  const { draftId, currentStepId, question, model } = req.body || {};
   if (typeof question !== "string" || !question.trim()) {
     return res.status(400).json({ message: "question is required" });
   }
@@ -572,25 +571,32 @@ const askAria = async (req, res) => {
       return res.status(403).json({ message: "Not authorized to view this CV" });
     }
 
-    const user = await User.findById(req.user.id).select("plan subscription credits ariaChat");
+    const user = await User.findById(req.user.id).select(
+      "plan subscription credits ariaChat aiModelId"
+    );
 
-    // Shared daily allowance (section chat + build-with). Past the free pool every
-    // user (paid included) spends credits — no tier exemption.
+    // Shared daily allowance (section chat + build-with). The selected model's tier
+    // decides whether this turn meters and which per-message cost applies.
     const pre = chatAllowance(user);
-    const cost = (await settingsService.getCreditCosts()).ARIA_CHAT_MESSAGE;
+    const { modelId, tier, cost } = await modelSelection.resolveForAction({
+      action: "ARIA_CHAT_MESSAGE",
+      sessionModelId: model,
+      draft,
+      user,
+    });
 
     // Pre-check the balance before spending an AI call the user can't pay for.
-    if (pre.willCharge && subscription.availableCredits(user) < cost) {
-      return res.status(402).json({
-        code: "CHAT_LIMIT_REACHED",
-        message: "You've used today's free chats — top up credits or come back tomorrow.",
-        remainingCredits: subscription.availableCredits(user),
-        freeRemaining: 0,
-      });
+    if (turnWillMeter(user, pre, tier) && subscription.availableCredits(user) < cost) {
+      return refuseChatTurn(res, { tier, cost, user, pre });
     }
 
     // Compact, cheap context: target title + one line of section-progress counts.
-    const meta = { userId: req.user.id, operation: "coachAskAria", lang: req.lang };
+    const meta = {
+      userId: req.user.id,
+      operation: "coachAskAria",
+      modelId,
+      lang: req.lang,
+    };
     const targetTitle = (draft.targetJob?.title || draft.targetJob?.brief?.role || "").trim();
     const cvSummary = `${targetTitle ? `Target: ${targetTitle}. ` : ""}Progress: ${
       draft.experience?.length || 0
@@ -619,17 +625,18 @@ const askAria = async (req, res) => {
     }
 
     // Charge-or-count only AFTER a successful answer (no charge/increment on failure).
-    const c = await commitChatTurn(user, pre, cost);
+    const c = await commitChatTurn(user, pre, cost, tier);
     if (c.insufficient) {
-      return res.status(402).json({
-        code: "CHAT_LIMIT_REACHED",
-        message: "You've used today's free chats — top up credits or come back tomorrow.",
-        remainingCredits: subscription.availableCredits(user),
-        freeRemaining: 0,
-      });
+      return refuseChatTurn(res, { tier, cost, user, pre });
     }
 
-    return res.json({ answer, freeRemaining: c.freeRemaining, charged: c.charged });
+    return res.json({
+      answer,
+      freeRemaining: c.freeRemaining,
+      charged: c.charged,
+      // See /coach/chat: post-charge balance for the wallet pill, null when free.
+      remainingCredits: c.charged ? subscription.availableCredits(user) : null,
+    });
   } catch (error) {
     console.error("Coach Ask Aria Error:", error);
     return res.status(500).json({ message: "Failed to answer" });
@@ -843,6 +850,10 @@ const chat = async (req, res) => {
       suggestionsLabel: intent === "building" ? result.suggestionsLabel || "" : "",
       freeRemaining,
       charged,
+      // Post-charge balance so the client can refresh the wallet pill without a
+      // refetch. null when nothing was spent — the client then skips the dispatch
+      // entirely rather than re-rendering the pill on every free turn.
+      remainingCredits: charged ? subscription.availableCredits(user) : null,
       buildRemaining: Math.max(0, env.ARIA_BUILD_DAILY_CAP - (preBuild.used + (intent === "answer" ? 0 : 1))),
     });
   } catch (error) {
@@ -857,7 +868,7 @@ const chat = async (req, res) => {
 // @route   POST /api/coach/brief
 // @access  Private (job-seekers only — not CV-agent client CVs)
 const getBrief = async (req, res) => {
-  const { draftId } = req.body || {};
+  const { draftId, model } = req.body || {};
   if (!draftId) {
     return res.status(400).json({ message: "draftId is required" });
   }
@@ -879,7 +890,17 @@ const getBrief = async (req, res) => {
       return res.json({ brief: null });
     }
 
-    const brief = await resolveDraftBrief(draft, { userId: req.user.id, operation: "coachGetBrief", lang: req.lang });
+    const { modelId } = await modelSelection.resolveForAction({
+      action: "ARIA_CHAT_MESSAGE",
+      sessionModelId: model,
+      draft,
+    });
+    const brief = await resolveDraftBrief(draft, {
+      userId: req.user.id,
+      operation: "coachGetBrief",
+      modelId,
+      lang: req.lang,
+    });
     return res.json({ brief });
   } catch (error) {
     if (error instanceof aiService.AIUnavailableError) {

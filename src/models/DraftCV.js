@@ -30,6 +30,12 @@ const draftCVSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // CV Studio's selected presentation. Stored on the draft so reopening Studio
+    // or returning from hosted checkout cannot silently fall back to ATS Clean.
+    templateId: {
+      type: String,
+      default: "ats-clean",
+    },
     targetJob: {
       title: String,
       description: String, // Context for AI tailoring

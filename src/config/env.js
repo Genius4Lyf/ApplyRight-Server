@@ -13,8 +13,9 @@ const envSchema = z.object({
   FRONTEND_URL: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(), // general AI features (CV, cover letters, analysis, OpenAI TTS)
   OPENAI_REALTIME_API_KEY: z.string().optional(), // dedicated key for the live interview ONLY; does NOT fall back to OPENAI_API_KEY (live voice 503s if unset)
+  ANTHROPIC_API_KEY: z.string().optional(), // Claude models selected through Aria's per-CV model picker
   GEMINI_API_KEY: z.string().optional(),
-  AI_PROVIDER: z.enum(["openai", "gemini"]).default("gemini"),
+  AI_PROVIDER: z.enum(["openai", "anthropic", "gemini"]).default("gemini"),
   // Realtime (live voice) interview — OpenAI Realtime API over WebRTC.
   REALTIME_MODEL: z.string().default("gpt-realtime-2.1-mini"), // mini = ~3-4x cheaper; use "gpt-realtime-2.1" for premium tier
   REALTIME_VOICE: z.string().default("marin"), // realtime voices: marin / cedar / alloy

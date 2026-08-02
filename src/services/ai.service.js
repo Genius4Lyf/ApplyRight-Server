@@ -513,7 +513,9 @@ const callModel = async (
       const resp = await client.messages.create({
         model: apiModel,
         max_tokens: maxTokens || 1024,
-        temperature,
+        // Sonnet 5 enables adaptive thinking by default and rejects non-default
+        // sampling parameters. Older Anthropic models keep the caller's temperature.
+        ...(apiModel === "claude-sonnet-5" ? {} : { temperature }),
         // Prompt caching on the system block (system prompt + JD + CV context) — the big
         // margin lever on flagship: repeated turns reuse the cached prefix.
         system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
@@ -526,6 +528,8 @@ const callModel = async (
       usage = {
         tokensInput: resp.usage?.input_tokens,
         tokensOutput: resp.usage?.output_tokens,
+        tokensCacheWrite: resp.usage?.cache_creation_input_tokens,
+        tokensCacheRead: resp.usage?.cache_read_input_tokens,
       };
     } else if (provider === "gemini") {
       const gm = client.getGenerativeModel({ model: apiModel });

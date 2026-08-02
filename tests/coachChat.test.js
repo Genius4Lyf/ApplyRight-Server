@@ -173,6 +173,7 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
     expect(res.body.intent).toBe("answer");
     expect(res.body.charged).toBe(true);
     expect(res.body.freeRemaining).toBe(0);
+    expect(res.body.remainingCredits).toBe(4); // 5 - 1, for the wallet pill
     // The REAL charge ran: wallet decrement + a Transaction row.
     expect(User.updateOne).toHaveBeenCalled();
     expect(Transaction.create).toHaveBeenCalledTimes(1);
@@ -315,6 +316,7 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.body.charged).toBe(false); // building is free on Standard — the point of Studio
+      expect(res.body.remainingCredits).toBeNull(); // nothing spent → client skips the pill dispatch
       expect(Transaction.create).not.toHaveBeenCalled();
       expect(mockUser.credits).toBe(5); // untouched
       expect(mockUser.ariaBuild).toEqual({ date: today, count: 1 });
@@ -339,6 +341,8 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       expect(res.body.charged).toBe(true); // no free Sonnet-class interviews
       expect(Transaction.create).toHaveBeenCalledTimes(1);
       expect(mockUser.credits).toBe(15); // 25 - 10 (ARIA_CHAT_MESSAGE, flagship)
+      // Post-charge balance rides back so the wallet pill updates without a refetch.
+      expect(res.body.remainingCredits).toBe(15);
       // The abuse ceiling applies regardless of model or payment.
       expect(mockUser.ariaBuild).toEqual({ date: today, count: 1 });
       expect(aiService.coachChatTurn).toHaveBeenCalledWith(

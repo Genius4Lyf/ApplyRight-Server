@@ -13,7 +13,11 @@ const mongoose = require("mongoose");
 const aiCallLogSchema = new mongoose.Schema(
   {
     operation: { type: String, required: true, index: true }, // e.g. "extractJobRequirements"
-    provider: { type: String, enum: ["openai", "gemini"], required: true },
+    provider: {
+      type: String,
+      enum: ["openai", "anthropic", "gemini", "deepseek", "moonshot"],
+      required: true,
+    },
     model: { type: String },
 
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
@@ -26,6 +30,12 @@ const aiCallLogSchema = new mongoose.Schema(
 
     tokensInput: { type: Number },
     tokensOutput: { type: Number },
+    // Anthropic prompt caching splits input across three buckets and bills each at a
+    // different rate (write ≈1.25×, read ≈0.1× the base input rate). `tokensInput`
+    // counts only the UNCACHED remainder, so without these the logged cost of a cached
+    // call is a large under-count. Null for providers/calls without caching.
+    tokensCacheWrite: { type: Number },
+    tokensCacheRead: { type: Number },
     latencyMs: { type: Number },
 
     // Captured when the call throws so we can debug failure modes.

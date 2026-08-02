@@ -119,6 +119,18 @@ describe("POST /api/studio/tailor-start", () => {
     expect(created.userId).toBe(mockUserId);
   });
 
+  it("persists a pre-draft model choice on the tailored copy", async () => {
+    const res = await post({ model: "claude-sonnet-5" });
+
+    expect(res.statusCode).toBe(201);
+    expect(created.studioModelId).toBe("claude-sonnet-5");
+    expect(aiService.buildRoleBrief).toHaveBeenCalledWith(
+      JOB.jobDescription,
+      { title: JOB.jobTitle },
+      expect.objectContaining({ modelId: "claude-sonnet-5" })
+    );
+  });
+
   it("does NOT copy conversation, caches, prep or export history", async () => {
     await post();
 
@@ -291,6 +303,13 @@ describe("POST /api/studio/build-start", () => {
     expect(created.experience).toBeUndefined();
     expect(created.skills).toBeUndefined();
     expect(created.targetJob).toBeUndefined();
+  });
+
+  it("persists a pre-draft model choice on the new build", async () => {
+    const res = await start({ model: "claude-sonnet-5" });
+
+    expect(res.statusCode).toBe(201);
+    expect(created.studioModelId).toBe("claude-sonnet-5");
   });
 
   it("prefills contact details with the SAME mapping as the builder's Heading step", async () => {
@@ -531,6 +550,17 @@ describe("POST /api/studio/brief-preview", () => {
     // The whole promise of previewing before committing.
     expect(DraftCV.create).not.toHaveBeenCalled();
     expect(DraftCV.findById).not.toHaveBeenCalled();
+  });
+
+  it("routes a pre-draft preview through the selected model", async () => {
+    const res = await preview({ model: "claude-sonnet-5" });
+
+    expect(res.statusCode).toBe(200);
+    expect(aiService.buildRoleBrief).toHaveBeenCalledWith(
+      JOB.jobDescription,
+      { title: JOB.jobTitle },
+      expect.objectContaining({ modelId: "claude-sonnet-5" })
+    );
   });
 
   it("returns brief: null when the AI is unavailable, rather than failing the intake", async () => {

@@ -54,7 +54,7 @@ const CLONED_CONTENT_FIELDS = [
 // @route   POST /api/studio/brief-preview
 // @access  Private
 const briefPreview = async (req, res) => {
-  const { jobTitle, jobDescription } = req.body || {};
+  const { jobTitle, jobDescription, model } = req.body || {};
 
   const title = (jobTitle || "").trim();
   const description = (jobDescription || "").trim();
@@ -63,9 +63,20 @@ const briefPreview = async (req, res) => {
   if (invalid) return res.status(400).json({ message: invalid });
 
   try {
+    let modelId;
+    if (model) {
+      const gate = await modelSelection.gateModel(model);
+      if (!gate.ok) {
+        return res
+          .status(400)
+          .json({ code: "MODEL_NOT_ALLOWED", message: "That model isn't available." });
+      }
+      modelId = gate.modelId;
+    }
     const { brief } = await buildBriefForJd(description, title, {
       userId: req.user.id,
       operation: "studioBriefPreview",
+      modelId,
       lang: req.lang,
     });
     return res.json({ brief });
@@ -92,7 +103,7 @@ const briefPreview = async (req, res) => {
 // @route   POST /api/studio/tailor-start
 // @access  Private
 const tailorStart = async (req, res) => {
-  const { sourceDraftId, jobTitle, jobDescription, brief: confirmedBrief } = req.body || {};
+  const { sourceDraftId, jobTitle, jobDescription, brief: confirmedBrief, model } = req.body || {};
 
   const title = (jobTitle || "").trim();
   const description = (jobDescription || "").trim();
@@ -112,6 +123,16 @@ const tailorStart = async (req, res) => {
     confirmedBrief && typeof confirmedBrief === "object" && !Array.isArray(confirmedBrief);
 
   try {
+    let modelId;
+    if (model) {
+      const gate = await modelSelection.gateModel(model);
+      if (!gate.ok) {
+        return res
+          .status(400)
+          .json({ code: "MODEL_NOT_ALLOWED", message: "That model isn't available." });
+      }
+      modelId = gate.modelId;
+    }
     // 1. Load + ownership-check the source (mirrors cv.controller.getDraftById).
     const source = await DraftCV.findById(sourceDraftId);
     if (!source) {
@@ -149,6 +170,7 @@ const tailorStart = async (req, res) => {
       title: `${src.title || "Untitled CV"} — ${title}`,
       source: "scratch",
       studioKind: "tailor", // marks this draft as a Studio session (see DraftCV.studioKind)
+      ...(modelId ? { studioModelId: modelId } : {}),
       tailoredFrom: source._id,
       tailoredFromTitle: src.title || "Untitled CV",
       // A tailored copy keeps the SOURCE CV's document language — you are
@@ -174,6 +196,7 @@ const tailorStart = async (req, res) => {
       brief = await resolveDraftBrief(copy, {
         userId: req.user.id,
         operation: "studioTailorStart",
+        modelId,
         lang: req.lang,
       });
     } catch (briefError) {
@@ -435,7 +458,7 @@ const personalInfoFromUser = (user = {}) => {
 // @route   POST /api/studio/build-start
 // @access  Private
 const buildStart = async (req, res) => {
-  const { jobTitle, jobDescription } = req.body || {};
+  const { jobTitle, jobDescription, model } = req.body || {};
   const title = (jobTitle || "").trim();
   const description = (jobDescription || "").trim();
 
@@ -448,6 +471,16 @@ const buildStart = async (req, res) => {
   }
 
   try {
+    let modelId;
+    if (model) {
+      const gate = await modelSelection.gateModel(model);
+      if (!gate.ok) {
+        return res
+          .status(400)
+          .json({ code: "MODEL_NOT_ALLOWED", message: "That model isn't available." });
+      }
+      modelId = gate.modelId;
+    }
     // Same create gate as tailorStart and cv.controller.saveDraft — this is a create,
     // so an agent without an active plan must not slip through a different door.
     if (req.user.role === "agent" && !isPaidActive(req.user)) {
@@ -467,6 +500,7 @@ const buildStart = async (req, res) => {
       title: title ? `CV for ${title}` : "Untitled CV",
       source: "scratch",
       studioKind: "build",
+      ...(modelId ? { studioModelId: modelId } : {}),
       outputLang: langService.newCvLang(req),
       personalInfo,
       ...(hasJob ? { targetJob: { title, description } } : {}),
@@ -481,6 +515,7 @@ const buildStart = async (req, res) => {
         const built = await buildBriefForJd(description, title, {
           userId: req.user.id,
           operation: "studioBuildStart",
+          modelId,
           lang: req.lang,
         });
         brief = built.brief;
