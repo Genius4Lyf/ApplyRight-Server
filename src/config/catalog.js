@@ -25,13 +25,13 @@ const MIN_REVIEW_SEC = 8 * 60; // 8 minutes
 // intro slider; free is fixed at its taste. REALTIME_MAX_SESSION_SEC remains the
 // absolute backstop and is applied on top of these in maxSessionSecForTier.
 const MAX_SESSION_SEC_BY_TIER = {
-  // 10 min — lets a free-tier Practice Pass holder spend their full 10-min pass in
-  // ONE session (the recommended length). The free TASTE itself is still bounded to
-  // 5 min by the 300s taste balance (budgetCap = min(cap, balance)), so this only
-  // unlocks the longer session once minutes have been purchased.
+  // 10 min, but inert: budgetCap = min(cap, balance) and a free user's only balance
+  // is the 300s taste, so free sessions are bounded to 5 min by the balance, never
+  // by this cap. Free users cannot buy minutes — top-ups are paid-only in the credit
+  // store and the Practice Pass is retired — so the taste is the whole free offer.
   free: 600,
-  plus: 900, // 15 min — Weekly/Monthly Pro
-  pro: 1200, // 20 min — Premium gets the longest sessions as a tier perk
+  plus: 1200, // 20 min — Starter Pack / Level Up
+  pro: 1800, // 30 min — Boss Tier gets the longest sessions as a tier perk
 };
 
 // model: "mini" -> gpt-realtime-2.1-mini, "full" -> gpt-realtime-2.1 (see subscription.service.modelForUser)
@@ -44,7 +44,7 @@ const CATALOG = {
     amountUsd: 4,
     tier: "plus",
     model: "mini",
-    minutes: 15,
+    minutes: 20,
     credits: 150, // text-AI/CV/prep allowance; resets each period (no roll-over)
     periodDays: 14, // 2-week window (same price/allowances as the old 1-week plan)
   },
@@ -56,7 +56,7 @@ const CATALOG = {
     amountUsd: 12,
     tier: "plus",
     model: "mini",
-    minutes: 50,
+    minutes: 60,
     credits: 500,
     periodDays: 30,
   },
@@ -68,7 +68,10 @@ const CATALOG = {
     amountUsd: 20,
     tier: "pro",
     model: "full",
-    minutes: 45,
+    // Boss Tier must beat Level Up on minutes — it previously granted fewer (45 vs
+    // 50) at a higher price. At ₦80/min (full model) 90 min ≈ ₦7,200 of the ₦15,000,
+    // the thinnest margin in the catalog before credits; watch it in admin revenue.
+    minutes: 90,
     credits: 1000,
     periodDays: 30,
   },
@@ -138,15 +141,12 @@ const CATALOG = {
     amountUsd: 1.5,
     credits: 150,
   },
-  // Practice Pass — the cheap, one-off entry above the free taste. A free-tier
-  // user buys this to run ONE full 10-min scored mock interview (the recommended
-  // session length; solo + mini model, like the free taste, but WITH the full AI
-  // scorecard — the scorecard is the value). purpose "topup" → grantEntitlement
-  // adds the minutes to liveInterview balance, tier stays free. The minute economy
-  // is tier-independent, so the buyer can actually spend these (createRealtimeSession
-  // draws purchased minutes first) and the scorecard unlocks because the session is
-  // paid-minutes, not free-taste. ~₦450 cost → ~55% margin. Repurchasable. Sits
-  // below weekly_pro in the upgrade ladder.
+  // RETIRED: at ₦1,000 for 10 min (₦100/min) the Practice Pass undercut every other
+  // top-up per minute — including the "best value" 5-hour pack at ₦113/min — and it
+  // let a free user reach the scored interview without a plan. The free offer is now
+  // exactly the 5-minute taste (practice only, no scorecard); anything beyond that is
+  // a subscription. Left in the catalog — don't delete — because admin/billing resolve
+  // labels from here for historical Payment records. Rejected at checkout.
   practice_pass: {
     id: "practice_pass",
     label: "Practice Pass",
@@ -154,7 +154,11 @@ const CATALOG = {
     amountNgn: 1000,
     amountUsd: 1.5,
     minutes: 10,
+    retired: true,
   },
+  // RETIRED: the minute ladder now starts at 10 min because a real interview runs
+  // 10/20/30 min — a 5-minute pack can't fund one, and 15 min sat awkwardly between
+  // the 10 and 20 rungs. Kept for historical Payment label resolution.
   topup_5: {
     id: "topup_5",
     label: "5 min top-up",
@@ -162,6 +166,7 @@ const CATALOG = {
     amountNgn: 1000,
     amountUsd: 1.5,
     minutes: 5,
+    retired: true,
   },
   topup_15: {
     id: "topup_15",
@@ -170,6 +175,26 @@ const CATALOG = {
     amountNgn: 2500,
     amountUsd: 3.5,
     minutes: 15,
+    retired: true,
+  },
+  // Live ladder — mirrors the real interview lengths (10/20/30) then bulk packs.
+  // Price per minute descends strictly down the ladder (₦180 → ₦160 → ₦150 → ₦133
+  // → ₦125 → ₦113) so "best value" on the largest pack is literally true.
+  topup_10: {
+    id: "topup_10",
+    label: "10 min top-up",
+    purpose: "topup",
+    amountNgn: 1800,
+    amountUsd: 2.5,
+    minutes: 10,
+  },
+  topup_20: {
+    id: "topup_20",
+    label: "20 min top-up",
+    purpose: "topup",
+    amountNgn: 3200,
+    amountUsd: 4.5,
+    minutes: 20,
   },
   topup_30: {
     id: "topup_30",

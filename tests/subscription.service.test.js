@@ -84,7 +84,7 @@ describe("subscription.service", () => {
       expect(User.updateOne).toHaveBeenCalledTimes(1);
       const setArg = User.updateOne.mock.calls[0][1].$set;
       expect(setArg.tier).toBe("plus");
-      expect(setArg["liveInterview.secondsRemaining"]).toBe(15 * 60);
+      expect(setArg["liveInterview.secondsRemaining"]).toBe(20 * 60);
 
       // Redelivered webhook: the claim now fails → no second grant.
       Payment.updateOne.mockResolvedValueOnce({ modifiedCount: 0 });
@@ -96,6 +96,8 @@ describe("subscription.service", () => {
     it("adds minutes for a top-up without touching the tier", async () => {
       User.updateOne.mockResolvedValue({ modifiedCount: 1 });
       Payment.updateOne.mockResolvedValueOnce({ modifiedCount: 1 });
+      // topup_5 is retired but still grantable: retirement only blocks NEW
+      // checkouts, so a redelivered webhook for an old payment must still pay out.
       const payment = { _id: "p2", userId: "u1", planId: "topup_5", purpose: "topup" };
 
       await subscription.grantEntitlement(payment);
