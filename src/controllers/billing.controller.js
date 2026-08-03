@@ -11,6 +11,7 @@ const { getItem, FREE_TASTE_SEC, MIN_REVIEW_SEC } = require("../config/catalog")
 const { isFreeTemplate } = require("../config/templates");
 const env = require("../config/env");
 const logger = require("../utils/logger");
+const { clientIp, countryFromIp } = require("../utils/geo");
 
 // @desc    Get current user credit balance
 // @route   GET /api/billing/balance
@@ -340,7 +341,32 @@ exports.createCheckout = async (req, res) => {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const selectedCurrency = currency === "USD" ? "USD" : "NGN";
+    // Currency is a SERVER decision, not a client one — the body's `currency`
+    // is only ever honoured, never trusted outright. Otherwise anyone can post
+    // NGN and pay ~1/1.8x of the USD price regardless of where they actually are.
+    const requestCountry = countryFromIp(clientIp(req));
+    // A Nigerian who signed up from Nigeria still gets naira while travelling —
+    // that's the whole reason Phase 1 stored signupCountry.
+    const isNigerian = requestCountry === "NG" || user.signupCountry === "NG";
+    const requestedCurrency = currency === "USD" ? "USD" : "NGN";
+
+    let selectedCurrency;
+    if (isNigerian) {
+      // A Nigerian may legitimately choose either currency.
+      selectedCurrency = requestedCurrency;
+    } else if (requestCountry) {
+      // Confidently foreign — USD only, the body is ignored entirely.
+      selectedCurrency = "USD";
+      if (requestedCurrency === "NGN") {
+        logger.info(
+          `[billing] currency override: userId=${user._id} requestCountry=${requestCountry} signupCountry=${user.signupCountry || "null"} requested=NGN forced=USD`
+        );
+      }
+    } else {
+      // Unknown geo — never block a real sale on a failed IP lookup; matches
+      // today's behaviour.
+      selectedCurrency = requestedCurrency;
+    }
 
     // Our reference — also the create-idempotency key on the Payment row.
     const txRef = `AR-${crypto.randomUUID()}`;
@@ -348,6 +374,7 @@ exports.createCheckout = async (req, res) => {
       userId: user._id,
       amountNgn: item.amountNgn, // from catalog, never the client
       currency: selectedCurrency,
+      countryAtCheckout: requestCountry,
       flwTxRef: txRef,
       status: "pending",
       purpose: item.purpose,

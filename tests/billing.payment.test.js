@@ -11,6 +11,12 @@ const SystemSettings = require("../src/models/SystemSettings");
 const flutterwave = require("../src/services/flutterwave.service");
 const { getItem } = require("../src/config/catalog");
 const jwt = require("jsonwebtoken");
+const logger = require("../src/utils/logger");
+
+// Public IPs with stable, well-known geoip-lite country assignments (same ones
+// used in tests/geo.test.js).
+const NG_IP = "105.112.0.1"; // MTN Nigeria block
+const US_IP = "8.8.8.8"; // Google DNS, US
 
 jest.mock("express-rate-limit", () => jest.fn(() => (req, res, next) => next()));
 jest.mock("../src/models/User");
@@ -81,6 +87,123 @@ describe("Billing — Flutterwave payments", () => {
       // No pending Payment and no Flutterwave link for a plan we no longer sell.
       expect(Payment.create).not.toHaveBeenCalled();
       expect(flutterwave.buildCheckout).not.toHaveBeenCalled();
+    });
+
+    // ── Phase 3: server-decided currency ──
+    describe("currency decision", () => {
+      beforeEach(() => {
+        Payment.create.mockResolvedValue({});
+        flutterwave.buildCheckout.mockResolvedValue({ link: "https://pay.flutterwave/abc" });
+      });
+
+      it("honours NGN for a NG-geo request", async () => {
+        const res = await request(app)
+          .post("/api/billing/checkout")
+          .set("Authorization", "Bearer mock")
+          .set("X-Forwarded-For", NG_IP)
+          .send({ planId: "weekly_pro", currency: "NGN" });
+
+        expect(res.statusCode).toBe(200);
+        expect(Payment.create).toHaveBeenCalledWith(
+          expect.objectContaining({ currency: "NGN", countryAtCheckout: "NG" })
+        );
+        expect(flutterwave.buildCheckout).toHaveBeenCalledWith(
+          expect.objectContaining({ currency: "NGN" })
+        );
+      });
+
+      it("honours USD for a NG-geo request — a Nigerian may choose either currency", async () => {
+        const res = await request(app)
+          .post("/api/billing/checkout")
+          .set("Authorization", "Bearer mock")
+          .set("X-Forwarded-For", NG_IP)
+          .send({ planId: "weekly_pro", currency: "USD" });
+
+        expect(res.statusCode).toBe(200);
+        expect(Payment.create).toHaveBeenCalledWith(
+          expect.objectContaining({ currency: "USD", countryAtCheckout: "NG" })
+        );
+        expect(flutterwave.buildCheckout).toHaveBeenCalledWith(
+          expect.objectContaining({ currency: "USD" })
+        );
+      });
+
+      it("forces USD for a non-NG-geo request that posted NGN, ignoring the body", async () => {
+        const infoSpy = jest.spyOn(logger, "info").mockImplementation(() => {});
+
+        const res = await request(app)
+          .post("/api/billing/checkout")
+          .set("Authorization", "Bearer mock")
+          .set("X-Forwarded-For", US_IP)
+          .send({ planId: "weekly_pro", currency: "NGN" });
+
+        expect(res.statusCode).toBe(200);
+        expect(Payment.create).toHaveBeenCalledWith(
+          expect.objectContaining({ currency: "USD", countryAtCheckout: "US" })
+        );
+        // The USD price is what's actually sent to Flutterwave — buildCheckout
+        // resolves item.amountUsd whenever currency is "USD" (unchanged logic).
+        expect(flutterwave.buildCheckout).toHaveBeenCalledWith(
+          expect.objectContaining({ currency: "USD" })
+        );
+        // The override is logged with the user and both countries.
+        expect(infoSpy).toHaveBeenCalledWith(
+          expect.stringContaining(String(mockUserId))
+        );
+        expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining("US"));
+        infoSpy.mockRestore();
+      });
+
+      it("does not force USD (and does not log) for a non-NG-geo request that already posted USD", async () => {
+        const infoSpy = jest.spyOn(logger, "info").mockImplementation(() => {});
+
+        const res = await request(app)
+          .post("/api/billing/checkout")
+          .set("Authorization", "Bearer mock")
+          .set("X-Forwarded-For", US_IP)
+          .send({ planId: "weekly_pro", currency: "USD" });
+
+        expect(res.statusCode).toBe(200);
+        expect(Payment.create).toHaveBeenCalledWith(
+          expect.objectContaining({ currency: "USD", countryAtCheckout: "US" })
+        );
+        // logger.info also fires for the request's own access-log line, so
+        // assert on the override message specifically rather than "never called".
+        expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining("currency override"));
+        infoSpy.mockRestore();
+      });
+
+      it("still grants NGN from a foreign IP when the user's signupCountry is NG", async () => {
+        User.findById.mockReturnValue({
+          select: jest.fn().mockResolvedValue({ ...mockUser, signupCountry: "NG" }),
+          then: (resolve) => resolve({ ...mockUser, signupCountry: "NG" }),
+        });
+
+        const res = await request(app)
+          .post("/api/billing/checkout")
+          .set("Authorization", "Bearer mock")
+          .set("X-Forwarded-For", US_IP)
+          .send({ planId: "weekly_pro", currency: "NGN" });
+
+        expect(res.statusCode).toBe(200);
+        expect(Payment.create).toHaveBeenCalledWith(
+          expect.objectContaining({ currency: "NGN", countryAtCheckout: "US" })
+        );
+      });
+
+      it("honours the requested currency when geo is unresolved (null) — today's behaviour", async () => {
+        // No X-Forwarded-For: supertest's default request IP is loopback, which
+        // countryFromIp resolves to null.
+        const res = await request(app)
+          .post("/api/billing/checkout")
+          .set("Authorization", "Bearer mock")
+          .send({ planId: "weekly_pro", currency: "USD" });
+
+        expect(res.statusCode).toBe(200);
+        expect(Payment.create).toHaveBeenCalledWith(
+          expect.objectContaining({ currency: "USD", countryAtCheckout: null })
+        );
+      });
     });
   });
 

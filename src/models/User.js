@@ -14,6 +14,24 @@ const userSchema = new mongoose.Schema(
         message: (props) => validateRegistrationEmail(props.value).message,
       },
     },
+    // Immutable record of where the account was created (analytics / pricing
+    // strategy / fraud). Must NEVER be overwritten after creation.
+    signupCountry: {
+      type: String,
+      default: null,
+      uppercase: true,
+      trim: true,
+    },
+    // "Where are they now" — refreshed on each login. Neither this nor
+    // signupCountry is the authority for what price to DISPLAY: display
+    // pricing always uses live request geo, so pricing follows the person,
+    // not their history.
+    lastSeenCountry: {
+      type: String,
+      default: null,
+      uppercase: true,
+      trim: true,
+    },
     password: {
       type: String,
       required: true,

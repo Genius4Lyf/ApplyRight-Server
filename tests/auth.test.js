@@ -11,12 +11,17 @@ jest.mock("bcryptjs");
 jest.mock("jsonwebtoken");
 jest.mock("../src/services/settings.service", () => ({
   getSettings: jest.fn().mockResolvedValue({
-    features: { maintenanceMode: false },
+    features: { maintenanceMode: false, admobEnabled: false },
     credits: { signupBonus: 10, referralBonus: 5 },
+    announcement: null,
   }),
   getCreditCosts: jest
     .fn()
     .mockResolvedValue(require("../src/config/creditCosts").getDefaults()),
+  getCreditCostsForTier: jest
+    .fn()
+    .mockResolvedValue(require("../src/config/creditCosts").getDefaults()),
+  getModels: jest.fn().mockResolvedValue({}),
 }));
 
 // Mock Data
@@ -203,6 +208,19 @@ describe("Auth API (Mocked DB)", () => {
       });
 
       expect(res.statusCode).toEqual(401);
+    });
+  });
+
+  describe("GET /api/auth/config", () => {
+    it("responds with a geo block and no-store, logged out", async () => {
+      const res = await request(app).get("/api/auth/config");
+
+      expect(res.statusCode).toEqual(200);
+      expect(res.headers["cache-control"]).toBe("no-store");
+      expect(res.body).toHaveProperty("geo");
+      // supertest's default request has no real client IP → geo resolves to
+      // the UNKNOWN state (null country, null currency), never a guess.
+      expect(res.body.geo).toEqual({ country: null, currency: null });
     });
   });
 });

@@ -31,6 +31,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.1",
     "fuse.js": "^7.1.0",
+    "geoip-lite": "^1.4.10",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "mammoth": "^1.11.0",

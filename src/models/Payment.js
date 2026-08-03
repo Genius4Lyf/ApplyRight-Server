@@ -27,6 +27,14 @@ const paymentSchema = new mongoose.Schema(
       type: String,
       default: "NGN",
     },
+    // ISO-3166-1 alpha-2 country resolved from the checkout request's IP (see
+    // utils/geo.countryFromIp), or null on an unresolved lookup. Recorded for
+    // revenue-by-region analytics — NOT used to re-derive the currency decision,
+    // which is made once at checkout time in billing.controller.
+    countryAtCheckout: {
+      type: String,
+      default: null,
+    },
     // Our checkout reference (tx_ref sent to Flutterwave). Idempotency on create.
     flwTxRef: {
       type: String,

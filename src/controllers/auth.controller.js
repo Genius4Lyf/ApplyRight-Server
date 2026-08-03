@@ -7,6 +7,7 @@ const SettingsService = require("../services/settings.service");
 const subscription = require("../services/subscription.service");
 const { sendPasswordResetOTP } = require("../utils/email.service");
 const { validateRegistrationEmail } = require("../utils/emailValidation");
+const { clientIp, countryFromIp, currencyForCountry } = require("../utils/geo");
 
 const generateReferralCode = () => {
   // Basic code generation: Random 8 char alphanumeric
@@ -96,6 +97,10 @@ const registerUser = async (req, res, next) => {
     // X-App-Language — so a French visitor gets a French account either way.
     const lang = ["en", "fr"].includes(interfaceLang) ? interfaceLang : req.lang;
 
+    // geoip-lite is an in-memory lookup (no await) and countryFromIp never
+    // throws, so this can't fail or slow down registration — worst case null.
+    const signupCountry = countryFromIp(clientIp(req));
+
     // Create user
     const user = await User.create({
       email,
@@ -105,6 +110,8 @@ const registerUser = async (req, res, next) => {
       credits: initialCredits,
       referredBy: referrer ? referrer._id : null,
       interfaceLang: lang,
+      signupCountry,
+      lastSeenCountry: signupCountry,
     });
 
     if (user) {
@@ -269,6 +276,15 @@ const loginUser = async (req, res, next) => {
       LoginEvent.create({ userId: user._id, role: user.role, createdAt: loginAt }).catch((e) =>
         console.error("[login] LoginEvent create failed:", e.message)
       );
+
+      // Best-effort "where are they now" refresh — never awaited into the
+      // response path, never surfaced to the user on failure.
+      const loginCountry = countryFromIp(clientIp(req));
+      if (loginCountry && loginCountry !== user.lastSeenCountry) {
+        user
+          .updateOne({ $set: { lastSeenCountry: loginCountry } })
+          .catch((e) => console.error("[login] lastSeenCountry update failed:", e.message));
+      }
 
       res.json({
         _id: user.id,
@@ -484,6 +500,10 @@ const resetPassword = async (req, res) => {
 // @access  Public
 const getConfig = async (req, res) => {
   try {
+    // This response is request-dependent (geo below is derived from the
+    // caller's IP) — must never be cached/shared across visitors.
+    res.set("Cache-Control", "no-store");
+
     const settings = await SettingsService.getSettings();
     // Surface AI availability so the frontend can warn users before they
     // attempt a generation (instead of getting 503 mid-click). Reads the
@@ -502,6 +522,11 @@ const getConfig = async (req, res) => {
     const models = Object.entries(allModels)
       .filter(([, row]) => row && row.exposed === true)
       .map(([id, row]) => ({ id, tier: row.tier, provider: row.provider }));
+
+    // Derived from THIS request's IP — never from stored user fields, so
+    // pricing follows the person, not their signup/last-seen history.
+    const geoCountry = countryFromIp(clientIp(req));
+
     res.status(200).json({
       features: {
         maintenanceMode: settings.features.maintenanceMode,
@@ -513,6 +538,7 @@ const getConfig = async (req, res) => {
       // Model selection (Aria chat/tailoring): the two-tier cost tables + exposed models.
       aiModels: { models, defaultModel: DEFAULT_MODEL, flagshipCreditCosts },
       announcement: settings.announcement,
+      geo: { country: geoCountry, currency: currencyForCountry(geoCountry) },
     });
   } catch (err) {
     console.error(err);
