@@ -63,7 +63,7 @@ describe("per-(action, tier) credit cost resolver", () => {
     expect(f.ANALYSIS).toBe(15); // scan 10 → 15
     expect(f.GENERATE_BULLET).toBe(2); // bullet 1 → 2
     expect(f.GENERATE_SUMMARY).toBe(5); // summary 3 → 5
-    expect(f.GENERATE_SKILLS).toBe(10); // inherited from light (no flagship delta)
+    expect(f.GENERATE_SKILLS).toBe(15); // skills 10 → 15
   });
 
   it("getModels returns the exposed defaults", async () => {

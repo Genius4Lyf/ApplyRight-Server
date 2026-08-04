@@ -57,6 +57,7 @@ const DEFAULT_FLAGSHIP_CREDIT_COSTS = Object.freeze({
   ANALYSIS: 15, // scan / fit-analysis: 10 → 15
   GENERATE_BULLET: 2, // per-bullet: 1 → 2
   GENERATE_SUMMARY: 5, // summary: 3 → 5
+  GENERATE_SKILLS: 15, // skills: 10 → 15
 });
 
 // Return a shallow copy of the defaults (never hand out the frozen original for
