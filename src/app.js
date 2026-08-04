@@ -123,7 +123,11 @@ app.use("/api/ai", aiLimiter, aiRoutes); // Apply AI-specific rate limiter
 app.use("/api/applications", applicationRoutes);
 app.use("/api/analysis", require("./routes/analysis.routes"));
 app.use("/api/coach", aiLimiter, require("./routes/coach.routes")); // CV Builder ATS Coach (AI deep scan)
-app.use("/api/studio", aiLimiter, require("./routes/studio.routes")); // Aria Studio (agentic tailor) — builds a Role Brief
+// Aria Studio (agentic tailor) — builds a Role Brief. NOT globally AI-limited: most of
+// this router (sessions/build-start/tailor-start/recompute) is document CRUD, not a
+// model call. The router applies aiLimiter itself, only to the routes that call the
+// model (/brief-preview, /scan).
+app.use("/api/studio", require("./routes/studio.routes"));
 app.use("/api/cv", require("./routes/cv.routes"));
 app.use("/api/pdf", require("./routes/pdf.routes"));
 app.use("/api/docx", require("./routes/docx.routes"));

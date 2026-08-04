@@ -4,6 +4,7 @@ const User = require("../src/models/User");
 const DraftCV = require("../src/models/DraftCV");
 const SystemSettings = require("../src/models/SystemSettings");
 const aiService = require("../src/services/ai.service");
+const modelSelection = require("../src/services/modelSelection.service");
 const jwt = require("jsonwebtoken");
 
 // Mocks: models + ai.service + jwt. resolveDraftBrief is NOT mocked — the REAL one runs
@@ -560,6 +561,18 @@ describe("POST /api/studio/brief-preview", () => {
       JOB.jobDescription,
       { title: JOB.jobTitle },
       expect.objectContaining({ modelId: "claude-sonnet-5" })
+    );
+  });
+
+  it("falls back to the default model instead of 400 when the pick isn't exposed", async () => {
+    const res = await preview({ model: "not-a-real-model" });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.brief.role).toBe("Wireline Field Operator");
+    expect(aiService.buildRoleBrief).toHaveBeenCalledWith(
+      JOB.jobDescription,
+      { title: JOB.jobTitle },
+      expect.objectContaining({ modelId: modelSelection.DEFAULT_MODEL })
     );
   });
 

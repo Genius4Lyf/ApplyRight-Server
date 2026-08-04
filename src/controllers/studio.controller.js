@@ -65,13 +65,16 @@ const briefPreview = async (req, res) => {
   try {
     let modelId;
     if (model) {
-      const gate = await modelSelection.gateModel(model);
+      // A stale/hidden model pick must never block a CV create — same policy as
+      // modelSelection.resolveForAction ("never hard-fail a chat over a stale pick").
+      // Fall back to DEFAULT_MODEL and just log it; the client never learns its pick
+      // was rejected, which is fine since Studio re-resolves the model on every turn.
+      let gate = await modelSelection.gateModel(model);
       if (!gate.ok) {
-        return res
-          .status(400)
-          .json({ code: "MODEL_NOT_ALLOWED", message: "That model isn't available." });
+        console.warn(`Studio brief-preview: model "${model}" not exposed, using default`);
+        gate = await modelSelection.gateModel(modelSelection.DEFAULT_MODEL);
       }
-      modelId = gate.modelId;
+      modelId = gate.ok ? gate.modelId : modelSelection.DEFAULT_MODEL;
     }
     const { brief } = await buildBriefForJd(description, title, {
       userId: req.user.id,
@@ -125,13 +128,16 @@ const tailorStart = async (req, res) => {
   try {
     let modelId;
     if (model) {
-      const gate = await modelSelection.gateModel(model);
+      // A stale/hidden model pick must never block a CV create — same policy as
+      // modelSelection.resolveForAction ("never hard-fail a chat over a stale pick").
+      // Fall back to DEFAULT_MODEL and just log it; the client never learns its pick
+      // was rejected, which is fine since Studio re-resolves the model on every turn.
+      let gate = await modelSelection.gateModel(model);
       if (!gate.ok) {
-        return res
-          .status(400)
-          .json({ code: "MODEL_NOT_ALLOWED", message: "That model isn't available." });
+        console.warn(`Studio tailor-start: model "${model}" not exposed, using default`);
+        gate = await modelSelection.gateModel(modelSelection.DEFAULT_MODEL);
       }
-      modelId = gate.modelId;
+      modelId = gate.ok ? gate.modelId : modelSelection.DEFAULT_MODEL;
     }
     // 1. Load + ownership-check the source (mirrors cv.controller.getDraftById).
     const source = await DraftCV.findById(sourceDraftId);
@@ -473,13 +479,14 @@ const buildStart = async (req, res) => {
   try {
     let modelId;
     if (model) {
-      const gate = await modelSelection.gateModel(model);
+      // Same policy as tailorStart above: a stale/hidden model pick falls back to
+      // DEFAULT_MODEL rather than blocking the create.
+      let gate = await modelSelection.gateModel(model);
       if (!gate.ok) {
-        return res
-          .status(400)
-          .json({ code: "MODEL_NOT_ALLOWED", message: "That model isn't available." });
+        console.warn(`Studio build-start: model "${model}" not exposed, using default`);
+        gate = await modelSelection.gateModel(modelSelection.DEFAULT_MODEL);
       }
-      modelId = gate.modelId;
+      modelId = gate.ok ? gate.modelId : modelSelection.DEFAULT_MODEL;
     }
     // Same create gate as tailorStart and cv.controller.saveDraft — this is a create,
     // so an agent without an active plan must not slip through a different door.
