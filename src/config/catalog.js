@@ -311,14 +311,15 @@ const DEFAULT_MODELS = Object.freeze({
   },
   // FLAGSHIP — Sonnet-class ceiling; ALWAYS meters credits, even on paid plans (an
   // unlimited Sonnet would be a cost blow-out). EXPOSED (surfaced as "Pro"): claude-sonnet-5
-  // + gpt-5. gpt-4o + gemini-3.5-flash stay in the registry as admin/cost options.
+  // only. gpt-5, gpt-4o + gemini-3.5-flash stay in the registry as admin/cost options.
   "gpt-5": {
     provider: "openai",
-    apiModel: "gpt-5.6-luna", // GPT-5.6 Luna — newest + cheapest, still Sonnet-class
+    apiModel: "gpt-5.6-luna", // GPT-5.6 Luna — id unverified against this OpenAI account
+    // (returns 502s live); parked as an admin/cost option, NOT offered, until confirmed.
     tier: "flagship",
     inUsdPer1M: 1.0,
     outUsdPer1M: 6.0,
-    exposed: true,
+    exposed: false,
   },
   "gemini-3.5-flash": {
     provider: "gemini",

@@ -6,6 +6,7 @@ const Transaction = require("../src/models/Transaction");
 const SystemSettings = require("../src/models/SystemSettings");
 const aiService = require("../src/services/ai.service");
 const jwt = require("jsonwebtoken");
+const { DEFAULT_MODELS } = require("../src/config/catalog");
 
 // Mocks: models + ai.service + jwt. subscription.service is intentionally NOT mocked
 // so the REAL chatAllowance/commitChatTurn/chargeOrSkip run against the mocked User/
@@ -27,6 +28,14 @@ const buildMsgs = (text) => [
   { who: "aria", text: "Tell me one thing you did in this role." },
   { who: "user", text },
 ];
+
+// Derived from the catalog, NOT hardcoded — this file does not mock settings.service,
+// so /api/coach/chat resolves the model against the REAL exposed set. A hardcoded id
+// here would silently gut every "flagship" assertion below the next time the exposed
+// set changes (as happened when gpt-5 was un-exposed and "gpt-5" was hardcoded here).
+const FLAGSHIP_MODEL = Object.entries(DEFAULT_MODELS).find(
+  ([, r]) => r.exposed && r.tier === "flagship"
+)?.[0];
 
 describe("POST /api/coach/chat — smart per-message charging", () => {
   let mockUser;
@@ -293,6 +302,12 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       creditsRemaining: 100,
     };
 
+    // If this fails, every "flagship" test below is silently exercising the wrong
+    // (fallback) tier — see the FLAGSHIP_MODEL comment at the top of the file.
+    it("has an exposed flagship model to test against", () => {
+      expect(FLAGSHIP_MODEL).toBeDefined();
+    });
+
     it("threads the resolved model id into coachChatTurn (default when none picked)", async () => {
       aiService.coachChatTurn.mockResolvedValue({ reply: "hi", intent: "building", description: "" });
       await post({ draftId, currentStepId: "history", focus, messages: buildMsgs("I did X") });
@@ -333,7 +348,7 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
         draftId,
         currentStepId: "history",
         focus,
-        model: "claude-sonnet-5", // flagship
+        model: FLAGSHIP_MODEL,
         messages: buildMsgs("I operated the tools"),
       });
 
@@ -346,7 +361,7 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       // The abuse ceiling applies regardless of model or payment.
       expect(mockUser.ariaBuild).toEqual({ date: today, count: 1 });
       expect(aiService.coachChatTurn).toHaveBeenCalledWith(
-        expect.objectContaining({ meta: expect.objectContaining({ modelId: "claude-sonnet-5" }) })
+        expect.objectContaining({ meta: expect.objectContaining({ modelId: FLAGSHIP_MODEL }) })
       );
     });
 
@@ -358,7 +373,7 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
         draftId,
         currentStepId: "history",
         focus,
-        model: "claude-sonnet-5",
+        model: FLAGSHIP_MODEL,
         messages: buildMsgs("I operated the tools"),
       });
 
@@ -379,7 +394,7 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       const res = await post({
         draftId,
         currentStepId: "history",
-        model: "claude-sonnet-5", // flagship, no focus → forced 'answer'
+        model: FLAGSHIP_MODEL, // flagship, no focus → forced 'answer'
         messages: buildMsgs("how long should my summary be?"),
       });
 
@@ -400,7 +415,7 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       const res = await post({
         draftId,
         currentStepId: "history",
-        model: "claude-sonnet-5",
+        model: FLAGSHIP_MODEL,
         messages: buildMsgs("how long should my summary be?"),
       });
 
@@ -418,7 +433,7 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       const res = await post({
         draftId,
         currentStepId: "history",
-        model: "gpt-5", // flagship — no focus → forced 'answer' (metered)
+        model: FLAGSHIP_MODEL, // flagship — no focus → forced 'answer' (metered)
         messages: buildMsgs("how long should my summary be?"),
       });
 

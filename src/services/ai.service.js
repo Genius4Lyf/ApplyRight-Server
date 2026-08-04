@@ -422,6 +422,19 @@ const OPENAI_COMPAT_BASEURL = {
 };
 const providerHasKey = (provider) => !!process.env[PROVIDER_KEY_ENV[provider]];
 
+// Boot-time check — warn ONCE per exposed model whose provider key is missing, so a
+// misconfigured deploy is caught at startup rather than discovered per-request via a
+// silent tier/output mismatch (see resolveModelCall below: the gate charges the
+// SELECTED model's tier rate regardless of whether the call actually ran on it).
+// Nothing logs when every exposed model is covered.
+Object.entries(DEFAULT_MODELS).forEach(([id, row]) => {
+  if (row.exposed && !providerHasKey(row.provider)) {
+    console.warn(
+      `[ai] STARTUP: exposed model "${id}" needs ${PROVIDER_KEY_ENV[row.provider]}, which is not set. Requests selecting it will be charged its tier rate but served by ${DEFAULT_MODEL}.`
+    );
+  }
+});
+
 // Lazy, cached provider clients (one per provider).
 const _providerClients = {};
 const getProviderClient = (provider) => {
@@ -454,10 +467,22 @@ const resolveModelCall = (modelId) => {
   if (row && providerHasKey(row.provider)) {
     return { id: modelId, provider: row.provider, apiModel: row.apiModel };
   }
+  // The requested model's provider key is missing — this is the case that costs money:
+  // modelSelection.resolveForAction already gated + priced the request at modelId's tier
+  // before this ever runs, so a silent substitution here means the caller was charged
+  // one tier's rate and served by another model entirely.
+  if (row) {
+    console.warn(
+      `[ai] model "${modelId}" (${row.provider}) has no API key (${PROVIDER_KEY_ENV[row.provider]} is not set) — falling back to ${DEFAULT_MODEL}. The caller may have been charged that model's tier rate.`
+    );
+  }
   const def = DEFAULT_MODELS[DEFAULT_MODEL];
   if (providerHasKey(def.provider)) {
     return { id: DEFAULT_MODEL, provider: def.provider, apiModel: def.apiModel, fellBack: true };
   }
+  console.warn(
+    `[ai] fallback model "${DEFAULT_MODEL}" (${def.provider}) ALSO has no API key (${PROVIDER_KEY_ENV[def.provider]} is not set) — falling back further to the booted provider (${activeProvider}).`
+  );
   if (activeProvider === "openai") {
     return { id: "openai-default", provider: "openai", apiModel: MODEL, fellBack: true };
   }
