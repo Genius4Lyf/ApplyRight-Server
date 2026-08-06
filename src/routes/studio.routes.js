@@ -5,6 +5,7 @@ const {
   tailorStart,
   buildStart,
   briefPreview,
+  draftJd,
   scan,
   recompute,
   sessions,
@@ -33,6 +34,11 @@ router.get("/sessions", protect, sessions);
 // correct) Aria's read before a tailored copy exists. Free, like /coach/brief: the
 // extraction cache makes a re-preview of the same JD cost nothing.
 router.post("/brief-preview", protect, aiLimiter, briefPreview);
+
+// Aria Studio — draft a realistic, generic job posting from just a job title, for a
+// user who has no real posting to paste. Charges DRAFT_JD, only after a non-empty
+// draft comes back.
+router.post("/draft-jd", protect, aiLimiter, draftJd);
 
 // Aria Studio — start a tailor run. Clones the source CV's content into a new draft
 // bound to the target job and attaches its Role Brief (the confirmed one from

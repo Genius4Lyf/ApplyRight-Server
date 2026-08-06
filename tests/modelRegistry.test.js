@@ -55,6 +55,7 @@ describe("per-(action, tier) credit cost resolver", () => {
     expect(light.GENERATE_BULLET).toBe(1);
     expect(light.GENERATE_SUMMARY).toBe(3);
     expect(light.GENERATE_SKILLS).toBe(10);
+    expect(light.DRAFT_JD).toBe(3);
   });
 
   it("flagship = tuned deltas, inheriting light for the rest", async () => {
@@ -64,6 +65,9 @@ describe("per-(action, tier) credit cost resolver", () => {
     expect(f.GENERATE_BULLET).toBe(2); // bullet 1 → 2
     expect(f.GENERATE_SUMMARY).toBe(5); // summary 3 → 5
     expect(f.GENERATE_SKILLS).toBe(15); // skills 10 → 15
+    expect(f.DRAFT_JD).toBe(5); // JD draft 3 → 5
+    const light = await settings.getCreditCostsForTier("light");
+    expect(f.DRAFT_JD).toBeGreaterThan(light.DRAFT_JD);
   });
 
   it("getModels returns the exposed defaults", async () => {

@@ -39,6 +39,15 @@ const draftCVSchema = new mongoose.Schema(
     targetJob: {
       title: String,
       description: String, // Context for AI tailoring
+      // 'ai_drafted' when the JD came from Aria's "draft a typical JD" assist rather
+      // than a real posting the user pasted. The fit score, Role Brief and per-section
+      // verdicts are all computed AGAINST the JD, so a synthetic one describes the
+      // general role rather than a real posting — this lets the UI say so.
+      source: {
+        type: String,
+        enum: ["pasted", "ai_drafted"],
+        default: "pasted",
+      },
       // Cached richer AI keyword extraction (the paid "Find more keywords"
       // action). Stored per CV so re-viewing a step never re-charges; the hash
       // of the job description it was derived from lets us detect a changed JD

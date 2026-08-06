@@ -11,11 +11,7 @@ const scoringEngine = require("../services/scoringEngine.service");
 const { scanSections } = require("../services/sectionScan.service");
 const { isPaidActive } = require("../services/subscription.service");
 const { resolveDraftBrief, buildBriefForJd, briefHashFor } = require("./coach.controller");
-const {
-  buildMarkdownFromDraft,
-  checkCredits,
-  deductCredits,
-} = require("./analysis.controller");
+const { buildMarkdownFromDraft, checkCredits } = require("./analysis.controller");
 
 // Shared input floor for anything that takes a job. Mirrors the frontend's capture
 // form (a title plus a JD substantial enough to actually extract from).
@@ -95,6 +91,113 @@ const briefPreview = async (req, res) => {
   }
 };
 
+// @desc    Draft a realistic, generic job posting from just a job title — for a user
+//          who knows the role they want but has no real posting to paste. Runs BEFORE
+//          a tailor session exists (still on the capture form), so there is no draft
+//          to attach it to yet. Charges DRAFT_JD, but only after a non-empty draft
+//          comes back (the AI's scope guard returns "" for non-job-title input, and
+//          that must not be charged either).
+// @route   POST /api/studio/draft-jd
+// @access  Private
+const draftJd = async (req, res) => {
+  const { jobTitle } = req.body || {};
+  const title = String(jobTitle || "").trim();
+
+  if (!title || title.length > 120) {
+    return res
+      .status(400)
+      .json({ message: "jobTitle is required and must be under 120 characters" });
+  }
+
+  try {
+    const user = await User.findById(req.user.id).select("plan subscription credits");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Draft JD ALWAYS runs on the Standard (light) model, whatever the user's gen-model
+    // pick is. A generic posting doesn't need a flagship model, and pinning here (a)
+    // sidesteps the flagship (Claude) thinking-token truncation that returned 502s and
+    // (b) keeps the price predictable at the light DRAFT_JD rate. The client's model
+    // pick is intentionally ignored for this action.
+    const modelId = modelSelection.DEFAULT_MODEL;
+    const tier = "light";
+    const cost = await modelSelection.costForAction("DRAFT_JD", tier);
+
+    // PRE-CHECK the balance before spending an AI call the user can't pay for — only
+    // when it will actually meter (a paid LIGHT draft is free/unlimited; flagship
+    // always meters).
+    const willMeter = tier === "flagship" || !subscription.isPaidActive(user);
+    if (willMeter && subscription.availableCredits(user) < cost) {
+      return res.status(403).json({
+        code: "INSUFFICIENT_CREDITS",
+        message: "Insufficient credits",
+        required: cost,
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    let result;
+    try {
+      result = await aiService.draftJobDescription({
+        jobTitle: title,
+        meta: {
+          userId: req.user.id,
+          operation: "draftJobDescription",
+          modelId,
+          lang: req.lang,
+        },
+      });
+    } catch (genErr) {
+      if (genErr instanceof aiService.AIUnavailableError) {
+        return res
+          .status(503)
+          .json({ message: "AI is not configured right now. Please try again later." });
+      }
+      console.error("Studio draft-jd AI error:", genErr.message);
+      return res
+        .status(502)
+        .json({ message: "Couldn't draft a description for that job title. Please try again." });
+    }
+
+    const jobDescription = (result || "").trim();
+    if (!jobDescription) {
+      // Either a genuinely empty model response, or the scope guard rejecting input
+      // that isn't a plausible job title — either way, don't charge for it.
+      return res
+        .status(502)
+        .json({ message: "Aria couldn't draft a description for that job title." });
+    }
+
+    // Charge only on confirmed success — tier-aware (flagship always meters; light
+    // free on an active paid plan).
+    const charge = await modelSelection.chargeForModel(user, cost, tier, {
+      type: "draft_jd",
+      description: "Aria job description draft",
+    });
+    if (charge.insufficient) {
+      return res.status(402).json({
+        code: "INSUFFICIENT_CREDITS",
+        message: "Insufficient credits",
+        required: cost,
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    return res.json({
+      jobDescription,
+      cost,
+      remainingCredits: subscription.availableCredits(user),
+    });
+  } catch (error) {
+    if (error instanceof aiService.AIUnavailableError) {
+      return res
+        .status(503)
+        .json({ message: "AI is not configured right now. Please try again later." });
+    }
+    console.error("Studio Draft JD Error:", error);
+    return res.status(500).json({ message: "Failed to draft job description" });
+  }
+};
+
 // @desc    Start an Aria Studio tailor run: clone a source CV's content into a new
 //          draft bound to a target job, then attach its Role Brief. The source draft
 //          is never mutated.
@@ -106,7 +209,14 @@ const briefPreview = async (req, res) => {
 // @route   POST /api/studio/tailor-start
 // @access  Private
 const tailorStart = async (req, res) => {
-  const { sourceDraftId, jobTitle, jobDescription, brief: confirmedBrief, model } = req.body || {};
+  const {
+    sourceDraftId,
+    jobTitle,
+    jobDescription,
+    brief: confirmedBrief,
+    model,
+    jdSource,
+  } = req.body || {};
 
   const title = (jobTitle || "").trim();
   const description = (jobDescription || "").trim();
@@ -186,6 +296,7 @@ const tailorStart = async (req, res) => {
       targetJob: {
         title,
         description,
+        source: jdSource === "ai_drafted" ? "ai_drafted" : "pasted",
         ...(hasConfirmedBrief
           ? { brief: confirmedBrief, briefHash: briefHashFor(description) }
           : {}),
@@ -312,7 +423,9 @@ const scan = async (req, res) => {
       description: "Studio scan",
     });
     const remainingCredits =
-      charge.remainingCredits != null ? charge.remainingCredits : subscription.availableCredits(user);
+      charge.remainingCredits != null
+        ? charge.remainingCredits
+        : subscription.availableCredits(user);
 
     // Free, deterministic, no AI.
     const { sections } = scanSections(draft, jobDataFor(draft));
@@ -323,13 +436,14 @@ const scan = async (req, res) => {
     const prevScan = draft.studioScan?.toObject
       ? draft.studioScan.toObject()
       : draft.studioScan || {};
-    const baseline = prevScan.baseline?.fitScore != null
-      ? prevScan.baseline
-      : {
-          fitScore: aiResult.fitScore,
-          sections: sections.map((s) => ({ key: s.key, band: s.band, score: s.score })),
-          capturedAt: new Date(),
-        };
+    const baseline =
+      prevScan.baseline?.fitScore != null
+        ? prevScan.baseline
+        : {
+            fitScore: aiResult.fitScore,
+            sections: sections.map((s) => ({ key: s.key, band: s.band, score: s.score })),
+            capturedAt: new Date(),
+          };
 
     const snapshot = {
       fitScore: aiResult.fitScore,
@@ -596,4 +710,4 @@ const sessions = async (req, res) => {
   }
 };
 
-module.exports = { tailorStart, buildStart, briefPreview, scan, recompute, sessions };
+module.exports = { tailorStart, buildStart, briefPreview, draftJd, scan, recompute, sessions };

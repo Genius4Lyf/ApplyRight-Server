@@ -5,6 +5,7 @@
 // admin panel can override any of them via SystemSettings.creditCosts, but that
 // override map starts EMPTY — so with no admin edits, settings.getCreditCosts()
 // returns exactly these numbers and every action charges what it always has.
+
 //
 // Keys are the canonical backend names. The frontend mirror (lib/credits.js)
 // uses FIT_ANALYSIS for what is ANALYSIS here; that one rename is handled in the
@@ -35,6 +36,10 @@ const DEFAULT_CREDIT_COSTS = Object.freeze({
   // Coach: AI-generate ONE career-stage-aware, JD-tailored professional summary.
   // EACH re-roll charges again (paid tiers draw from allowance). Admin-overridable.
   GENERATE_SUMMARY: 3,
+  // Aria drafts a typical job description from just a job title (Aria Studio job capture).
+  // Server-pinned to the Standard (light) model, so this light price is the only price it
+  // charges: free-tier pays it; paid plans draw their light allowance (free).
+  DRAFT_JD: 1,
   // Aria free-form coach chat. 10 messages/day free per user, then this per message.
   ARIA_CHAT_MESSAGE: 1,
   // Defined for the planned premium gate but NOT enforced today — Interview Mode
@@ -58,6 +63,9 @@ const DEFAULT_FLAGSHIP_CREDIT_COSTS = Object.freeze({
   GENERATE_BULLET: 2, // per-bullet: 1 → 2
   GENERATE_SUMMARY: 5, // summary: 3 → 5
   GENERATE_SKILLS: 15, // skills: 10 → 15
+  // NOTE: DRAFT_JD has NO flagship delta on purpose — the JD draft is server-pinned to
+  // the Standard (light) model (studio.controller.draftJd), so it can never resolve to a
+  // flagship price. It always charges the light DRAFT_JD cost (1).
 });
 
 // Return a shallow copy of the defaults (never hand out the frozen original for
@@ -69,3 +77,4 @@ module.exports = {
   DEFAULT_FLAGSHIP_CREDIT_COSTS,
   getDefaults,
 };
+
