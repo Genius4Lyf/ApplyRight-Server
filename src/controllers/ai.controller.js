@@ -10,6 +10,7 @@ const subscription = require("../services/subscription.service");
 const langService = require("../services/language.service");
 const settingsService = require("../services/settings.service");
 const modelSelection = require("../services/modelSelection.service");
+const { TRANSACTION_TYPES } = require("../config/transactionTypes");
 
 // @desc    Generate optimized CV and Cover Letter
 // @route   POST /api/ai/generate
@@ -159,9 +160,7 @@ const LOCKED_SUMMARY_TEASER =
 const resolveJobKeywords = async ({ draftId, userId, targetJob }) => {
   if (draftId && draftId !== "new") {
     try {
-      const draft = await require("../models/DraftCV")
-        .findById(draftId)
-        .select("userId targetJob");
+      const draft = await require("../models/DraftCV").findById(draftId).select("userId targetJob");
       if (
         draft &&
         draft.userId.toString() === userId &&
@@ -190,7 +189,15 @@ const resolveJobKeywords = async ({ draftId, userId, targetJob }) => {
 // Shared by paid generation (generateBullets) and the free user's explicit
 // one-time reveal (revealAtsTaste). `real` is false when the AI service returned
 // its "Error generating…" sentinel (it does that instead of throwing).
-const generateAtsSuggestions = async ({ role, context, targetJob, draftId, userId, model, lang }) => {
+const generateAtsSuggestions = async ({
+  role,
+  context,
+  targetJob,
+  draftId,
+  userId,
+  model,
+  lang,
+}) => {
   const aiService = require("../services/ai.service");
   const keywords = await resolveJobKeywords({ draftId, userId, targetJob });
   const ats = await aiService.generateBulletPoints(role, context, "experience", targetJob, {
@@ -434,9 +441,7 @@ const scoreBestForRole = (skillNames, { description = "", aiKeywords = [] } = {}
   // generated skill's canonical form.
   const cmp = compareSkills(skillNames, jdKeywords);
   const matchedCanon = new Set(
-    (cmp.matched || [])
-      .map((m) => (m.matchedWith || m.name || "").toLowerCase())
-      .filter(Boolean)
+    (cmp.matched || []).map((m) => (m.matchedWith || m.name || "").toLowerCase()).filter(Boolean)
   );
   return skillNames.filter((n) => matchedCanon.has(normalizeSkill(n).canonical.toLowerCase()));
 };
@@ -539,7 +544,7 @@ const generateSkills = async (req, res) => {
     // Charge BEFORE caching, so a failed charge never leaves a cached result the user can
     // re-fetch for free. Tier-aware: flagship always meters; light is free on a paid plan.
     const charge = await modelSelection.chargeForModel(user, SKILLS_COST, tier, {
-      type: "generate_skills",
+      type: TRANSACTION_TYPES.GENERATE_SKILLS,
       description: "Aria skills",
     });
     if (charge.insufficient) {

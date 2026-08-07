@@ -1,4 +1,8 @@
 const mongoose = require("mongoose");
+const {
+  TRANSACTION_TYPE_VALUES,
+  TRANSACTION_STATUS_VALUES,
+} = require("../config/transactionTypes");
 
 const transactionSchema = new mongoose.Schema(
   {
@@ -13,7 +17,7 @@ const transactionSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["purchase", "usage", "ad_reward", "streak_bonus", "daily_login", "referral_bonus", "cv_tailor", "tailor_bundle", "generate_bullet", "aria_chat", "generate_summary", "generate_skills", "draft_jd"],
+      enum: TRANSACTION_TYPE_VALUES,
       required: true,
     },
     description: {
@@ -22,7 +26,7 @@ const transactionSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["pending", "completed", "failed"],
+      enum: TRANSACTION_STATUS_VALUES,
       default: "completed",
     },
     // AdMob SSV transaction_id (or other external idempotency key).

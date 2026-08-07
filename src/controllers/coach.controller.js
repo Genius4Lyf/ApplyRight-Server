@@ -9,10 +9,19 @@ const aiService = require("../services/ai.service");
 const langService = require("../services/language.service");
 const modelSelection = require("../services/modelSelection.service");
 const { coachState } = require("../services/atsCoach.service");
+const { TRANSACTION_TYPES } = require("../config/transactionTypes");
 
 // The valid Role-Brief company types (mirrors DraftCV.targetJob.brief.companyType
 // and ai.service's framing map). Used to validate the infer+confirm chip.
-const COMPANY_TYPES = ["startup", "enterprise", "agency", "nonprofit", "government", "smb", "unknown"];
+const COMPANY_TYPES = [
+  "startup",
+  "enterprise",
+  "agency",
+  "nonprofit",
+  "government",
+  "smb",
+  "unknown",
+];
 
 // Human labels for the builder steps (mirrors the frontend STEP_NOUNS). Used to
 // tell Aria which section the student is on. Falls back to 'your CV'.
@@ -154,7 +163,9 @@ const generateBullets = async (req, res) => {
   }
   const desc = String(description || "").trim();
   if (desc.length < 15) {
-    return res.status(400).json({ message: "Describe what you did in a bit more detail (at least 15 characters)." });
+    return res
+      .status(400)
+      .json({ message: "Describe what you did in a bit more detail (at least 15 characters)." });
   }
 
   try {
@@ -172,7 +183,9 @@ const generateBullets = async (req, res) => {
     const list = section === "experience" ? draft.experience : draft.projects;
     const entry = (list || []).find((e) => e._sortId === sortId);
     if (!entry) {
-      return res.status(404).json({ message: "That role is no longer in your CV. Refresh and try again." });
+      return res
+        .status(404)
+        .json({ message: "That role is no longer in your CV. Refresh and try again." });
     }
 
     const user = await User.findById(req.user.id).select("plan subscription credits");
@@ -189,12 +202,19 @@ const generateBullets = async (req, res) => {
     try {
       brief = await resolveDraftBrief(draft, meta);
     } catch (briefErr) {
-      console.error("Coach resolveDraftBrief error (generateBullets, brief-less):", briefErr.message);
+      console.error(
+        "Coach resolveDraftBrief error (generateBullets, brief-less):",
+        briefErr.message
+      );
     }
 
     // Resolve the model (session pick → user default → DEFAULT_MODEL), gate it, and price
     // the bullet by its TIER (flagship costs more per bullet). count × per-bullet cost.
-    const { modelId, tier, cost: perBullet } = await modelSelection.resolveForAction({
+    const {
+      modelId,
+      tier,
+      cost: perBullet,
+    } = await modelSelection.resolveForAction({
       action: "GENERATE_BULLET",
       sessionModelId: req.body?.model,
       draft,
@@ -234,7 +254,9 @@ const generateBullets = async (req, res) => {
       });
     } catch (genErr) {
       if (genErr instanceof aiService.AIUnavailableError) {
-        return res.status(503).json({ message: "AI is not configured right now. Please try again later." });
+        return res
+          .status(503)
+          .json({ message: "AI is not configured right now. Please try again later." });
       }
       console.error("Coach generateBullets AI error:", genErr.message);
       return res.status(502).json({ message: "Couldn't generate right now. Please try again." });
@@ -249,7 +271,7 @@ const generateBullets = async (req, res) => {
       // Tier-aware charge: LIGHT is free on an active paid plan (the unlimited perk);
       // FLAGSHIP always meters, even for paid subscribers.
       const charge = await modelSelection.chargeForModel(user, cost, tier, {
-        type: "generate_bullet",
+        type: TRANSACTION_TYPES.GENERATE_BULLET,
         description: `Aria bullets (${n})`,
       });
       if (charge.insufficient) {
@@ -277,7 +299,9 @@ const generateBullets = async (req, res) => {
     });
   } catch (error) {
     if (error instanceof aiService.AIUnavailableError) {
-      return res.status(503).json({ message: "AI is not configured right now. Please try again later." });
+      return res
+        .status(503)
+        .json({ message: "AI is not configured right now. Please try again later." });
     }
     console.error("Coach Generate Bullets Error:", error);
     return res.status(500).json({ message: "Failed to generate bullets" });
@@ -337,7 +361,10 @@ const summary = async (req, res) => {
       .filter(Boolean)
       .join(", ");
     const historyStr = (draft.experience || [])
-      .map((exp) => `${exp.title} at ${exp.company} (${exp.startDate}-${exp.isCurrent ? "Present" : exp.endDate})`)
+      .map(
+        (exp) =>
+          `${exp.title} at ${exp.company} (${exp.startDate}-${exp.isCurrent ? "Present" : exp.endDate})`
+      )
       .join("; ");
     const context = `
                 Candidate Name: ${draft.personalInfo?.fullName || "Candidate"}
@@ -368,7 +395,9 @@ const summary = async (req, res) => {
       });
     } catch (genErr) {
       if (genErr instanceof aiService.AIUnavailableError) {
-        return res.status(503).json({ message: "AI is not configured right now. Please try again later." });
+        return res
+          .status(503)
+          .json({ message: "AI is not configured right now. Please try again later." });
       }
       console.error("Coach summary AI error:", genErr.message);
       return res.status(502).json({ message: "Couldn't generate right now. Please try again." });
@@ -383,7 +412,7 @@ const summary = async (req, res) => {
     // Charge on confirmed success — tier-aware (flagship always meters; light free on an
     // active paid plan). Rare race: a concurrent spend can still come back insufficient.
     const charge = await modelSelection.chargeForModel(user, cost, tier, {
-      type: "generate_summary",
+      type: TRANSACTION_TYPES.GENERATE_SUMMARY,
       description: "Aria summary",
     });
     if (charge.insufficient) {
@@ -402,7 +431,9 @@ const summary = async (req, res) => {
     });
   } catch (error) {
     if (error instanceof aiService.AIUnavailableError) {
-      return res.status(503).json({ message: "AI is not configured right now. Please try again later." });
+      return res
+        .status(503)
+        .json({ message: "AI is not configured right now. Please try again later." });
     }
     console.error("Coach Summary Error:", error);
     return res.status(500).json({ message: "Failed to generate summary" });
@@ -420,7 +451,9 @@ const setCompanyType = async (req, res) => {
     return res.status(400).json({ message: "draftId and companyType are required" });
   }
   if (!COMPANY_TYPES.includes(companyType)) {
-    return res.status(400).json({ message: `companyType must be one of: ${COMPANY_TYPES.join(", ")}` });
+    return res
+      .status(400)
+      .json({ message: `companyType must be one of: ${COMPANY_TYPES.join(", ")}` });
   }
 
   try {
@@ -476,7 +509,7 @@ const commitChatTurn = async (user, pre, cost, tier = "light") => {
   // below closes. A charged flagship turn does NOT consume a free-pool slot.
   if (tier === "flagship") {
     const r = await modelSelection.chargeForModel(user, cost, tier, {
-      type: "aria_chat",
+      type: TRANSACTION_TYPES.ARIA_CHAT,
       description: "Aria chat (Pro model)",
     });
     if (r.insufficient) return { insufficient: true };
@@ -485,7 +518,7 @@ const commitChatTurn = async (user, pre, cost, tier = "light") => {
   }
   if (pre.willCharge) {
     const r = await modelSelection.chargeForModel(user, cost, tier, {
-      type: "aria_chat",
+      type: TRANSACTION_TYPES.ARIA_CHAT,
       description: "Aria chat",
     });
     if (r.insufficient) return { insufficient: true };
@@ -625,7 +658,9 @@ const askAria = async (req, res) => {
       });
     } catch (aiErr) {
       if (aiErr instanceof aiService.AIUnavailableError) {
-        return res.status(503).json({ message: "AI is not configured right now. Please try again later." });
+        return res
+          .status(503)
+          .json({ message: "AI is not configured right now. Please try again later." });
       }
       console.error("Coach askAria AI error:", aiErr.message);
       return res.status(502).json({ message: "Couldn't answer right now. Please try again." });
@@ -706,21 +741,21 @@ const chat = async (req, res) => {
       const list = focus.section === "experience" ? draft.experience : draft.projects;
       entry = (list || []).find((e) => e._sortId === focus.sortId);
       if (!entry) {
-        return res.status(404).json({ message: "That role is no longer in your CV. Refresh and try again." });
+        return res
+          .status(404)
+          .json({ message: "That role is no longer in your CV. Refresh and try again." });
       }
     }
 
-    const user = await User.findById(req.user.id).select("plan subscription credits ariaChat ariaBuild");
+    const user = await User.findById(req.user.id).select(
+      "plan subscription credits ariaChat ariaBuild"
+    );
     const pre = chatAllowance(user);
     const preBuild = buildAllowance(user);
     // Resolve the session's model (session pick → draft.studioModelId → user default →
     // DEFAULT_MODEL), gate it, and price a metered turn by its TIER (flagship chat costs
     // more). The turn RUNS on this model via meta.modelId below.
-    const {
-      modelId,
-      tier,
-      cost,
-    } = await modelSelection.resolveForAction({
+    const { modelId, tier, cost } = await modelSelection.resolveForAction({
       action: "ARIA_CHAT_MESSAGE",
       sessionModelId: req.body?.model,
       draft,
@@ -804,7 +839,9 @@ const chat = async (req, res) => {
       });
     } catch (aiErr) {
       if (aiErr instanceof aiService.AIUnavailableError) {
-        return res.status(503).json({ message: "AI is not configured right now. Please try again later." });
+        return res
+          .status(503)
+          .json({ message: "AI is not configured right now. Please try again later." });
       }
       console.error("Coach chat AI error:", aiErr.message);
       return res.status(502).json({ message: "Couldn't continue right now. Please try again." });
@@ -832,7 +869,7 @@ const chat = async (req, res) => {
       // cost blow-out modelSelection.service is written to prevent.
       if (tier === "flagship") {
         const r = await modelSelection.chargeForModel(user, cost, tier, {
-          type: "aria_chat",
+          type: TRANSACTION_TYPES.ARIA_CHAT,
           description: "Aria build-with (Pro model)",
         });
         if (r.insufficient) {
@@ -861,7 +898,10 @@ const chat = async (req, res) => {
       // refetch. null when nothing was spent — the client then skips the dispatch
       // entirely rather than re-rendering the pill on every free turn.
       remainingCredits: charged ? subscription.availableCredits(user) : null,
-      buildRemaining: Math.max(0, env.ARIA_BUILD_DAILY_CAP - (preBuild.used + (intent === "answer" ? 0 : 1))),
+      buildRemaining: Math.max(
+        0,
+        env.ARIA_BUILD_DAILY_CAP - (preBuild.used + (intent === "answer" ? 0 : 1))
+      ),
     });
   } catch (error) {
     console.error("Coach Chat Error:", error);
@@ -911,7 +951,9 @@ const getBrief = async (req, res) => {
     return res.json({ brief });
   } catch (error) {
     if (error instanceof aiService.AIUnavailableError) {
-      return res.status(503).json({ message: "AI is not configured right now. Please try again later." });
+      return res
+        .status(503)
+        .json({ message: "AI is not configured right now. Please try again later." });
     }
     console.error("Coach Get Brief Error:", error);
     return res.status(502).json({ message: "Couldn't read the job right now. Please try again." });
@@ -931,7 +973,9 @@ const setModel = async (req, res) => {
   // Gate: unknown or hidden models are rejected outright.
   const gate = await modelSelection.gateModel(model);
   if (!gate.ok) {
-    return res.status(400).json({ code: "MODEL_NOT_ALLOWED", message: "That model isn't available." });
+    return res
+      .status(400)
+      .json({ code: "MODEL_NOT_ALLOWED", message: "That model isn't available." });
   }
 
   try {
@@ -978,3 +1022,4 @@ module.exports = {
   buildBriefForJd,
   briefHashFor,
 };
+

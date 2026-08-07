@@ -10,6 +10,7 @@ const langService = require("../services/language.service");
 const scoringEngine = require("../services/scoringEngine.service");
 const { scanSections } = require("../services/sectionScan.service");
 const { isPaidActive } = require("../services/subscription.service");
+const { TRANSACTION_TYPES } = require("../config/transactionTypes");
 const { resolveDraftBrief, buildBriefForJd, briefHashFor } = require("./coach.controller");
 const { buildMarkdownFromDraft, checkCredits } = require("./analysis.controller");
 
@@ -170,7 +171,7 @@ const draftJd = async (req, res) => {
     // Charge only on confirmed success — tier-aware (flagship always meters; light
     // free on an active paid plan).
     const charge = await modelSelection.chargeForModel(user, cost, tier, {
-      type: "draft_jd",
+      type: TRANSACTION_TYPES.DRAFT_JD,
       description: "Aria job description draft",
     });
     if (charge.insufficient) {
@@ -419,7 +420,7 @@ const scan = async (req, res) => {
 
     // AI succeeded — now charge the tier cost (flagship always meters; light free on paid).
     const charge = await modelSelection.chargeForModel(user, cost, tier, {
-      type: "studio_scan",
+      type: TRANSACTION_TYPES.STUDIO_SCAN,
       description: "Studio scan",
     });
     const remainingCredits =

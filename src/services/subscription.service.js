@@ -19,7 +19,8 @@ const receiptLinesFor = (item) => {
   const lines = [];
   if (item.purpose === "subscription") {
     if (item.credits > 0) lines.push(`${item.credits.toLocaleString()} AI credits for the period`);
-    if (item.minutes > 0) lines.push(`${item.minutes} live interview minute${item.minutes === 1 ? "" : "s"}`);
+    if (item.minutes > 0)
+      lines.push(`${item.minutes} live interview minute${item.minutes === 1 ? "" : "s"}`);
     lines.push("Unlimited CV downloads & all premium templates");
     if (item.periodDays) lines.push(`${item.periodDays}-day access (one-time — no auto-renew)`);
   } else if (item.purpose === "credit") {
@@ -52,7 +53,9 @@ const sendReceiptSafely = async (payment, item) => {
       currency: payment.currency || "NGN",
       reference: payment.flwTxRef,
       date: payment.grantedAt || new Date(),
-      expiresAt: isSub ? new Date((payment.grantedAt || new Date()).getTime() + (item.periodDays || 0) * DAY_MS) : null,
+      expiresAt: isSub
+        ? new Date((payment.grantedAt || new Date()).getTime() + (item.periodDays || 0) * DAY_MS)
+        : null,
       included: receiptLinesFor(item),
     });
   } catch (err) {
@@ -198,10 +201,7 @@ const grantEntitlement = async (payment) => {
   } else if (item.purpose === "credit") {
     // Credit top-up: add to the PERSISTENT wallet (never reset). Money already
     // recorded in Payment; log a positive Transaction so it shows as bought credits.
-    await User.updateOne(
-      { _id: payment.userId },
-      { $inc: { credits: item.credits || 0 } }
-    );
+    await User.updateOne({ _id: payment.userId }, { $inc: { credits: item.credits || 0 } });
     await Transaction.create({
       userId: payment.userId,
       amount: item.credits || 0,
@@ -293,10 +293,20 @@ const spendCredits = async (user, cost, txMeta = {}) => {
   const description = txMeta.description || "AI usage";
 
   if (!cost || cost <= 0) {
-    return { charged: false, skipped: true, insufficient: false, remainingCredits: availableCredits(user) };
+    return {
+      charged: false,
+      skipped: true,
+      insufficient: false,
+      remainingCredits: availableCredits(user),
+    };
   }
   if (availableCredits(user) < cost) {
-    return { charged: false, skipped: false, insufficient: true, remainingCredits: availableCredits(user) };
+    return {
+      charged: false,
+      skipped: false,
+      insufficient: true,
+      remainingCredits: availableCredits(user),
+    };
   }
 
   const fromTier = Math.min(cost, tierCreditsActive(user));
@@ -313,7 +323,12 @@ const spendCredits = async (user, cost, txMeta = {}) => {
   const dec = await User.updateOne(filter, { $inc: inc });
   if (dec.modifiedCount === 0) {
     // Lost a race or balance shifted — treat as insufficient, no charge.
-    return { charged: false, skipped: false, insufficient: true, remainingCredits: availableCredits(user) };
+    return {
+      charged: false,
+      skipped: false,
+      insufficient: true,
+      remainingCredits: availableCredits(user),
+    };
   }
 
   if (fromTier > 0 && user.subscription) {
@@ -321,14 +336,36 @@ const spendCredits = async (user, cost, txMeta = {}) => {
   }
   user.credits = (user.credits || 0) - fromWallet;
 
-  await Transaction.create({
-    userId: user._id,
-    amount: -cost,
-    type,
-    description: fromTier > 0 ? `${description} (${fromTier} plan + ${fromWallet} wallet)` : description,
-    status: "completed",
-  });
-  return { charged: true, skipped: false, insufficient: false, remainingCredits: availableCredits(user) };
+  // Record the transaction in the ledger. Fire-and-forget with loud logging: the
+  // credit deduction above has already committed (step 313), so failing here must
+  // NOT throw and reverse the charge, or we silently rob the user. A bad type or
+  // schema error is logged and swallowed; the spend always wins.
+  try {
+    await Transaction.create({
+      userId: user._id,
+      amount: -cost,
+      type,
+      description:
+        fromTier > 0 ? `${description} (${fromTier} plan + ${fromWallet} wallet)` : description,
+      status: "completed",
+    });
+  } catch (ledgerError) {
+    logger.error("Transaction.create failed after successful credit deduction", {
+      userId: user._id,
+      cost,
+      type,
+      description,
+      error: ledgerError.message,
+      validationErrors: ledgerError.errors,
+    });
+    // Do NOT throw — the charge already committed. Continue with charged: true.
+  }
+  return {
+    charged: true,
+    skipped: false,
+    insufficient: false,
+    remainingCredits: availableCredits(user),
+  };
 };
 
 /**
