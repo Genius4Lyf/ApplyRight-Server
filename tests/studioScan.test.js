@@ -34,8 +34,20 @@ const buildDraft = (over = {}) => ({
   professionalSummary:
     "Backend engineer with six years building data services in Python and SQL on AWS.",
   experience: [
-    { title: "Engineer", company: "Acme", startDate: "2019", endDate: "2024", description: "• Cut latency 40%" },
-    { title: "Junior Engineer", company: "Beta", startDate: "2017", endDate: "2019", description: "• Shipped 3 services" },
+    {
+      title: "Engineer",
+      company: "Acme",
+      startDate: "2019",
+      endDate: "2024",
+      description: "• Cut latency 40%",
+    },
+    {
+      title: "Junior Engineer",
+      company: "Beta",
+      startDate: "2017",
+      endDate: "2019",
+      description: "• Shipped 3 services",
+    },
   ],
   projects: [{ title: "Pipeline", description: "• Built an ETL job" }],
   education: [{ degree: "BSc", school: "UNIBEN" }],
@@ -54,11 +66,17 @@ const AI_RESULT = {
   fitScore: 82,
   recommendation: "good_match",
   scoreBreakdown: {
-    skillsScore: 85, experienceScore: 80, educationScore: 75, seniorityScore: 70, overallScore: 88,
+    skillsScore: 85,
+    experienceScore: 80,
+    educationScore: 75,
+    seniorityScore: 70,
+    overallScore: 88,
   },
   matchedSkills: [{ name: "Python", importance: "must_have" }],
   missingSkills: [{ name: "AWS", importance: "nice_to_have" }],
-  evidence: [{ quote: "Cut latency 40%", issue: "No baseline given", fix: "Say from what to what." }],
+  evidence: [
+    { quote: "Cut latency 40%", issue: "No baseline given", fix: "Say from what to what." },
+  ],
 };
 
 describe("Aria Studio — scan & recompute", () => {
@@ -113,8 +131,16 @@ describe("Aria Studio — scan & recompute", () => {
 
       expect(res.body.studioScan.jdHash).toEqual(expect.any(String));
       expect(res.body.studioScan.scannedAt).toBeDefined();
-      expect(draft.studioScan.fitScore).toBe(82);
-      expect(draft.save).toHaveBeenCalled();
+      // NARROW PATCH, not a full-document save: only studioScan is written back, so a
+      // slow (AI-bound) scan can't revert an edit the client saved while it ran.
+      expect(draft.save).not.toHaveBeenCalled();
+      expect(DraftCV.updateOne).toHaveBeenCalledWith(
+        { _id: draft._id },
+        { $set: expect.objectContaining({ studioScan: expect.any(Object) }) }
+      );
+      const [, update] = DraftCV.updateOne.mock.calls[0];
+      expect(update.$set.studioScan.fitScore).toBe(82);
+      expect(update.$set.studioScan.rulesVersion).toEqual(expect.any(Number));
     });
 
     it("charges ANALYSIS exactly once, AFTER the AI succeeds", async () => {
@@ -162,7 +188,9 @@ describe("Aria Studio — scan & recompute", () => {
     });
 
     it("400s a CV with no target job", async () => {
-      DraftCV.findById.mockResolvedValue(buildDraft({ targetJob: { title: "X", description: "" } }));
+      DraftCV.findById.mockResolvedValue(
+        buildDraft({ targetJob: { title: "X", description: "" } })
+      );
 
       const res = await post("scan");
 
@@ -254,7 +282,13 @@ describe("Aria Studio — scan & recompute", () => {
       expect(res.body.studioScan.fitScore).toEqual(expect.any(Number));
       expect(res.body.studioScan.scoreBreakdown.skillsScore).toEqual(expect.any(Number));
       expect(res.body.studioScan.recomputedAt).toBeDefined();
-      expect(d.save).toHaveBeenCalled();
+      // Same narrow patch as scan(). Recompute fires right after an edit save, so a
+      // full-document write here is the likelier of the two to clobber that edit.
+      expect(d.save).not.toHaveBeenCalled();
+      expect(DraftCV.updateOne).toHaveBeenCalledWith(
+        { _id: d._id },
+        { $set: expect.objectContaining({ studioScan: expect.any(Object) }) }
+      );
     });
 
     it("keeps the last AI narrative verbatim and flags it fromLastFullScan", async () => {
@@ -304,8 +338,14 @@ describe("Aria Studio — scan & recompute", () => {
       DraftCV.findById.mockResolvedValue(
         buildDraft({
           skills: [
-            { name: "Python" }, { name: "SQL" }, { name: "AWS" }, { name: "Docker" },
-            { name: "Terraform" }, { name: "Kafka" }, { name: "Redis" }, { name: "Go" },
+            { name: "Python" },
+            { name: "SQL" },
+            { name: "AWS" },
+            { name: "Docker" },
+            { name: "Terraform" },
+            { name: "Kafka" },
+            { name: "Redis" },
+            { name: "Go" },
           ],
         })
       );
@@ -318,7 +358,9 @@ describe("Aria Studio — scan & recompute", () => {
     });
 
     it("400s a CV with no target job", async () => {
-      DraftCV.findById.mockResolvedValue(buildDraft({ targetJob: { title: "X", description: "" } }));
+      DraftCV.findById.mockResolvedValue(
+        buildDraft({ targetJob: { title: "X", description: "" } })
+      );
       const res = await post("recompute");
       expect(res.statusCode).toBe(400);
       expect(res.body.code).toBe("NO_TARGET_JOB");
@@ -330,3 +372,4 @@ describe("Aria Studio — scan & recompute", () => {
     });
   });
 });
+

@@ -71,6 +71,14 @@ const draftCVSchema = new mongoose.Schema(
         industry: String,
         seniority: String,
         yearsRequired: Number,
+        // The minimum qualification the JD states, kept as its own typed field rather
+        // than folded into mustHaves. scoringEngine.scoreEducation reads it directly on
+        // every free recompute; without it declared here, strict mode would strip it on
+        // save and the education score would silently fall back to "not stated".
+        requiredEducation: {
+          degree: String,
+          field: String,
+        },
         mustHaves: [{ name: String, importance: String }],
         niceToHaves: [{ name: String, importance: String }],
         responsibilities: [String],
@@ -357,6 +365,11 @@ const draftCVSchema = new mongoose.Schema(
         capturedAt: Date,
       },
       jdHash: String,
+      // Which version of sectionScan.service's RULES produced these sections
+      // (SCAN_RULES_VERSION). jdHash tells us the JOB changed; this tells us the
+      // SCORER changed — a persisted scan from an older ruleset isn't comparable to a
+      // fresh one, and without the stamp there is no way to tell the two apart.
+      rulesVersion: Number,
       scannedAt: Date,
       recomputedAt: Date,
       // True once a free recompute has refreshed the scores underneath an AI

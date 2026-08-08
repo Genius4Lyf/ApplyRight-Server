@@ -681,6 +681,11 @@ const buildRoleBrief = async (jobDescription, { title } = {}, meta = {}) => {
     industry: req?.industry || "",
     seniority: req?.seniorityLevel || "mid",
     yearsRequired: req?.requiredYearsExperience || 0,
+    // The extraction types this separately from the skill lists, and it must survive
+    // onto the brief: studio.controller's free recompute feeds brief.requiredEducation
+    // straight into computeFitScore, and dropping it here meant every recompute scored
+    // education against `null` — a silent zero for a requirement the JD actually stated.
+    requiredEducation: req?.requiredEducation || null,
     mustHaves: req?.requiredSkills || [],
     niceToHaves: req?.preferredSkills || [],
     responsibilities: req?.keyResponsibilities || [],

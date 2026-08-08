@@ -8,9 +8,10 @@ const modelSelection = require("../services/modelSelection.service");
 const atsCoach = require("../services/atsCoach.service");
 const langService = require("../services/language.service");
 const scoringEngine = require("../services/scoringEngine.service");
-const { scanSections } = require("../services/sectionScan.service");
+const { scanSections, SCAN_RULES_VERSION } = require("../services/sectionScan.service");
 const { isPaidActive } = require("../services/subscription.service");
 const { TRANSACTION_TYPES } = require("../config/transactionTypes");
+
 const { resolveDraftBrief, buildBriefForJd, briefHashFor } = require("./coach.controller");
 const { buildMarkdownFromDraft, checkCredits } = require("./analysis.controller");
 
@@ -456,13 +457,20 @@ const scan = async (req, res) => {
       sections,
       baseline,
       jdHash: briefHashFor(jd),
+      // Stamp WHICH ruleset produced `sections`. jdHash catches a changed job; this
+      // catches a changed scorer, so a snapshot persisted under older scoping rules
+      // can be told apart from a fresh one instead of being compared to it blindly.
+      rulesVersion: SCAN_RULES_VERSION,
       scannedAt: new Date(),
       recomputedAt: null,
       fromLastFullScan: false,
     };
 
-    draft.studioScan = snapshot;
-    await draft.save();
+    // NARROW PATCH, not draft.save(). A full-document save writes back whatever
+    // experience/projects were on this in-memory doc when it was loaded — silently
+    // reverting anything the client saved while the (slow, AI-bound) scan was running.
+    // Only studioScan is ours to write here.
+    await DraftCV.updateOne({ _id: draft._id }, { $set: { studioScan: snapshot } });
 
     return res.json({ studioScan: snapshot, remainingCredits });
   } catch (error) {
@@ -541,13 +549,18 @@ const recompute = async (req, res) => {
       // finish card's "before" would creep up to match the "after".
       baseline: prev.baseline,
       jdHash: briefHashFor(jd),
+      // Re-stamped, because `sections` above was just rebuilt by the CURRENT ruleset —
+      // a snapshot carrying fresh sections under an old version number would be a lie.
+      rulesVersion: SCAN_RULES_VERSION,
       recomputedAt: new Date(),
       // Only meaningful once there IS an AI narrative sitting behind fresh numbers.
       fromLastFullScan: !!prev.scannedAt,
     };
 
-    draft.studioScan = snapshot;
-    await draft.save();
+    // NARROW PATCH — see the same note in scan(). Recompute fires right after an edit
+    // save, so a full-document write here is the most likely of the two to clobber the
+    // very change that triggered it.
+    await DraftCV.updateOne({ _id: draft._id }, { $set: { studioScan: snapshot } });
 
     return res.json({ studioScan: snapshot });
   } catch (error) {
