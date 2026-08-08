@@ -281,7 +281,7 @@ const assembleDraftCV = ({ user, aiEnhanced, candidateData, jobData, job, catego
       description: job?.description?.substring(0, 500) || "",
     },
     personalInfo: {
-      fullName: user.firstName ? `${user.firstName} ${user.lastName || ""}`.trim() : "Candidate",
+      fullName: user.firstName ? `${user.firstName} ${user.lastName || ""}`.trim() : "",
       email: user.email || "",
       phone: user.phone || "",
       linkedin: user.linkedinUrl || "",

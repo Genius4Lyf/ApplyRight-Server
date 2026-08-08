@@ -12,6 +12,8 @@
  * applyright-frontend/src/utils/cvHealth.js (same checks, live as the user types).
  */
 
+const { dismissedSectionsOf } = require("../config/sections");
+
 /**
  * The canonical point budget per section — the `totalPoints +=` lines in
  * computeATSReadiness below, named so consumers can subtotal quality per section
@@ -33,6 +35,26 @@ const SECTION_POINTS = {
 };
 
 /**
+ * Does this entry carry anything a reader would actually see?
+ *
+ * Load-bearing, because these lists are NOT all user-authored content. Aria Studio mints
+ * a real row before the interview starts — addRole/addProject/addEducation have to persist
+ * an entry so /coach/generate-bullets can resolve it server-side by _sortId — so a user
+ * who opens the Projects section and immediately backs out leaves a row in which every
+ * field is empty. Counting rows rather than content scored that as a complete Projects
+ * section (15/15, a jump from bad straight to 100) on the strength of nothing at all.
+ *
+ * BEHAVIOURALLY IDENTICAL to `hasSubstance` in
+ * applyright-frontend/src/lib/studioFlow.js — keep the two in step. They are duplicated
+ * only because they live in separate apps with no shared module; the rule is one rule.
+ *
+ * @param {object} e an experience / project / education entry
+ * @returns {boolean}
+ */
+const hasSubstance = (e) =>
+  !!(e && (e.title || e.company || e.degree || e.school || e.name || e.description || "").trim?.());
+
+/**
  * Compute a lightweight ATS readiness score from a CV draft.
  * Pure deterministic checks on completeness and quality.
  * Returns { score: 0-100, checks: [...], tips: [...] }.
@@ -45,34 +67,84 @@ const computeATSReadiness = (extractedData, draft) => {
   const tips = [];
   let totalPoints = 0;
   let earnedPoints = 0;
+  // Sections the user marked not-applicable. Whitelisted server-side, so a client
+  // cannot opt out of being told its work history is empty. See config/sections.
+  const dismissed = dismissedSectionsOf(draft);
 
   // 1. Professional Summary (15 pts)
   totalPoints += 15;
   const summary = draft.professionalSummary || "";
   if (summary.length >= 100) {
     earnedPoints += 15;
-    checks.push({ section: "summary", label: "Professional summary", passed: true, points: 15, max: 15 });
+    checks.push({
+      section: "summary",
+      label: "Professional summary",
+      passed: true,
+      points: 15,
+      max: 15,
+    });
   } else if (summary.length > 0) {
     earnedPoints += 8;
-    checks.push({ section: "summary", label: "Professional summary", passed: false, detail: "Too short", points: 8, max: 15 });
-    tips.push("Expand your professional summary to 3-4 sentences highlighting your key strengths and career goals.");
+    checks.push({
+      section: "summary",
+      label: "Professional summary",
+      passed: false,
+      detail: "Too short",
+      points: 8,
+      max: 15,
+    });
+    tips.push(
+      "Expand your professional summary to 3-4 sentences highlighting your key strengths and career goals."
+    );
   } else {
-    checks.push({ section: "summary", label: "Professional summary", passed: false, detail: "Missing", points: 0, max: 15 });
+    checks.push({
+      section: "summary",
+      label: "Professional summary",
+      passed: false,
+      detail: "Missing",
+      points: 0,
+      max: 15,
+    });
     tips.push("Add a professional summary — it's the first thing recruiters and ATS systems scan.");
   }
 
   // 2. Work Experience (25 pts)
   totalPoints += 25;
-  const exp = draft.experience || [];
+  // Placeholder rows excluded — see hasSubstance. A row the Studio minted to hold a
+  // _sortId is not a job the user has done.
+  const exp = (draft.experience || []).filter(hasSubstance);
   if (exp.length >= 2) {
     earnedPoints += 10;
-    checks.push({ section: "experience", label: "Work experience entries", passed: true, detail: `${exp.length} roles`, points: 10, max: 10 });
+    checks.push({
+      section: "experience",
+      label: "Work experience entries",
+      passed: true,
+      detail: `${exp.length} roles`,
+      points: 10,
+      max: 10,
+    });
   } else if (exp.length === 1) {
     earnedPoints += 5;
-    checks.push({ section: "experience", label: "Work experience entries", passed: false, detail: "Only 1 role", points: 5, max: 10 });
-    tips.push("Add more work experience if available — most ATS systems rank resumes with 2+ roles higher.");
+    checks.push({
+      section: "experience",
+      label: "Work experience entries",
+      passed: false,
+      detail: "Only 1 role",
+      points: 5,
+      max: 10,
+    });
+    tips.push(
+      "Add more work experience if available — most ATS systems rank resumes with 2+ roles higher."
+    );
   } else {
-    checks.push({ section: "experience", label: "Work experience entries", passed: false, detail: "Missing", points: 0, max: 10 });
+    checks.push({
+      section: "experience",
+      label: "Work experience entries",
+      passed: false,
+      detail: "Missing",
+      points: 0,
+      max: 10,
+    });
     tips.push("Add work experience to strengthen your resume.");
   }
 
@@ -83,14 +155,39 @@ const computeATSReadiness = (extractedData, draft) => {
     const quantifiedRatio = bulletsWithNumbers.length / allBullets.length;
     if (quantifiedRatio >= 0.3) {
       earnedPoints += 15;
-      checks.push({ section: "experience", label: "Quantified achievements", passed: true, detail: `${bulletsWithNumbers.length}/${allBullets.length} bullets include metrics`, points: 15, max: 15 });
+      checks.push({
+        section: "experience",
+        label: "Quantified achievements",
+        passed: true,
+        detail: `${bulletsWithNumbers.length}/${allBullets.length} bullets include metrics`,
+        points: 15,
+        max: 15,
+      });
     } else if (quantifiedRatio > 0) {
       earnedPoints += 8;
-      checks.push({ section: "experience", label: "Quantified achievements", passed: false, detail: `Only ${bulletsWithNumbers.length}/${allBullets.length} bullets include metrics`, points: 8, max: 15 });
-      tips.push("Add numbers and metrics to more bullet points (e.g., 'Increased sales by 25%' instead of 'Increased sales').");
+      checks.push({
+        section: "experience",
+        label: "Quantified achievements",
+        passed: false,
+        detail: `Only ${bulletsWithNumbers.length}/${allBullets.length} bullets include metrics`,
+        points: 8,
+        max: 15,
+      });
+      tips.push(
+        "Add numbers and metrics to more bullet points (e.g., 'Increased sales by 25%' instead of 'Increased sales')."
+      );
     } else {
-      checks.push({ section: "experience", label: "Quantified achievements", passed: false, detail: "No metrics found", points: 0, max: 15 });
-      tips.push("Quantify your achievements with numbers, percentages, or dollar amounts to stand out in ATS screening.");
+      checks.push({
+        section: "experience",
+        label: "Quantified achievements",
+        passed: false,
+        detail: "No metrics found",
+        points: 0,
+        max: 15,
+      });
+      tips.push(
+        "Quantify your achievements with numbers, percentages, or dollar amounts to stand out in ATS screening."
+      );
     }
   }
 
@@ -99,25 +196,86 @@ const computeATSReadiness = (extractedData, draft) => {
   const skills = draft.skills || [];
   if (skills.length >= 8) {
     earnedPoints += 20;
-    checks.push({ section: "skills", label: "Skills listed", passed: true, detail: `${skills.length} skills`, points: 20, max: 20 });
+    checks.push({
+      section: "skills",
+      label: "Skills listed",
+      passed: true,
+      detail: `${skills.length} skills`,
+      points: 20,
+      max: 20,
+    });
   } else if (skills.length >= 4) {
     earnedPoints += 12;
-    checks.push({ section: "skills", label: "Skills listed", passed: false, detail: `${skills.length} skills — aim for 8+`, points: 12, max: 20 });
-    tips.push("Add more relevant skills. ATS systems match keywords from job descriptions against your skills section.");
+    checks.push({
+      section: "skills",
+      label: "Skills listed",
+      passed: false,
+      detail: `${skills.length} skills — aim for 8+`,
+      points: 12,
+      max: 20,
+    });
+    tips.push(
+      "Add more relevant skills. ATS systems match keywords from job descriptions against your skills section."
+    );
   } else {
     earnedPoints += skills.length > 0 ? 5 : 0;
-    checks.push({ section: "skills", label: "Skills listed", passed: false, detail: skills.length > 0 ? `Only ${skills.length} skills` : "Missing", points: skills.length > 0 ? 5 : 0, max: 20 });
+    checks.push({
+      section: "skills",
+      label: "Skills listed",
+      passed: false,
+      detail: skills.length > 0 ? `Only ${skills.length} skills` : "Missing",
+      points: skills.length > 0 ? 5 : 0,
+      max: 20,
+    });
     tips.push("Add a comprehensive skills section — this is critical for ATS keyword matching.");
   }
 
   // 4. Education (10 pts)
+  //
+  // GRADED, not binary. `edu.length > 0 ? 10 : 0` meant Education could only ever be 0 or
+  // 100 — it could never land in the warn band, and a row carrying a school with no
+  // qualification (or the reverse) scored identically to a complete one. Same 10-point
+  // budget, three outcomes: complete (a qualification AND where it was earned), thin
+  // (one of the two), or missing.
   totalPoints += 10;
-  const edu = draft.education || [];
-  if (edu.length > 0) {
+  const edu = (draft.education || []).filter(hasSubstance);
+  // `field` counts as a qualification: "Accounting" with no degree level is still a
+  // statement of what was studied, and ATS degree filters read it.
+  const eduComplete = edu.filter(
+    (e) => (e.degree || e.field || "").trim() && (e.school || "").trim()
+  ).length;
+  if (eduComplete > 0) {
     earnedPoints += 10;
-    checks.push({ section: "education", label: "Education", passed: true, detail: `${edu.length} entries`, points: 10, max: 10 });
+    checks.push({
+      section: "education",
+      label: "Education",
+      passed: true,
+      detail: `${edu.length} ${edu.length === 1 ? "entry" : "entries"}`,
+      points: 10,
+      max: 10,
+    });
+  } else if (edu.length > 0) {
+    earnedPoints += 5;
+    checks.push({
+      section: "education",
+      label: "Education",
+      passed: false,
+      detail: "Incomplete — add both the qualification and the school",
+      points: 5,
+      max: 10,
+    });
+    tips.push(
+      "Complete your education entries — list both the qualification and the school that awarded it."
+    );
   } else {
-    checks.push({ section: "education", label: "Education", passed: false, detail: "Missing", points: 0, max: 10 });
+    checks.push({
+      section: "education",
+      label: "Education",
+      passed: false,
+      detail: "Missing",
+      points: 0,
+      max: 10,
+    });
     tips.push("Add your education details — many ATS systems filter by degree requirements.");
   }
 
@@ -131,31 +289,113 @@ const computeATSReadiness = (extractedData, draft) => {
   const contactScore = [hasName, hasEmail, hasPhone, hasLinkedIn].filter(Boolean).length;
   if (contactScore >= 3) {
     earnedPoints += 15;
-    checks.push({ section: "contact", label: "Contact information", passed: true, points: 15, max: 15 });
+    checks.push({
+      section: "contact",
+      label: "Contact information",
+      passed: true,
+      points: 15,
+      max: 15,
+    });
   } else if (contactScore >= 2) {
     earnedPoints += 10;
-    checks.push({ section: "contact", label: "Contact information", passed: false, detail: "Incomplete", points: 10, max: 15 });
-    tips.push("Add your phone number and LinkedIn URL — recruiters need multiple ways to reach you.");
-  } else {
+    checks.push({
+      section: "contact",
+      label: "Contact information",
+      passed: false,
+      detail: "Incomplete",
+      points: 10,
+      max: 15,
+    });
+    tips.push(
+      "Add your phone number and LinkedIn URL — recruiters need multiple ways to reach you."
+    );
+  } else if (contactScore === 1) {
     earnedPoints += 5;
-    checks.push({ section: "contact", label: "Contact information", passed: false, detail: "Minimal", points: 5, max: 15 });
+    checks.push({
+      section: "contact",
+      label: "Contact information",
+      passed: false,
+      detail: "Minimal",
+      points: 5,
+      max: 15,
+    });
     tips.push("Complete your contact details: full name, email, phone, and LinkedIn profile.");
+  } else {
+    // No name, no email, no phone, no LinkedIn. The old `else` paid 5 points here
+    // unconditionally, so a completely empty contact block still scored a third of the
+    // section — a recruiter cannot reach this CV at all, and nothing has been earned.
+    checks.push({
+      section: "contact",
+      label: "Contact information",
+      passed: false,
+      detail: "Missing",
+      points: 0,
+      max: 15,
+    });
+    tips.push("Add your contact details: full name, email, phone, and LinkedIn profile.");
   }
 
   // 6. Projects (15 pts — bonus but valuable)
   totalPoints += 15;
-  const projects = draft.projects || [];
+  // Placeholder rows excluded — see hasSubstance. This was the worst offender: a single
+  // blank row the Studio minted took Projects from 0 straight to the full 15.
+  const projects = (draft.projects || []).filter(hasSubstance);
   if (projects.length > 0) {
     earnedPoints += 15;
-    checks.push({ section: "projects", label: "Projects", passed: true, detail: `${projects.length} projects`, points: 15, max: 15 });
+    checks.push({
+      section: "projects",
+      label: "Projects",
+      passed: true,
+      detail: `${projects.length} projects`,
+      points: 15,
+      max: 15,
+    });
   } else {
-    checks.push({ section: "projects", label: "Projects", passed: false, detail: "None listed", points: 0, max: 15 });
-    tips.push("Consider adding relevant projects to showcase practical skills and initiative.");
+    checks.push({
+      section: "projects",
+      label: "Projects",
+      passed: false,
+      detail: "None listed",
+      points: 0,
+      max: 15,
+    });
+    // Nothing to advise if the user has said this section isn't theirs — its points are
+    // excised below, and "add some projects" to someone who has told us they have none
+    // is the same nagging the dismiss action exists to stop.
+    if (!dismissed.has("projects")) {
+      tips.push("Consider adding relevant projects to showcase practical skills and initiative.");
+    }
   }
 
-  const score = Math.round((earnedPoints / totalPoints) * 100);
+  // ─── Excise dismissed sections from BOTH sides of the budget ───
+  //
+  // Earned-only would make the score WORSE for opting out, which is the exact opposite
+  // of the intent: a candidate with no projects would lose the 15 points they were never
+  // going to earn AND keep them in the denominator. Removing the section from both the
+  // numerator and the denominator re-scores the CV over what actually applies to it, so
+  // the percentage goes UP.
+  //
+  // Done here rather than by branching each block above so the arithmetic stays in ONE
+  // place: every earned point is tagged with the check that earned it (the reconciliation
+  // test in tests/sectionScan.test.js pins that), so a section's earned subtotal is
+  // exactly the sum of its checks — no rule can drift out of this without failing there.
+  let scoredChecks = checks;
+  if (dismissed.size) {
+    scoredChecks = checks.filter((c) => !dismissed.has(c.section));
+    dismissed.forEach((key) => {
+      const earnedHere = checks
+        .filter((c) => c.section === key)
+        .reduce((sum, c) => sum + (c.points || 0), 0);
+      earnedPoints -= earnedHere;
+      totalPoints -= SECTION_POINTS[key] || 0;
+    });
+  }
 
-  return { score, checks, tips };
+  // Guard the degenerate case: if every section were ever dismissable and dismissed,
+  // there is no budget to score over and 0/0 would render as NaN.
+  const score = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
+
+  return { score, checks: scoredChecks, tips };
 };
 
 // ─── Helpers for cvDataToCandidate ───
@@ -258,7 +498,10 @@ const coachState = (draft = {}) => {
   const summary = (draft.professionalSummary || "").trim();
 
   const bullets = exp.flatMap((e) =>
-    (e.description || "").split("\n").map((b) => b.trim()).filter(Boolean)
+    (e.description || "")
+      .split("\n")
+      .map((b) => b.trim())
+      .filter(Boolean)
   );
   const quantified = bullets.filter((b) => /\d/.test(b)).length;
   const rolesWithEnoughBullets = exp.filter(
@@ -335,11 +578,24 @@ const detectRedFlags = (draft = {}) => {
   // Per-entry view so a flag can point at the exact role/project it came from.
   // Keyed by the stable _sortId the builder assigns (survives reorder/delete).
   const entries = [
-    ...exp.map((e) => ({ section: "experience", sortId: e._sortId, title: e.title || "A role", entry: e })),
-    ...projects.map((p) => ({ section: "project", sortId: p._sortId, title: p.title || "A project", entry: p })),
+    ...exp.map((e) => ({
+      section: "experience",
+      sortId: e._sortId,
+      title: e.title || "A role",
+      entry: e,
+    })),
+    ...projects.map((p) => ({
+      section: "project",
+      sortId: p._sortId,
+      title: p.title || "A project",
+      entry: p,
+    })),
   ].map((x) => ({
     ...x,
-    bullets: (x.entry.description || "").split("\n").map((b) => b.trim()).filter(Boolean),
+    bullets: (x.entry.description || "")
+      .split("\n")
+      .map((b) => b.trim())
+      .filter(Boolean),
   }));
 
   // Strip an entry down to the { section, sortId, title } the UI needs.
@@ -381,7 +637,9 @@ const detectRedFlags = (draft = {}) => {
   }
 
   // 3. Buzzwords / filler
-  const foundBuzz = BUZZWORDS.filter((w) => bulletText.includes(w) || (draft.professionalSummary || "").toLowerCase().includes(w));
+  const foundBuzz = BUZZWORDS.filter(
+    (w) => bulletText.includes(w) || (draft.professionalSummary || "").toLowerCase().includes(w)
+  );
   if (foundBuzz.length > 0) {
     flags.push({
       label: "Generic buzzwords",
@@ -418,7 +676,10 @@ const detectRedFlags = (draft = {}) => {
 
   // 6. Employment gaps (>1 year between consecutive dated roles)
   const dated = exp
-    .map((e) => ({ start: parseYear(e.startDate), end: e.isCurrent ? CURRENT_YEAR() : parseYear(e.endDate) }))
+    .map((e) => ({
+      start: parseYear(e.startDate),
+      end: e.isCurrent ? CURRENT_YEAR() : parseYear(e.endDate),
+    }))
     .filter((e) => e.start && e.end)
     .sort((a, b) => b.end - a.end); // most recent first
   for (let i = 0; i < dated.length - 1; i++) {
@@ -494,4 +755,5 @@ module.exports = {
   detectRedFlags,
   coachState,
   SECTION_POINTS,
+  hasSubstance,
 };

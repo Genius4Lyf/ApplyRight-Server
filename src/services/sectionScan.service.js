@@ -19,6 +19,7 @@
 
 const { computeATSReadiness, SECTION_POINTS } = require("./atsCoach.service");
 const { computeKeywordCoverage } = require("./skillNormalizer.service");
+const { dismissedSectionsOf } = require("../config/sections");
 
 /**
  * Version of the scoring RULES in this file — the classification table, the section
@@ -26,7 +27,7 @@ const { computeKeywordCoverage } = require("./skillNormalizer.service");
  * scan saved under older rules can be told apart from a fresh one (a section verdict is
  * only comparable to another computed the same way). Bump on every rules change.
  */
-const SCAN_RULES_VERSION = 1;
+const SCAN_RULES_VERSION = 3;
 
 /**
  * Score → band. Mirrors the frontend's bandOf (src/lib/applicationInsights.js) so a
@@ -436,40 +437,51 @@ const credentialCovered = (name, lowerText) => {
 // Summary, which is the whole thing this file exists to prevent.
 const POOLED_KINDS = new Set(["credential", "certification"]);
 
-// A short, honest sentence about what's actually wrong — quality vs relevance are
+// WHICH honest thing to say about what's actually wrong — quality vs relevance are
 // different problems with different fixes, so the note names which one it is.
-const noteFor = ({ key, label, quality, relevance, weight, missingKeywords, hasKeywords }) => {
+//
+// Returns a KEY and its params, never a sentence. The client renders it from
+// `ariaStudio.sectionNote.<noteKey>` in the user's own language: a server that emits
+// English prose hands a French user a fully French card whose headline verdict is
+// English, and no amount of client-side translation can rescue a finished sentence.
+//
+// The three completeness branches deliberately carry NO label. The section name is
+// already rendered immediately above the note, so it was redundant — and a generic
+// "{{label}} is complete" is untranslatable into French, where the adjective must agree
+// with the noun's gender ("Le résumé est complet" vs "L'expérience professionnelle est
+// complète"). The strings these keys point at are label-free and gender-invariant.
+const noteFor = ({ quality, relevance, weight, missingKeywords, hasKeywords }) => {
   const qualityBad = quality < BAND_THRESHOLDS.warn;
   const qualityMid = quality < BAND_THRESHOLDS.ok;
-  const top = missingKeywords.slice(0, 3).join(", ");
+  const keywords = missingKeywords.slice(0, 3).join(", ");
 
   // No relevance was measured — either the section is JD-blind by weight (contact), or
   // this job asked nothing this section could answer. Either way the only honest thing
   // to talk about is completeness.
   if (weight === 0 || !hasKeywords) {
-    if (quality >= BAND_THRESHOLDS.ok) return `${label} is complete.`;
-    if (qualityBad) return `${label} is missing — add it.`;
-    return `${label} is incomplete.`;
+    if (quality >= BAND_THRESHOLDS.ok) return { noteKey: "complete" };
+    if (qualityBad) return { noteKey: "missing" };
+    return { noteKey: "incomplete" };
   }
 
   // Order matters: never call a section "well built" unless its QUALITY actually
   // clears the ok bar. A half-finished section that happens to miss keywords is a
   // quality problem first, and saying otherwise sends the user to fix the wrong thing.
   if (qualityBad && hasKeywords && missingKeywords.length) {
-    return `Thin, and it's missing ${top}.`;
+    return { noteKey: "thinAndMissing", noteParams: { keywords } };
   }
-  if (qualityBad) return `Too thin — this section needs real content.`;
+  if (qualityBad) return { noteKey: "tooThin" };
   if (qualityMid && hasKeywords && missingKeywords.length) {
-    return `Needs more substance, and it doesn't mention ${top}.`;
+    return { noteKey: "needsSubstance", noteParams: { keywords } };
   }
-  if (qualityMid) return `Solid start, but it could be stronger.`;
+  if (qualityMid) return { noteKey: "solidStart" };
   if (hasKeywords && missingKeywords.length && relevance < BAND_THRESHOLDS.warn) {
-    return `Well built, but it doesn't mention ${top}.`;
+    return { noteKey: "wellBuiltButMissing", noteParams: { keywords } };
   }
   if (hasKeywords && missingKeywords.length) {
-    return `Close — still missing ${top}.`;
+    return { noteKey: "closeStillMissing", noteParams: { keywords } };
   }
-  return `Strong, and it speaks to this job.`;
+  return { noteKey: "strong" };
 };
 
 /**
@@ -478,10 +490,16 @@ const noteFor = ({ key, label, quality, relevance, weight, missingKeywords, hasK
  * @param {object} draft    a DraftCV (or plain object of the same shape)
  * @param {object} jobData  { brief?, aiKeywords? } — the job's extracted keywords
  * @returns {{ sections: Array<{ key, label, band, score, quality, relevance,
- *                               covered, total, missingKeywords, note }> }}
+ *                               covered, total, missingKeywords, noteKey,
+ *                               noteParams? }> }}
  */
 const scanSections = (draft = {}, jobData = {}) => {
   const { checks } = computeATSReadiness(null, draft);
+  // Sections the user marked not-applicable. A dismissed section is emitted as a
+  // neutral row and never scored — it cannot be fixed, so a red verdict on it would
+  // be advice to do the impossible. Whitelisted server-side (config/sections), so a
+  // client cannot dismiss anything mandatory.
+  const dismissed = dismissedSectionsOf(draft);
   // ONE classification pass for the whole job; each section then takes its own slice.
   const scoped = scopeKeywords(keywordsFrom(jobData));
   const skills = (draft.skills || [])
@@ -515,6 +533,28 @@ const scanSections = (draft = {}, jobData = {}) => {
     });
 
   const sections = SECTIONS.map(({ key, label }) => {
+    // ── Dismissed: the user said this section doesn't apply to them. Neutral, not
+    //    'ok' — an absent section must never flatter the overall score, and a neutral
+    //    band already renders as muted slate on the client (no new styling needed).
+    //    bandOf(null) returns 'neutral'; the literal is written out to match the
+    //    documented emit shape exactly.
+    if (dismissed.has(key)) {
+      return {
+        key,
+        label,
+        dismissed: true,
+        score: null,
+        band: "neutral",
+        quality: null,
+        relevance: null,
+        covered: 0,
+        total: 0,
+        missingKeywords: [],
+        noteKey: "notApplicable",
+        noteParams: undefined,
+      };
+    }
+
     // ── Quality: subtotal this section's earned points over its fixed budget ──
     const earned = checks
       .filter((c) => c.section === key)
@@ -566,6 +606,9 @@ const scanSections = (draft = {}, jobData = {}) => {
 
     return {
       key,
+      // Still emitted because other code reads it, but the client no longer RENDERS it —
+      // it resolves the section name from `ariaStudio.studioFlow.sections.<key>`, which
+      // is the one source of truth for those six names and is already translated.
       label,
       band: bandOf(score),
       score,
@@ -574,9 +617,8 @@ const scanSections = (draft = {}, jobData = {}) => {
       covered,
       total,
       missingKeywords,
-      note: noteFor({
-        key,
-        label,
+      // A key + its params, never a sentence. See noteFor.
+      ...noteFor({
         quality,
         relevance,
         weight,
@@ -600,4 +642,3 @@ module.exports = {
   scopeKeywords,
   keywordsForSection,
 };
-

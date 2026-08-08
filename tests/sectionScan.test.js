@@ -30,6 +30,14 @@ const ACCOUNTING_JOB = {
 
 const sectionBy = (result, key) => result.sections.find((s) => s.key === key);
 
+// Sums the ATS points a section earned. Asserting on points rather than the derived
+// quality percentage keeps these tests off the rounding, and a section may emit more
+// than one check (experience emits role count AND metrics).
+const pointsFor = (draft, section) =>
+  computeATSReadiness(null, draft)
+    .checks.filter((c) => c.section === section)
+    .reduce((a, c) => a + (c.points || 0), 0);
+
 describe("sectionScan.scanSections", () => {
   describe("banding", () => {
     it("maps scores to bands at the documented boundaries", () => {
@@ -92,27 +100,33 @@ describe("sectionScan.scanSections", () => {
       expect(summary.score).toBe(50); // 50/50 blend
       expect(summary.band).toBe("warn");
       expect(summary.missingKeywords).toEqual(expect.arrayContaining(["Python", "SQL"]));
-      expect(summary.note).toMatch(/well built/i);
+      // The verdict is a KEY, not a sentence — the client renders it in the user's
+      // language. Asserting the key is also a stricter test than matching prose: a
+      // reworded string can no longer pass a check it shouldn't.
+      expect(summary.noteKey).toBe("wellBuiltButMissing");
+      expect(summary.noteParams.keywords).toContain("Python");
     });
 
     it("separates the two failure modes in the note", () => {
-      // Empty → a pure quality problem, said plainly.
+      // Empty → a pure quality problem, named as one.
       const empty = scanSections({ professionalSummary: "", personalInfo: {} }, OILFIELD_JOB);
-      expect(sectionBy(empty, "summary").note).toMatch(/thin/i);
+      expect(sectionBy(empty, "summary").noteKey).toBe("thinAndMissing");
 
       // Half-written → still a quality problem FIRST, even though keywords are also
       // missing. It must never be described as "well built".
-      const half = scanSections({ professionalSummary: "Chef.", personalInfo: {} }, OILFIELD_JOB);
-      const note = sectionBy(half, "summary").note;
-      expect(note).toMatch(/substance/i);
-      expect(note).not.toMatch(/well built/i);
+      const half = sectionBy(
+        scanSections({ professionalSummary: "Chef.", personalInfo: {} }, OILFIELD_JOB),
+        "summary"
+      );
+      expect(half.noteKey).toBe("needsSubstance");
+      expect(half.noteKey).not.toBe("wellBuiltButMissing");
 
-      // Complete but off-target → now, and only now, "well built but…".
+      // Complete but off-target → now, and only now, the "well built, but…" verdict.
       const complete = scanSections(
         { professionalSummary: "x".repeat(120), personalInfo: {} },
         OILFIELD_JOB
       );
-      expect(sectionBy(complete, "summary").note).toMatch(/well built/i);
+      expect(sectionBy(complete, "summary").noteKey).toBe("wellBuiltButMissing");
     });
 
     it("credits relevance when the section actually speaks to the job", () => {
@@ -515,9 +529,199 @@ describe("sectionScan.scanSections", () => {
     });
   });
 
+  // ─── Sections the user marked not-applicable ────────────────────────────────────
+  // A candidate who has deliberately never had side projects was shown a permanently
+  // red Projects row they could not clear, dragging 15 points that could never be
+  // earned. Dismissing it must remove the section from the scan AND from both sides of
+  // the ATS budget — earned-only would make opting out score WORSE.
+  describe("dismissed sections", () => {
+    // Everything except Projects earns full marks (15 summary + 25 experience + 20
+    // skills + 10 education + 15 contact = 85), so the only thing moving between these
+    // assertions is the 15 points Projects holds.
+    const NO_PROJECTS = {
+      professionalSummary: "x".repeat(120),
+      experience: [
+        { title: "Analyst", description: "• Grew revenue 30%" },
+        { title: "Junior Analyst", description: "• Cut the monthly close by 2 days" },
+      ],
+      skills: new Array(9).fill(0).map((_, i) => ({ name: `s${i}` })),
+      education: [{ degree: "BSc", school: "Unilag" }],
+      personalInfo: { fullName: "A", email: "e", phone: "p", linkedin: "l" },
+    };
+
+    it("emits a dismissed section as neutral, unscored and not-applicable", () => {
+      const projects = sectionBy(
+        scanSections({ ...NO_PROJECTS, dismissedSections: ["projects"] }, OILFIELD_JOB),
+        "projects"
+      );
+      expect(projects.dismissed).toBe(true);
+      expect(projects.band).toBe("neutral");
+      expect(projects.score).toBeNull();
+      expect(projects.quality).toBeNull();
+      expect(projects.relevance).toBeNull();
+      expect(projects.noteKey).toBe("notApplicable");
+      expect(projects.missingKeywords).toEqual([]);
+      expect(projects.total).toBe(0);
+    });
+
+    it("bandOf(null) is neutral — the client styles it muted, no new band", () => {
+      expect(bandOf(null)).toBe("neutral");
+    });
+
+    it("leaves every other section scored exactly as before", () => {
+      const before = scanSections(NO_PROJECTS, OILFIELD_JOB).sections;
+      const after = scanSections(
+        { ...NO_PROJECTS, dismissedSections: ["projects"] },
+        OILFIELD_JOB
+      ).sections;
+      before
+        .filter((s) => s.key !== "projects")
+        .forEach((s) => {
+          expect(sectionBy({ sections: after }, s.key)).toEqual(s);
+        });
+    });
+
+    it("takes the 15 points out of BOTH budgets, so the overall score goes UP", () => {
+      // 85 earned of 100 with Projects in the budget…
+      const kept = computeATSReadiness(null, NO_PROJECTS);
+      expect(kept.score).toBe(85);
+      // …85 of 85 once the user says Projects isn't theirs. Earned-only would have
+      // scored this 70 — punishing the very choice this feature exists to allow.
+      const dismissedRes = computeATSReadiness(null, {
+        ...NO_PROJECTS,
+        dismissedSections: ["projects"],
+      });
+      expect(dismissedRes.score).toBe(100);
+      expect(dismissedRes.score).toBeGreaterThan(kept.score);
+      expect(dismissedRes.score).toBeLessThanOrEqual(100);
+    });
+
+    it("drops the dismissed section's checks and its nagging tip", () => {
+      const res = computeATSReadiness(null, { ...NO_PROJECTS, dismissedSections: ["projects"] });
+      expect(res.checks.some((c) => c.section === "projects")).toBe(false);
+      expect(res.tips.join(" ")).not.toMatch(/projects/i);
+    });
+
+    it("removes points a dismissed section had already EARNED, not just its budget", () => {
+      // Projects filled in and then dismissed: 100/100 → 85/85. Still 100 — the section
+      // leaves as a whole, so a user who dismisses a section they'd completed neither
+      // gains nor loses.
+      const withProjects = { ...NO_PROJECTS, projects: [{ title: "Ledger tool" }] };
+      expect(computeATSReadiness(null, withProjects).score).toBe(100);
+      expect(
+        computeATSReadiness(null, { ...withProjects, dismissedSections: ["projects"] }).score
+      ).toBe(100);
+    });
+
+    it("ignores a key that isn't dismissable — a client cannot dismiss experience", () => {
+      const attacked = { ...NO_PROJECTS, dismissedSections: ["experience"] };
+      const experience = sectionBy(scanSections(attacked, OILFIELD_JOB), "experience");
+      expect(experience.dismissed).toBeUndefined();
+      expect(experience.band).not.toBe("neutral");
+      expect(typeof experience.score).toBe("number");
+      // …and the ATS budget is untouched: no points bought by an unknown key.
+      expect(computeATSReadiness(null, attacked).score).toBe(
+        computeATSReadiness(null, NO_PROJECTS).score
+      );
+    });
+
+    it("honours the allowed key and ignores the disallowed one in the same list", () => {
+      const mixed = scanSections(
+        { ...NO_PROJECTS, dismissedSections: ["projects", "summary", "nonsense"] },
+        OILFIELD_JOB
+      );
+      expect(sectionBy(mixed, "projects").dismissed).toBe(true);
+      expect(sectionBy(mixed, "summary").dismissed).toBeUndefined();
+      expect(sectionBy(mixed, "summary").band).not.toBe("neutral");
+    });
+
+    it("survives a junk value in the field rather than throwing", () => {
+      expect(() =>
+        scanSections({ ...NO_PROJECTS, dismissedSections: "projects" }, {})
+      ).not.toThrow();
+      expect(
+        sectionBy(scanSections({ ...NO_PROJECTS, dismissedSections: null }, {}), "projects")
+          .dismissed
+      ).toBeUndefined();
+    });
+  });
+
+  // ─── Placeholder rows ───────────────────────────────────────────────────────────
+  // The Studio mints an empty row to carry a _sortId before the user has typed a
+  // thing. Counting rows instead of content let those blanks buy points.
+  describe("placeholder rows earn nothing", () => {
+    const BLANK_ROW = { _sortId: "sort-1" };
+
+    it("scores Projects 0 for a blank row, not the full 15", () => {
+      expect(pointsFor({ projects: [BLANK_ROW] }, "projects")).toBe(0);
+      expect(pointsFor({ projects: [{ title: "Ledger cleanup" }] }, "projects")).toBe(15);
+    });
+
+    it("does not count blank rows as work history", () => {
+      // Two placeholders must not buy the "2+ roles" credit.
+      expect(pointsFor({ experience: [BLANK_ROW, { _sortId: "sort-2" }] }, "experience")).toBe(0);
+      expect(
+        pointsFor({ experience: [{ title: "Analyst" }, { title: "Chef" }] }, "experience")
+      ).toBe(10);
+    });
+
+    it("does not count blank rows as education", () => {
+      expect(pointsFor({ education: [BLANK_ROW] }, "education")).toBe(0);
+    });
+
+    it("keeps a blank row out of the section score entirely", () => {
+      // The placeholder is invisible to scoring: same draft with and without it.
+      const withBlank = scanSections({ projects: [BLANK_ROW], personalInfo: {} }, {});
+      const without = scanSections({ projects: [], personalInfo: {} }, {});
+      expect(sectionBy(withBlank, "projects")).toEqual(sectionBy(without, "projects"));
+    });
+  });
+
+  describe("education is graded, not binary", () => {
+    it("pays full marks only when the qualification AND the school are both there", () => {
+      expect(pointsFor({ education: [{ degree: "BSc", school: "UNIBEN" }] }, "education")).toBe(10);
+    });
+
+    it("pays half for a half-filled entry, so it can land in the warn band", () => {
+      expect(pointsFor({ education: [{ degree: "BSc" }] }, "education")).toBe(5);
+      expect(pointsFor({ education: [{ school: "UNIBEN" }] }, "education")).toBe(5);
+      // 5/10 → 50%, which bands warn. Under the old binary rule education could only
+      // ever be 0 or 100 — it could never land here.
+      const half = scanSections({ education: [{ degree: "BSc" }], personalInfo: {} }, {});
+      expect(sectionBy(half, "education").score).toBe(50);
+      expect(sectionBy(half, "education").band).toBe("warn");
+    });
+
+    it("counts field of study as a qualification — ATS degree filters read it", () => {
+      const withField = { education: [{ field: "Accounting", school: "UNIBEN" }] };
+      expect(pointsFor(withField, "education")).toBe(10);
+    });
+
+    it("pays nothing when there is no education at all", () => {
+      expect(pointsFor({ education: [] }, "education")).toBe(0);
+    });
+  });
+
+  describe("contact pays nothing when nobody can be reached", () => {
+    it("scores 0, not 5, for an empty contact block", () => {
+      expect(pointsFor({ personalInfo: {} }, "contact")).toBe(0);
+      expect(pointsFor({}, "contact")).toBe(0);
+    });
+
+    it("still pays the graded amounts as details are added", () => {
+      const info = (extra) => ({ personalInfo: { fullName: "Ada", ...extra } });
+      expect(pointsFor(info(), "contact")).toBe(5);
+      expect(pointsFor(info({ email: "a@b.c" }), "contact")).toBe(10);
+      expect(pointsFor(info({ email: "a@b.c", phone: "1" }), "contact")).toBe(15);
+    });
+
+    it("does not accept the placeholder name a draft is seeded with", () => {
+      expect(pointsFor({ personalInfo: { fullName: "Candidate" } }, "contact")).toBe(0);
+    });
+  });
+
   it("is pure — the same input scores the same twice", () => {
     const draft = { professionalSummary: "x".repeat(120), personalInfo: {} };
     expect(scanSections(draft, OILFIELD_JOB)).toEqual(scanSections(draft, OILFIELD_JOB));
   });
 });
-

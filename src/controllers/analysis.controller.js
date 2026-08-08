@@ -311,7 +311,7 @@ const analyzeFit = async (req, res) => {
         source: "upload",
         outputLang: langService.newCvLang(req),
         personalInfo: {
-          fullName: cvContact.fullName || userFullName || "Candidate",
+          fullName: cvContact.fullName || userFullName || "",
           email: cvContact.email || user.email || "",
           phone: cvContact.phone || user.phone || "",
           linkedin: cvContact.linkedin || user.linkedinUrl || "",
@@ -1927,7 +1927,7 @@ const editApplication = async (req, res) => {
       outputLang: langService.newCvLang(req),
       title: `Edit of ${application.jobId ? (await Job.findById(application.jobId))?.title || "Application" : "Application"}`,
       personalInfo: {
-        fullName: req.user.firstName ? `${req.user.firstName} ${req.user.lastName}` : "Candidate",
+        fullName: req.user.firstName ? `${req.user.firstName} ${req.user.lastName}` : "",
         email: req.user.email,
         phone: req.user.phone || "",
         linkedin: req.user.linkedinUrl || "",

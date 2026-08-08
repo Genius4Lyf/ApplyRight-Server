@@ -296,6 +296,18 @@ const draftCVSchema = new mongoose.Schema(
       // a single saved note on read so the frontend only ever sees the array.
       userNotes: mongoose.Schema.Types.Mixed,
     },
+    // Sections the user has marked NOT APPLICABLE to them (currently only 'projects' —
+    // see config/sections.DISMISSABLE_SECTIONS). A dismissed section is excluded from the
+    // section scan's verdicts AND from both sides of the ATS points budget, so a
+    // candidate who has deliberately never had side projects stops being scored against
+    // a section they will never fill.
+    //
+    // Plain [String] with NO enum: the whitelist is enforced on READ
+    // (config/sections.dismissedSectionsOf), which covers narrow $set patches and legacy
+    // documents alike. An enum here would only reject at the model layer — and
+    // findByIdAndUpdate, which every draft save goes through, doesn't run validators
+    // anyway, so it would be a guard that never fires.
+    dismissedSections: [String],
     // Marks this draft as an Aria Studio SESSION, and which kind. Presence is the
     // marker; the value is the kind — one field doing both jobs.
     //
@@ -352,6 +364,18 @@ const draftCVSchema = new mongoose.Schema(
           covered: Number,
           total: Number,
           missingKeywords: [String],
+          // The verdict as a KEY plus its params — resolved client-side under
+          // `ariaStudio.sectionNote.*` so a French user reads a French verdict.
+          // Explicitly typed rather than Mixed: the shape is known and small, and
+          // Mixed would forfeit change tracking on a subdoc we rewrite every recompute.
+          noteKey: String,
+          noteParams: {
+            keywords: String,
+          },
+          // The LEGACY prose note. Deliberately kept: scans persisted before the
+          // key/params split still carry a sentence here and no noteKey, and the client
+          // falls back to it (studioFlow.sectionNote) so an old session doesn't render a
+          // blank verdict in the window before its next free recompute.
           note: String,
         },
       ],

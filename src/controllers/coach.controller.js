@@ -377,6 +377,25 @@ const summary = async (req, res) => {
                 Existing Summary Draft: ${draft.professionalSummary || ""}
             `.trim();
 
+    // The gaps the Studio's section scan found in THIS CV's summary, sent by the client
+    // with the fix request. Sanitised here rather than trusted: it is request body, it
+    // lands in a prompt, and a caller could otherwise smuggle instructions in through a
+    // "keyword". Strings only, trimmed, deduped case-insensitively, hard-capped at 10 and
+    // 60 chars each — a real ATS keyword is a word or two, so anything longer is not one.
+    const missingKeywords = (() => {
+      const seen = new Set();
+      return (Array.isArray(req.body?.missingKeywords) ? req.body.missingKeywords : [])
+        .map((k) => String(typeof k === "string" ? k : k?.name || "").trim())
+        .filter((k) => {
+          if (!k || k.length > 60) return false;
+          const key = k.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, 10);
+    })();
+
     let result;
     try {
       result = await aiService.generateSummaryForStage({
@@ -384,6 +403,8 @@ const summary = async (req, res) => {
         role: draft.targetJob?.title || "Professional",
         context,
         jobDescription: (draft.targetJob?.description || "").trim(),
+        // Empty on the build track (no scan has run) — correct, not a gap.
+        missingKeywords,
         // Route through the selected model via meta.modelId (multi-provider dispatcher).
         // DOCUMENT action — the summary is CV content (see coachGenerateBullets).
         meta: {
@@ -1022,4 +1043,3 @@ module.exports = {
   buildBriefForJd,
   briefHashFor,
 };
-

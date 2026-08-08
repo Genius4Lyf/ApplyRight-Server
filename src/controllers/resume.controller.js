@@ -186,7 +186,7 @@ const uploadAndCreateDraft = async (req, res) => {
       source: "upload",
       outputLang: langService.newCvLang(req),
       personalInfo: {
-        fullName: cvContact.fullName || userFullName || "Candidate",
+        fullName: cvContact.fullName || userFullName || "",
         email: cvContact.email || user.email || "",
         phone: cvContact.phone || user.phone || "",
         linkedin: cvContact.linkedin || user.linkedinUrl || "",
