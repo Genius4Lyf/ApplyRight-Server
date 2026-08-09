@@ -40,6 +40,12 @@ const DEFAULT_CREDIT_COSTS = Object.freeze({
   // Server-pinned to the Standard (light) model, so this light price is the only price it
   // charges: free-tier pays it; paid plans draw their light allowance (free).
   DRAFT_JD: 1,
+  // Aria suggests up to 3 project ideas grounded in the user's own CV (Aria Studio).
+  // Server-pinned to the Standard (light) model, so this light price is the only price it
+  // charges: free-tier pays it; paid plans draw their light allowance (free). Idea
+  // brainstorming doesn't need a flagship — the value is the FREE focused interview that
+  // follows the pick.
+  PROJECT_IDEAS: 1,
   // Aria free-form coach chat. 10 messages/day free per user, then this per message.
   ARIA_CHAT_MESSAGE: 1,
   // Defined for the planned premium gate but NOT enforced today — Interview Mode
@@ -61,11 +67,18 @@ const DEFAULT_FLAGSHIP_CREDIT_COSTS = Object.freeze({
   ARIA_CHAT_MESSAGE: 10, // chat: 1 → 10
   ANALYSIS: 15, // scan / fit-analysis: 10 → 15
   GENERATE_BULLET: 2, // per-bullet: 1 → 2
+  REWRITE_ROLE: 2, // whole-role rewrite: 1 → 2 on flagship, mirroring GENERATE_BULLET
   GENERATE_SUMMARY: 5, // summary: 3 → 5
   GENERATE_SKILLS: 15, // skills: 10 → 15
   // NOTE: DRAFT_JD has NO flagship delta on purpose — the JD draft is server-pinned to
   // the Standard (light) model (studio.controller.draftJd), so it can never resolve to a
   // flagship price. It always charges the light DRAFT_JD cost (1).
+  //
+  // NOTE: PROJECT_IDEAS has NO flagship delta on purpose either, for exactly the same
+  // reason — project-idea brainstorming is server-pinned to the Standard (light) model
+  // (studio.controller.projectIdeas), so it can never resolve to a flagship price. It
+  // always charges the light PROJECT_IDEAS cost (1). Its omission from this sparse map
+  // is deliberate, not an oversight.
 });
 
 // Return a shallow copy of the defaults (never hand out the frozen original for

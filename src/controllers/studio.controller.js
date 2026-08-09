@@ -724,4 +724,355 @@ const sessions = async (req, res) => {
   }
 };
 
-module.exports = { tailorStart, buildStart, briefPreview, draftJd, scan, recompute, sessions };
+// Split an entry description into bullet LINES the same way the client's writer does:
+// markers stripped, blanks dropped. The rows we return carry these exact "before"
+// strings and applyRoleBulletDiff removes an accepted line by NORMALISED match, so the
+// two sides have to agree on what counts as a bullet or an accept would silently no-op.
+const splitBullets = (description) =>
+  String(description || "")
+    .split("\n")
+    .map((line) => line.replace(/^[\u2022\-*\s]+/, "").trim())
+    .filter(Boolean);
+
+// The section's OWN missingKeywords from the last scan. Phase 1 scoped these per
+// section, so a work-history rewrite is never handed the projects section's gaps. No
+// scan yet → [], which is fine: the rewrite still sharpens, it just has no JD
+// vocabulary to aim at (and an empty list is SAFER for fabrication, not worse).
+const scopedMissingKeywords = (draft, section) => {
+  const key = section === "project" ? "projects" : "experience";
+  const raw = draft.studioScan?.sections;
+  const rows = Array.isArray(raw) ? raw : [];
+  const row = rows.find((s) => (s?.key || "") === key);
+  return Array.isArray(row?.missingKeywords) ? row.missingKeywords.filter(Boolean) : [];
+};
+
+// @desc    Rewrite ONE role's EXISTING bullets against the target job — returned as
+//          before/after rows the client accepts per bullet. This is the tailor path's
+//          fast lane: the bullets are already there, so re-interviewing the user to
+//          write them from scratch is the slowest possible way to sharpen them.
+//
+//          CHARGING follows generateBullets exactly, with one addition: an
+//          all-unchanged result (Aria found nothing to sharpen and blocked nothing)
+//          SUCCEEDS but does NOT charge. That is a real answer — "this role is already
+//          strong for this job" — but there is nothing to apply, and billing for it is
+//          the fastest way to teach someone never to press the button again. Same
+//          discipline as applyScanSkills' nothing-changed path. Failure never charges.
+// @route   POST /api/studio/rewrite-role
+// @access  Private
+const rewriteRole = async (req, res) => {
+  const { draftId, section, sortId } = req.body || {};
+
+  if (!["experience", "project"].includes(section)) {
+    return res.status(400).json({ message: "section must be 'experience' or 'project'" });
+  }
+  if (!sortId || typeof sortId !== "string") {
+    return res.status(400).json({ message: "sortId is required" });
+  }
+
+  try {
+    const draft = await loadOwnedDraft(req, res, draftId);
+    if (!draft) return undefined;
+
+    // Resolve by _sortId, never by index: a sibling deleted or reordered in another tab
+    // must not make Aria rewrite a DIFFERENT role than the one on screen.
+    const list = (section === "experience" ? draft.experience : draft.projects) || [];
+    const entry = list.find((e) => e._sortId === sortId);
+    if (!entry) {
+      return res.status(404).json({
+        code: "ENTRY_NOT_FOUND",
+        message: "That role is no longer in your CV.",
+      });
+    }
+
+    // Nothing to sharpen. The rewrite exists to IMPROVE existing bullets; with none, the
+    // honest answer is the interview, not a charge for rewriting emptiness.
+    const bullets = splitBullets(entry.description);
+    if (bullets.length < 1) {
+      return res.status(400).json({
+        code: "NOTHING_TO_REWRITE",
+        message: "This role has no bullets to rewrite yet.",
+      });
+    }
+
+    const user = await User.findById(req.user.id).select("plan subscription credits");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // DOCUMENT action — rewritten bullets land IN the CV, so they follow the CV's
+    // language, not the UI's.
+    const meta = {
+      userId: req.user.id,
+      operation: "studioRewriteRole",
+      lang: langService.docLang(draft, req),
+    };
+
+    // Ground the rewrite in the Role Brief. NON-FATAL: a brief-less rewrite is weaker
+    // but still useful, and failing here would block a paid action over a free one.
+    let brief = null;
+    try {
+      brief = await resolveDraftBrief(draft, meta);
+    } catch (briefError) {
+      console.error("Studio rewriteRole brief failed (continuing brief-less):", briefError.message);
+    }
+
+    // TIER-SELECTABLE, like GENERATE_BULLET: a stronger model genuinely rewrites better,
+    // so the price follows the SELECTED model's tier (1 light / 2 flagship).
+    const { modelId, tier, cost } = await modelSelection.resolveForAction({
+      action: "REWRITE_ROLE",
+      sessionModelId: req.body?.model,
+      draft,
+      user,
+    });
+
+    // PRE-CHECK the balance so we never burn an AI call the user cannot pay for. A LIGHT
+    // rewrite on an active paid plan is free (the unlimited-text perk), so it skips this.
+    const willMeter = tier === "flagship" || !subscription.isPaidActive(user);
+    if (willMeter && subscription.availableCredits(user) < cost) {
+      return res.status(403).json({
+        code: "INSUFFICIENT_CREDITS",
+        message: "Insufficient credits",
+        required: cost,
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    let rows = [];
+    try {
+      rows = await aiService.rewriteRoleBullets({
+        bullets,
+        brief,
+        role: entry.jobTitle || entry.title || entry.name || "",
+        section,
+        missingKeywords: scopedMissingKeywords(draft, section),
+        meta: { ...meta, modelId },
+      });
+    } catch (genError) {
+      if (genError instanceof aiService.AIUnavailableError) {
+        return res
+          .status(503)
+          .json({ message: "Aria is unavailable right now. Please try again shortly." });
+      }
+      console.error("Studio rewriteRole AI error:", genError);
+      return res.status(502).json({ message: "Couldn't rewrite that role. Please try again." });
+    }
+
+    // Nothing usable came back. 502 and NO CHARGE — the user got nothing.
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(502).json({ message: "Couldn't rewrite that role. Please try again." });
+    }
+
+    // Did Aria actually do anything? A blocked row counts as work: it tells the user
+    // precisely which missing fact is capping that bullet, which is the whole reason the
+    // interview escape exists. All-unchanged with nothing blocked is the no-op case.
+    const didWork = rows.some((r) => r?.changed === true || r?.blocked === true);
+    if (!didWork) {
+      return res.json({
+        rows,
+        charged: false,
+        cost: 0,
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    // Charge only now, on confirmed work. Tier-aware: flagship always meters, light is
+    // free on an active paid plan.
+    const charge = await modelSelection.chargeForModel(user, cost, tier, {
+      type: TRANSACTION_TYPES.REWRITE_ROLE,
+      description: "Aria Studio: rewrite role",
+    });
+    if (charge.insufficient) {
+      return res.status(403).json({
+        code: "INSUFFICIENT_CREDITS",
+        message: "Insufficient credits",
+        required: cost,
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    return res.json({
+      rows,
+      charged: !!charge.charged,
+      cost: charge.charged ? cost : 0,
+      remainingCredits:
+        typeof charge.remainingCredits === "number"
+          ? charge.remainingCredits
+          : subscription.availableCredits(user),
+    });
+  } catch (error) {
+    console.error("Studio Rewrite Role Error:", error);
+    return res.status(500).json({ message: "Couldn't rewrite that role. Please try again." });
+  }
+};
+
+// Loose title match used to drop an idea that duplicates a project the user already has.
+// Deliberately fuzzy (lowercased, punctuation stripped, either-contains-either) because a
+// near-duplicate — "Inventory Tracker" vs "Inventory tracking tool" — is just as useless
+// to the user as an exact one.
+const titlesCollide = (a, b) => {
+  const norm = (s) =>
+    String(s || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const x = norm(a);
+  const y = norm(b);
+  if (!x || !y) return false;
+  return x === y || x.includes(y) || y.includes(x);
+};
+
+// @desc    Propose AT MOST 3 project ideas the user could BUILD, each grounded in
+//          something already on their CV, so a role that wants a project doesn't dead-end
+//          at a blank form. Tapping one starts the ordinary FREE focused interview on it.
+//
+//          CHARGING copies draft-jd exactly (the light-pinned precedent), with the
+//          discipline the empty case demands: an EMPTY result is a 200 with { ideas: [] }
+//          and NO CHARGE — the client falls through to the blank-project path, and
+//          billing a credit for zero ideas is the fastest way to teach someone never to
+//          press this again. NOT_ENOUGH_CV and every failure path never charge either.
+// @route   POST /api/studio/project-ideas
+// @access  Private
+const projectIdeas = async (req, res) => {
+  const { draftId } = req.body || {};
+
+  try {
+    const draft = await loadOwnedDraft(req, res, draftId);
+    if (!draft) return undefined;
+
+    // GROUNDING GATE. Suggesting projects from an empty CV can only produce the generic
+    // filler this feature exists to avoid, so we refuse BEFORE spending anything: we need
+    // real material to derive an idea from. hasSubstance is shared with the scorer, so a
+    // blank row the Studio minted to hold a _sortId doesn't count as experience.
+    const realExperience = (draft.experience || []).filter(atsCoach.hasSubstance);
+    const realEducation = (draft.education || []).filter(atsCoach.hasSubstance);
+    const skillCount = Array.isArray(draft.skills) ? draft.skills.filter(Boolean).length : 0;
+    if (realExperience.length === 0 && realEducation.length === 0 && skillCount < 3) {
+      return res.status(400).json({
+        code: "NOT_ENOUGH_CV",
+        message:
+          "Add some experience, education or skills first so Aria has something to build on.",
+      });
+    }
+
+    const user = await User.findById(req.user.id).select("plan subscription credits");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // SERVER-PINNED to the light model, like DRAFT_JD: brainstorming ideas doesn't need a
+    // flagship — the value is the FREE focused interview that follows the tap. The
+    // client's model pick is intentionally ignored, which also keeps the price flat.
+    const modelId = modelSelection.DEFAULT_MODEL;
+    const tier = "light";
+    const cost = await modelSelection.costForAction("PROJECT_IDEAS", tier);
+
+    // PRE-CHECK the balance so we never burn an AI call the user can't pay for. Light is
+    // free on an active paid plan, so it doesn't meter there.
+    const willMeter = !subscription.isPaidActive(user);
+    if (willMeter && subscription.availableCredits(user) < cost) {
+      return res.status(403).json({
+        code: "INSUFFICIENT_CREDITS",
+        message: "Insufficient credits",
+        required: cost,
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    // DOCUMENT action — the project that follows lands IN the CV, so the ideas are
+    // written in the CV's language, not the UI's.
+    const meta = {
+      userId: req.user.id,
+      operation: "studioProjectIdeas",
+      lang: langService.docLang(draft, req),
+    };
+
+    // Ground on the SAME serializer /studio/scan uses, so the ideas are derived from the
+    // exact CV text the scan judged. The brief is NON-FATAL: brief-less ideas are weaker
+    // (no must-haves to close) but still grounded in the CV, and failing here would block
+    // the feature over a free lookup.
+    let brief = null;
+    try {
+      brief = await resolveDraftBrief(draft, meta);
+    } catch (briefError) {
+      console.error(
+        "Studio projectIdeas brief failed (continuing brief-less):",
+        briefError.message
+      );
+    }
+
+    const existingTitles = (draft.projects || [])
+      .map((p) => String(p?.title || p?.name || "").trim())
+      .filter(Boolean);
+
+    let ideas = [];
+    try {
+      ideas = await aiService.suggestProjects({
+        cvMarkdown: buildMarkdownFromDraft(draft),
+        brief,
+        careerStage: aiService.resolveCareerStage({ draft }),
+        existingTitles,
+        meta: { ...meta, modelId },
+      });
+    } catch (genError) {
+      if (genError instanceof aiService.AIUnavailableError) {
+        return res
+          .status(503)
+          .json({ message: "Aria is unavailable right now. Please try again shortly." });
+      }
+      console.error("Studio projectIdeas AI error:", genError);
+      return res.status(502).json({ message: "Couldn't suggest projects. Please try again." });
+    }
+
+    // Belt and braces over the prompt: drop anything that duplicates a project already on
+    // the CV. The model is TOLD not to, but "told not to" is advice and this is law.
+    const fresh = (Array.isArray(ideas) ? ideas : []).filter(
+      (idea) => !existingTitles.some((t) => titlesCollide(idea?.title, t))
+    );
+
+    // Nothing usable. 200 with an empty list and NO CHARGE — the client falls through to
+    // the blank-project path, and the user pays nothing for an answer of "none".
+    if (fresh.length === 0) {
+      return res.json({
+        ideas: [],
+        charged: false,
+        cost: 0,
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    const charge = await modelSelection.chargeForModel(user, cost, tier, {
+      type: TRANSACTION_TYPES.PROJECT_IDEAS,
+      description: "Aria Studio: project ideas",
+    });
+    if (charge.insufficient) {
+      return res.status(403).json({
+        code: "INSUFFICIENT_CREDITS",
+        message: "Insufficient credits",
+        required: cost,
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    return res.json({
+      ideas: fresh,
+      charged: !!charge.charged,
+      cost: charge.charged ? cost : 0,
+      remainingCredits:
+        typeof charge.remainingCredits === "number"
+          ? charge.remainingCredits
+          : subscription.availableCredits(user),
+    });
+  } catch (error) {
+    console.error("Studio Project Ideas Error:", error);
+    return res.status(500).json({ message: "Couldn't suggest projects. Please try again." });
+  }
+};
+
+module.exports = {
+  tailorStart,
+  buildStart,
+  briefPreview,
+  draftJd,
+  scan,
+  recompute,
+  rewriteRole,
+  projectIdeas,
+  sessions,
+};

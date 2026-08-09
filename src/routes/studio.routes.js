@@ -8,12 +8,15 @@ const {
   draftJd,
   scan,
   recompute,
+  rewriteRole,
+  projectIdeas,
   sessions,
 } = require("../controllers/studio.controller");
+
 const { protect } = require("../middleware/auth.middleware");
 
 // AI-specific limiter, scoped to the two routes that actually call a model
-// (brief-preview, scan). Mirrors app.js's aiLimiter (20 req/hour/IP) — build-start,
+// (brief-preview, draft-jd, scan, rewrite-role). Mirrors app.js's aiLimiter (20 req/hour/IP) — build-start,
 // tailor-start, sessions and recompute are document CRUD/free reads and must not
 // share this budget with a user's own AI calls elsewhere in the app.
 const aiLimiter = rateLimit({
@@ -56,5 +59,16 @@ router.post("/scan", protect, aiLimiter, scan);
 
 // Aria Studio — free deterministic re-score after an edit. No AI, no charge.
 router.post("/recompute", protect, recompute);
+
+// Aria Studio — rewrite ONE role's existing bullets against the target job, returned
+// before/after for per-bullet accept. Behind aiLimiter because it calls a model.
+// Charges REWRITE_ROLE (tier-aware) only when the rewrite actually changed something.
+router.post("/rewrite-role", protect, aiLimiter, rewriteRole);
+
+// Aria Studio — propose AT MOST 3 project ideas grounded in the user's own CV, so a
+// role that wants a project doesn't dead-end at a blank form. Behind aiLimiter because
+// it calls a model. Charges PROJECT_IDEAS only when non-empty ideas come back; the
+// FREE focused interview that follows a tap is where the value lands.
+router.post("/project-ideas", protect, aiLimiter, projectIdeas);
 
 module.exports = router;

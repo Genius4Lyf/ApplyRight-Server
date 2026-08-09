@@ -56,6 +56,8 @@ describe("per-(action, tier) credit cost resolver", () => {
     expect(light.GENERATE_SUMMARY).toBe(3);
     expect(light.GENERATE_SKILLS).toBe(10);
     expect(light.DRAFT_JD).toBe(1);
+    expect(light.REWRITE_ROLE).toBe(1);
+    expect(light.PROJECT_IDEAS).toBe(1);
   });
 
   it("flagship = tuned deltas, inheriting light for the rest", async () => {
@@ -65,11 +67,21 @@ describe("per-(action, tier) credit cost resolver", () => {
     expect(f.GENERATE_BULLET).toBe(2); // bullet 1 → 2
     expect(f.GENERATE_SUMMARY).toBe(5); // summary 3 → 5
     expect(f.GENERATE_SKILLS).toBe(15); // skills 10 → 15
+    // TIER-SELECTABLE like GENERATE_BULLET, so it MUST carry its own flagship entry —
+    // omitting it from the sparse delta map would silently price a flagship rewrite at
+    // the light cost.
+    expect(f.REWRITE_ROLE).toBe(2); // whole-role rewrite 1 → 2
     // DRAFT_JD has NO flagship delta by design, so it falls through the sparse delta map
     // and inherits the light cost. It's also server-pinned to the light model in
     // studio.controller.draftJd, so it can never resolve to a flagship price.
     const light = await settings.getCreditCostsForTier("light");
     expect(f.DRAFT_JD).toBe(light.DRAFT_JD);
+    // Same story for PROJECT_IDEAS: server-pinned to light in studio.controller.projectIdeas
+    // (the value is the FREE interview the tap starts, not the brainstorm), so no flagship
+    // entry and no flagship price.
+    expect(f.PROJECT_IDEAS).toBe(1);
+    expect(f.PROJECT_IDEAS).toBe(light.PROJECT_IDEAS);
+    expect(f.REWRITE_ROLE).toBeGreaterThan(light.REWRITE_ROLE);
   });
 
   it("getModels returns the exposed defaults", async () => {
@@ -95,4 +107,3 @@ describe("ai.resolveModelCall — missing-key fallback (never mock)", () => {
     expect(r.fellBack).toBe(true);
   });
 });
-

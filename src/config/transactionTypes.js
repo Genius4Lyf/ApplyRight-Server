@@ -29,11 +29,13 @@ const TRANSACTION_TYPES = Object.freeze({
 
   // --- Credits out: Aria / Studio AI actions ---
   GENERATE_BULLET: "generate_bullet",
+  REWRITE_ROLE: "rewrite_role",
   GENERATE_SUMMARY: "generate_summary",
   GENERATE_SKILLS: "generate_skills",
   ARIA_CHAT: "aria_chat",
   DRAFT_JD: "draft_jd",
   STUDIO_SCAN: "studio_scan",
+  PROJECT_IDEAS: "project_ideas",
 });
 
 // The array form Mongoose's `enum` validator wants.
