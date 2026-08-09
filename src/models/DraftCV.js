@@ -143,6 +143,7 @@ const draftCVSchema = new mongoose.Schema(
     ],
     education: [
       {
+        _sortId: String, // see experience._sortId
         degree: String,
         school: String,
         graduationDate: String,
