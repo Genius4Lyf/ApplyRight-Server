@@ -3897,10 +3897,29 @@ ${APP_PRIMER}
 
 Every turn, classify the user's latest message into ONE intent and act accordingly:`;
 
+  // The EXPERIENCE entryType framing. entryType lives on BOTH an experience and a project
+  // entry (same field name, symmetric by design) but the two vocabularies are different —
+  // experience: internship / part-time / volunteering / coursework; project: course |
+  // personal | work — so this wording is simply WRONG for a project. Gated to non-project
+  // turns; a project is framed by the project branch below instead.
+  const experienceEntryTypeLine =
+    section === "project"
+      ? ""
+      : `\n- ENTRY TYPE: ${entryType || "not stated"}. Use this to frame the coaching: internships emphasise supervised learning and real responsibilities; part-time/informal work emphasises reliability and transferable skills; volunteering/campus leadership emphasises initiative, people served, and scope; coursework emphasises the skills and work completed.`;
+
+  // The PROJECT type framing. The type is now PERSISTED on the project entry (DraftCV
+  // projects.entryType) and forwarded here, so when it arrives Aria KNOWS what kind of
+  // project this is — she guides by the course/personal/work framing already in the
+  // project branch and must NOT re-ask the type. An empty entryType (a session that only
+  // ever had the transcript marker) keeps the original "draw the type out" behaviour.
+  const projectType = section === "project" ? String(entryType || "").trim() : "";
+  const projectTypeLine = projectType
+    ? `  PROJECT TYPE: ${projectType} — you ALREADY KNOW this project's type, so do NOT ask the user what kind of project it is. Frame every question and the final bullets with the ${projectType} framing above.`
+    : `  The user states the type early in the thread — tailor to it.`;
+
   if (focus) {
     system += `
-- FOCUS: you are gathering truthful material for several strong bullets for their ${section} entry titled '${entryTitle}'${entryCompany ? ` at ${entryCompany}` : ""}. You know, in general terms, what that role${entryCompany ? " and company" : ""} typically involves — use it to ask SPECIFIC, informed follow-ups, not generic filler.
-- ENTRY TYPE: ${entryType || "not stated"}. Use this to frame the coaching: internships emphasise supervised learning and real responsibilities; part-time/informal work emphasises reliability and transferable skills; volunteering/campus leadership emphasises initiative, people served, and scope; coursework emphasises the skills and work completed.
+- FOCUS: you are gathering truthful material for several strong bullets for their ${section} entry titled '${entryTitle}'${entryCompany ? ` at ${entryCompany}` : ""}. You know, in general terms, what that role${entryCompany ? " and company" : ""} typically involves — use it to ask SPECIFIC, informed follow-ups, not generic filler.${experienceEntryTypeLine}
 - The user may give ONE activity or SEVERAL activities separated by full stops, commas, or list items. If there are several, remember every distinct activity from the conversation, choose the first one that still needs useful detail, and explore it with ONE focused question at a time. Then move to the next unresolved activity. Do not ask them to repeat the list and do not collapse several activities into one vague thread.
 - If the user is DESCRIBING what they actually did in this role/project → intent:'building'. Warmly react, then ask ONE focused follow-up to draw out ${
       isGradExperience
@@ -3923,7 +3942,7 @@ Every turn, classify the user's latest message into ONE intent and act according
    • Course/academic → emphasize skills demonstrated, what they built, tools/methods, and any recognition (grade, capstone, competition). (Strong for students with little work experience.)
    • Personal/side → emphasize initiative, why they built it, real usage, and the tech.
    • Work/client → emphasize impact, scale, that it shipped/was adopted — like a job bullet.
-  The user states the type early in the thread — tailor to it. Draw it out ONE informed question at a time: what it does / the problem it solves → their SPECIFIC role → the tech & tools used → the outcome/impact (grade/recognition, or users/usage, or business impact, per type) → and nudge them to add a link (GitHub / live demo / portfolio) if they have one. When ready, frame 2-4 bullets accordingly — action verb, quantified where possible. Never fabricate scope, numbers, or a link the user didn't give. (suggestions/exampleAnswer behavior is unchanged — generate them per question as usual.)`;
+${projectTypeLine} Draw it out ONE informed question at a time: what it does / the problem it solves → their SPECIFIC role → the tech & tools used → the outcome/impact (grade/recognition, or users/usage, or business impact, per type) → and nudge them to add a link (GitHub / live demo / portfolio) if they have one. When ready, frame 2-4 bullets accordingly — action verb, quantified where possible. Never fabricate scope, numbers, or a link the user didn't give. (suggestions/exampleAnswer behavior is unchanged — generate them per question as usual.)`;
     }
 
     if (section === "experience") {

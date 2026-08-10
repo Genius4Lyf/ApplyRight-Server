@@ -136,6 +136,15 @@ const draftCVSchema = new mongoose.Schema(
     projects: [
       {
         _sortId: String, // see experience._sortId
+        // The PROJECT's type — 'course' | 'personal' | 'work'. Symmetric with
+        // experience.entryType (same field name, different value vocabulary) and used the
+        // same way: it is forwarded to coachChatTurn so Aria KNOWS what kind of project
+        // this is and frames the coaching by it, instead of having to draw it out of the
+        // thread again. Persisting it on the ENTRY (rather than only as a transcript
+        // marker) is what lets a TAILORED copy — projects is in the studio controller's
+        // CLONED_CONTENT_FIELDS, so the type clones with the entry, no clone code change
+        // needed — and an "Edit with Aria" interview see the type at all.
+        entryType: String,
         title: String,
         link: String,
         description: String, // Bullet points
