@@ -9,6 +9,7 @@ const aiService = require("../services/ai.service");
 const langService = require("../services/language.service");
 const modelSelection = require("../services/modelSelection.service");
 const { coachState } = require("../services/atsCoach.service");
+const skillNormalizer = require("../services/skillNormalizer.service");
 const { TRANSACTION_TYPES } = require("../config/transactionTypes");
 
 // The valid Role-Brief company types (mirrors DraftCV.targetJob.brief.companyType
@@ -74,6 +75,30 @@ const resolveDraftBrief = async (draft, meta) => {
   draft.targetJob.briefHash = hash;
   await draft.save();
   return brief;
+};
+
+// The role's must-haves NOT yet covered by the draft — computed with the scoring
+// engine's own matcher so "covered while building" agrees with the later scan. Empty
+// when there's no brief/must-haves. Must-haves first, then capped.
+const openMustHavesFromDraft = (draft, brief, cap = 6) => {
+  const mustHaves = Array.isArray(brief?.mustHaves) ? brief.mustHaves : [];
+  if (!mustHaves.length) return [];
+  const text = [
+    ...(draft.experience || []).map((e) => e?.description || ""),
+    ...(draft.projects || []).map((p) => p?.description || ""),
+    draft.professionalSummary || "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const skills = (draft.skills || [])
+    .map((s) => (typeof s === "string" ? s : s?.name))
+    .filter(Boolean);
+  const { results } = skillNormalizer.computeKeywordCoverage(mustHaves, { text, skills });
+  return results
+    .filter((r) => !r.covered)
+    .sort((a, b) => (b.importance === "must_have" ? 1 : 0) - (a.importance === "must_have" ? 1 : 0))
+    .slice(0, cap)
+    .map((r) => ({ name: r.name, importance: r.importance }));
 };
 
 // @desc    Live conversational CV coach — a short, personal, gap-aware message
@@ -803,6 +828,10 @@ const chat = async (req, res) => {
       console.error("Coach chat resolveDraftBrief error (brief-less):", briefErr.message);
     }
 
+    // The role's still-uncovered must-haves, only on a focused build interview. Computed
+    // with the scorer's own matcher so Aria steers the same coverage the scan measures.
+    const openMustHaves = focus ? openMustHavesFromDraft(draft, brief) : [];
+
     const stepLabel = STEP_LABELS[currentStepId] || "your CV";
     // Studio can unpack several activities across ten user turns, so retain the opening
     // activity list for that whole interview. Other coach surfaces keep the smaller window.
@@ -855,6 +884,7 @@ const chat = async (req, res) => {
         stepLabel,
         cvSummary,
         brief,
+        openMustHaves,
         mustFinish,
         meta,
       });
@@ -1042,4 +1072,7 @@ module.exports = {
   resolveDraftBrief,
   buildBriefForJd,
   briefHashFor,
+  // Pure + request-free, so the "covered while building" rule can be unit-tested
+  // against the scorer's own matcher without going through the chat route.
+  openMustHavesFromDraft,
 };
