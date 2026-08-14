@@ -78,6 +78,17 @@ class AIUnavailableError extends Error {
   }
 }
 
+// A provider can occasionally ignore a JSON-only instruction and return a perfectly
+// usable plain-text answer. Keep that answer attached to the error so interactive
+// surfaces can degrade gracefully instead of turning it into a generic 502.
+class AIJSONParseError extends Error {
+  constructor(message, response) {
+    super(message);
+    this.name = "AIJSONParseError";
+    this.response = String(response || "").trim();
+  }
+}
+
 // Appended to the system prompt so AI output comes back in the user's language.
 // Only non-English needs a directive; English is the prompts' native language (no-op),
 // which is why none of the ~20 existing English prompts had to be rewritten.
@@ -585,7 +596,11 @@ const callModel = async (
     const cleaned = String(content)
       .replace(/```json\s*|\s*```/g, "")
       .trim();
-    return JSON.parse(cleaned);
+    try {
+      return JSON.parse(cleaned);
+    } catch (err) {
+      throw new AIJSONParseError(err.message, cleaned);
+    }
   } catch (err) {
     persistLog({
       ...baseLog,
@@ -4654,6 +4669,7 @@ module.exports = {
   categorizeSkillsList,
   activeProvider,
   AIUnavailableError,
+  AIJSONParseError,
   // Multi-provider model dispatcher (Aria model selection)
   callModel,
   resolveModelCall,

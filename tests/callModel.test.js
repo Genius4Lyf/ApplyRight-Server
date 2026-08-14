@@ -30,6 +30,18 @@ jest.mock("../src/models/AICallLog", () => ({ create: mockLogCreate }));
 
 const ai = require("../src/services/ai.service");
 
+test("callModel retains a plain-text reply when JSON output was requested", async () => {
+  mockAnthropicCreate.mockResolvedValueOnce({
+    content: [{ text: "That's solid experience." }],
+    usage: {},
+  });
+
+  await expect(ai.callModel("claude-sonnet-5", { user: "hi", json: true })).rejects.toMatchObject({
+    name: "AIJSONParseError",
+    response: "That's solid experience.",
+  });
+});
+
 beforeEach(() => {
   mockOpenAICreate.mockClear();
   mockAnthropicCreate.mockClear();
@@ -41,9 +53,7 @@ describe("callModel — routes to the correct provider client", () => {
   it("an OpenAI model → openai chat.completions with its apiModel", async () => {
     const out = await ai.callModel("gpt-4o", { user: "hi" });
     expect(out).toBe("openai-out");
-    expect(mockOpenAICreate).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-4o" })
-    );
+    expect(mockOpenAICreate).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-4o" }));
   });
 
   it("claude-sonnet-5 → anthropic messages.create with prompt caching on the system block", async () => {

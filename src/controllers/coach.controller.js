@@ -894,8 +894,26 @@ const chat = async (req, res) => {
           .status(503)
           .json({ message: "AI is not configured right now. Please try again later." });
       }
-      console.error("Coach chat AI error:", aiErr.message);
-      return res.status(502).json({ message: "Couldn't continue right now. Please try again." });
+      // Claude occasionally returns the requested coaching prose without the JSON
+      // wrapper. The response itself is useful, so deliver it rather than making the
+      // user resend the exact same prompt. A focused turn defaults to "building",
+      // matching the service's safe classifier default.
+      if (aiErr instanceof aiService.AIJSONParseError && aiErr.response) {
+        logger.warn(
+          `Coach chat received non-JSON AI output; using text fallback (user=${req.user.id}, model=${modelId})`
+        );
+        result = {
+          reply: aiErr.response,
+          intent: focus ? "building" : "answer",
+          description: "",
+          suggestions: [],
+          exampleAnswer: "",
+          suggestionsLabel: "",
+        };
+      } else {
+        console.error("Coach chat AI error:", aiErr.message);
+        return res.status(502).json({ message: "Couldn't continue right now. Please try again." });
+      }
     }
 
     // No focus → always a general answer; focused → trust the classifier.
