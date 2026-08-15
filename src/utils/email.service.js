@@ -82,7 +82,7 @@ const BRAND = {
   primary: "#4f46e5", // Indigo 600
   primaryDark: "#4338ca", // Indigo 700 (gradient depth)
   ink: "#0f172a", // Slate 900
-  darkPanel: "#020617", // Slate 950 — the AuthShell dark sidebar
+  darkPanel: "#070c17", // Current app dark canvas / navigation ground
   accent: "#f59e0b", // Amber 500
   accentSoft: "#fffbeb", // Amber 50
   accentInk: "#b45309", // Amber 700
@@ -99,7 +99,7 @@ const BRAND = {
 // asset ever moves to a CDN.
 const LOGO_URL =
   process.env.EMAIL_LOGO_URL ||
-  `${(process.env.FRONTEND_URL || "").replace(/\/$/, "")}/applyright-icon.png`;
+  `${(process.env.FRONTEND_URL || "").replace(/\/$/, "")}/applyright-icon-white.png`;
 
 // Shared table-based shell used by every transactional email. Inline styles only —
 // Gmail/Outlook strip <style>, flexbox and SVG — hence tables + a hosted <img>
@@ -130,15 +130,15 @@ const renderShell = (content, preheader) => `
           <!-- Thin brand accent -->
           <tr><td style="height:3px; line-height:3px; font-size:3px; background-color:${BRAND.primary};">&nbsp;</td></tr>
 
-          <!-- Brand lockup -->
+          <!-- Brand lockup: mirrors the app's editorial navy navigation and white logo -->
           <tr>
-            <td style="padding:32px 40px 0;">
+            <td style="padding:28px 40px; background-color:${BRAND.darkPanel};">
               <table role="presentation" cellpadding="0" cellspacing="0">
                 <tr>
                   <td style="vertical-align:middle;">
                     <img src="${LOGO_URL}" width="30" height="30" alt="ApplyRight" style="display:block; width:30px; height:30px; border:0; outline:none; text-decoration:none;" />
                   </td>
-                  <td style="padding-left:9px; vertical-align:middle; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:19px; font-weight:700; letter-spacing:-0.4px; color:${BRAND.ink};">ApplyRight</td>
+                  <td style="padding-left:9px; vertical-align:middle; font-family:Georgia,'Times New Roman',serif; font-size:20px; font-weight:700; letter-spacing:-0.4px; color:#ffffff;">ApplyRight</td>
                 </tr>
               </table>
             </td>

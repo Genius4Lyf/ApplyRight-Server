@@ -2,14 +2,19 @@
 jest.mock("../src/models/User");
 jest.mock("../src/models/Transaction");
 jest.mock("../src/models/Payment");
+jest.mock("../src/utils/email.service", () => ({ sendPurchaseReceipt: jest.fn() }));
 
 const User = require("../src/models/User");
 const Payment = require("../src/models/Payment");
 const Transaction = require("../src/models/Transaction");
+const { sendPurchaseReceipt } = require("../src/utils/email.service");
 const subscription = require("../src/services/subscription.service");
 
 describe("subscription.service", () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    User.findById.mockReturnValue({ select: jest.fn().mockResolvedValue(null) });
+  });
 
   describe("getEffectiveTier", () => {
     it("is free with no subscription", () => {
@@ -64,9 +69,9 @@ describe("subscription.service", () => {
   describe("modelForUser", () => {
     it("uses the full model for an active pro tier", () => {
       const future = new Date(Date.now() + 100000);
-      expect(
-        subscription.modelForUser({ subscription: { tier: "pro", expiresAt: future } })
-      ).toBe("gpt-realtime-2.1");
+      expect(subscription.modelForUser({ subscription: { tier: "pro", expiresAt: future } })).toBe(
+        "gpt-realtime-2.1"
+      );
     });
     it("uses mini otherwise", () => {
       expect(subscription.modelForUser({})).toBe("gpt-realtime-2.1-mini");
@@ -114,6 +119,32 @@ describe("subscription.service", () => {
       await subscription.grantEntitlement(payment);
       const arg = User.updateOne.mock.calls[0][1];
       expect(arg.$inc["downloads.passRemaining"]).toBe(1);
+    });
+
+    it("emails only after a paid-plan purchase", async () => {
+      User.updateOne.mockResolvedValue({ modifiedCount: 1 });
+      User.findById.mockReturnValue({
+        select: jest.fn().mockResolvedValue({ email: "ada@example.com", firstName: "Ada" }),
+      });
+      Payment.updateOne.mockResolvedValueOnce({ modifiedCount: 1 });
+
+      await subscription.grantEntitlement({
+        _id: "p4",
+        userId: "u1",
+        planId: "weekly_pro",
+        currency: "NGN",
+        amountNgn: 5000,
+      });
+
+      expect(sendPurchaseReceipt).toHaveBeenCalledTimes(1);
+
+      jest.clearAllMocks();
+      User.updateOne.mockResolvedValue({ modifiedCount: 1 });
+      Payment.updateOne.mockResolvedValueOnce({ modifiedCount: 1 });
+
+      await subscription.grantEntitlement({ _id: "p5", userId: "u1", planId: "credits_500" });
+
+      expect(sendPurchaseReceipt).not.toHaveBeenCalled();
     });
   });
 

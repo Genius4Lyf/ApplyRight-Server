@@ -40,11 +40,10 @@ const receiptLinesFor = (item) => {
  * unconfigured, bad address) is logged and swallowed so it can never reverse or
  * block the entitlement grant. Not awaited by the caller's critical path.
  */
-const sendReceiptSafely = async (payment, item) => {
+const sendPlanReceiptSafely = async (payment, item) => {
   try {
     const user = await User.findById(payment.userId).select("email firstName");
     if (!user?.email) return;
-    const isSub = item.purpose === "subscription";
     await sendPurchaseReceipt({
       email: user.email,
       firstName: user.firstName || "",
@@ -53,13 +52,13 @@ const sendReceiptSafely = async (payment, item) => {
       currency: payment.currency || "NGN",
       reference: payment.flwTxRef,
       date: payment.grantedAt || new Date(),
-      expiresAt: isSub
-        ? new Date((payment.grantedAt || new Date()).getTime() + (item.periodDays || 0) * DAY_MS)
-        : null,
+      expiresAt: new Date(
+        (payment.grantedAt || new Date()).getTime() + (item.periodDays || 0) * DAY_MS
+      ),
       included: receiptLinesFor(item),
     });
   } catch (err) {
-    logger.warn(`Purchase receipt email failed for payment ${payment._id}: ${err.message}`);
+    logger.warn(`Plan purchase email failed for payment ${payment._id}: ${err.message}`);
   }
 };
 
@@ -217,10 +216,11 @@ const grantEntitlement = async (payment) => {
     );
   }
 
-  // Best-effort purchase receipt. Awaited so tests/callers see it complete, but it
-  // never throws (sendReceiptSafely swallows all errors) — a mail failure must not
-  // reverse the grant we just committed.
-  await sendReceiptSafely(payment, item);
+  // Only paid-plan purchases receive an email. Credit packs, download passes, and
+  // interview-minute top-ups are fulfilled silently in-app.
+  if (item.purpose === "subscription") {
+    await sendPlanReceiptSafely(payment, item);
+  }
 
   return true;
 };
