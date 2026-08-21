@@ -62,7 +62,125 @@ describe("callModel — routes to the correct provider client", () => {
     const arg = mockAnthropicCreate.mock.calls[0][0];
     expect(arg.model).toBe("claude-sonnet-5");
     expect(arg.temperature).toBeUndefined();
+    expect(arg.thinking).toBeUndefined();
     expect(arg.system[0].cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  it("can disable Sonnet 5 thinking for small structured-output calls", async () => {
+    await ai.callModel("claude-sonnet-5", {
+      user: "write bullets",
+      maxTokens: 4096,
+      disableThinking: true,
+    });
+
+    expect(mockAnthropicCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-sonnet-5",
+        max_tokens: 4096,
+        thinking: { type: "disabled" },
+      })
+    );
+  });
+
+  it("generates Claude bullets without thinking and with enough JSON output headroom", async () => {
+    mockAnthropicCreate.mockResolvedValueOnce({
+      content: [
+        {
+          text: JSON.stringify({
+            bullets: [{ text: "Built reliable APIs", evidenceIds: [], requirementIds: [] }],
+          }),
+        },
+      ],
+      usage: {},
+    });
+
+    await expect(
+      ai.generateBulletsFromDescription("Built and maintained reliable backend APIs", 1, {
+        meta: { modelId: "claude-sonnet-5" },
+      })
+    ).resolves.toEqual(["Built reliable APIs"]);
+
+    expect(mockAnthropicCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-sonnet-5",
+        max_tokens: 4096,
+        thinking: { type: "disabled" },
+      })
+    );
+  });
+
+  it("generates Claude skills without thinking and with enough JSON output headroom", async () => {
+    mockAnthropicCreate.mockResolvedValueOnce({
+      content: [
+        {
+          text: JSON.stringify({
+            suggestions: [
+              {
+                category: "Data",
+                skills: ["SQL"],
+                skillsDetailed: [
+                  {
+                    name: "SQL",
+                    evidence: [
+                      { type: "education", refIndex: 0, snippet: "Completed SQL coursework" },
+                    ],
+                  },
+                ],
+              },
+              {
+                category: "Certifications",
+                skills: ["technical certifications"],
+                skillsDetailed: [
+                  {
+                    name: "technical certifications",
+                    evidence: [
+                      { type: "education", refIndex: 0, snippet: "Completed technical study" },
+                    ],
+                  },
+                ],
+              },
+            ],
+            confirmationCandidates: [
+              {
+                name: "Safety Certification",
+                category: "Certifications",
+                evidence: [
+                  { type: "education", refIndex: 0, snippet: "Completed technical study" },
+                ],
+              },
+            ],
+          }),
+        },
+      ],
+      usage: {},
+    });
+
+    await expect(
+      ai.generateSkillsFromContext(
+        [{ degree: "BSc", description: "Completed SQL coursework" }],
+        [],
+        [],
+        "",
+        true,
+        { modelId: "claude-sonnet-5" }
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({
+        suggestions: [expect.objectContaining({ skills: ["SQL"] })],
+        confirmationCandidates: [],
+      })
+    );
+
+    expect(mockAnthropicCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-sonnet-5",
+        max_tokens: 8192,
+        thinking: { type: "disabled" },
+      })
+    );
+    expect(mockAnthropicCreate.mock.calls[0][0].messages[0].content).toContain(
+      "CERTIFICATIONS ARE NOT SKILLS"
+    );
   });
 
   it("a DeepSeek (OpenAI-compatible) model → OpenAI SDK constructed with the DeepSeek baseURL", async () => {

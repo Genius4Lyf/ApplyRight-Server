@@ -177,7 +177,7 @@ describe("POST /api/studio/tailor-start", () => {
 
     const res = await post();
 
-    expect(res.statusCode).toBe(401);
+    expect(res.statusCode).toBe(403);
     expect(DraftCV.create).not.toHaveBeenCalled();
   });
 

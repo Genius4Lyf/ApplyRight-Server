@@ -114,6 +114,7 @@ const draftCVSchema = new mongoose.Schema(
       hash: String,
       suggestions: mongoose.Schema.Types.Mixed, // [{ category, skills[], skillsDetailed? }]
       bestForRole: [String],
+      reviewGroups: mongoose.Schema.Types.Mixed,
     },
     personalInfo: {
       fullName: String,
@@ -204,6 +205,8 @@ const draftCVSchema = new mongoose.Schema(
           },
         ],
         talkingPoint: String,
+        explicitlyConfirmed: { type: Boolean, default: false },
+        confirmationStatus: String, // direct|basic; encountered/no are never added
       },
     ],
     // Interview Prep saved against this CV when the user has no linked job

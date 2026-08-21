@@ -232,7 +232,7 @@ describe("Aria Studio — scan & recompute", () => {
 
       const res = await post("scan");
 
-      expect(res.statusCode).toBe(401);
+      expect(res.statusCode).toBe(403);
       expect(aiService.analyzeProfile).not.toHaveBeenCalled();
     });
 
@@ -368,7 +368,7 @@ describe("Aria Studio — scan & recompute", () => {
 
     it("rejects a draft owned by someone else", async () => {
       DraftCV.findById.mockResolvedValue(buildDraft({ userId: { toString: () => otherUserId } }));
-      expect((await post("recompute")).statusCode).toBe(401);
+      expect((await post("recompute")).statusCode).toBe(403);
     });
   });
 });

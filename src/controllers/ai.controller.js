@@ -454,6 +454,233 @@ const scoreBestForRole = (
   return skillNames.filter((n) => matchedCanon.has(normalizeSkill(n).canonical.toLowerCase()));
 };
 
+const skillSourceLabel = (item, type, index) => {
+  if (type === "experience") return [item?.title, item?.company].filter(Boolean).join(" at ");
+  if (type === "project") return item?.title || `Project ${index + 1}`;
+  return [item?.degree || item?.field, item?.school].filter(Boolean).join(" at ");
+};
+
+const skillReviewGroups = ({
+  suggestions,
+  bestForRole,
+  roleBrief,
+  targetJob,
+  education,
+  experience,
+  projects,
+  certifications = [],
+  confirmationCandidates = [],
+}) => {
+  const sources = { education, experience, project: projects };
+  const bestSet = new Set((bestForRole || []).map((name) => String(name).toLowerCase()));
+  const rows = [];
+  const seen = new Set();
+  (suggestions || []).forEach((group, groupIndex) => {
+    const details = new Map(
+      (group.skillsDetailed || []).map((detail) => [
+        String(detail?.name || "").toLowerCase(),
+        detail,
+      ])
+    );
+    (group.skills || []).forEach((name, skillIndex) => {
+      const key = String(name || "")
+        .trim()
+        .toLowerCase();
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      const detail = details.get(key) || {};
+      const evidence = (detail.evidence || []).map((item) => ({
+        ...item,
+        sourceLabel:
+          skillSourceLabel(sources[item.type]?.[item.refIndex], item.type, item.refIndex) ||
+          `${item.type} ${item.refIndex + 1}`,
+      }));
+      rows.push({
+        name: String(name).trim(),
+        category: group.category || "Uncategorized",
+        evidence,
+        talkingPoint: detail.talkingPoint || "",
+        explicitlyConfirmed: false,
+        evidenceStatus: "demonstrated",
+        reason: evidence[0]?.snippet || "Demonstrated in your CV.",
+        rank: groupIndex * 20 + skillIndex,
+      });
+    });
+  });
+
+  const hasJobDescription = Boolean(String(targetJob || "").trim() || roleBrief?.role);
+  if (!hasJobDescription) {
+    const coreCount = Math.min(8, Math.max(4, Math.ceil(rows.length * 0.55)));
+    return {
+      mode: "profile",
+      core: rows.slice(0, coreCount),
+      additional: rows.slice(coreCount),
+      confirmation: (confirmationCandidates || []).map((candidate) => ({
+        ...candidate,
+        evidence: (candidate.evidence || []).map((item) => ({
+          ...item,
+          sourceLabel:
+            skillSourceLabel(sources[item.type]?.[item.refIndex], item.type, item.refIndex) ||
+            `${item.type} ${item.refIndex + 1}`,
+        })),
+        explicitlyConfirmed: false,
+        evidenceStatus: "plausible",
+      })),
+      gaps: [],
+    };
+  }
+
+  const important = rows.filter((row) => bestSet.has(row.name.toLowerCase()));
+  const additional = rows.filter((row) => !bestSet.has(row.name.toLowerCase()));
+  const roleRequirements = Array.isArray(roleBrief?.requirements) ? roleBrief.requirements : [];
+  const certificationRequirements = roleRequirements.filter(
+    (item) => item?.name && item?.type === "certification"
+  );
+  const typedRequirements = roleRequirements.filter(
+    (item) =>
+      item?.name &&
+      item?.type !== "responsibility" &&
+      // Credentials have their own first-class DraftCV.certifications section. Showing
+      // them as confirmable skill rows lets a real certificate (or a vague JD phrase
+      // such as "technical certifications") leak into skills[].
+      item?.type !== "certification"
+  );
+  const matchedRequirements = new Set();
+  typedRequirements.forEach((requirement) => {
+    const terms = [requirement.name, ...(requirement.aliases || [])].map((term) =>
+      String(term || "").toLowerCase()
+    );
+    if (rows.some((row) => terms.some((term) => term && row.name.toLowerCase().includes(term)))) {
+      matchedRequirements.add(requirement.id);
+    }
+  });
+
+  const searchableSources = Object.entries(sources).flatMap(([type, list]) =>
+    (list || []).map((item, refIndex) => ({
+      type,
+      refIndex,
+      item,
+      label: skillSourceLabel(item, type, refIndex),
+      text: [item?.title, item?.company, item?.degree, item?.field, item?.description]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase(),
+    }))
+  );
+  const meaningfulTokens = (value) =>
+    (
+      String(value || "")
+        .toLowerCase()
+        .match(/[a-z0-9+#.]{4,}/g) || []
+    ).filter(
+      (token) =>
+        !["with", "using", "experience", "strong", "skills", "ability", "knowledge"].includes(token)
+    );
+  const confirmation = (confirmationCandidates || []).map((candidate) => ({
+    ...candidate,
+    evidence: (candidate.evidence || []).map((item) => ({
+      ...item,
+      sourceLabel:
+        skillSourceLabel(sources[item.type]?.[item.refIndex], item.type, item.refIndex) ||
+        `${item.type} ${item.refIndex + 1}`,
+    })),
+    explicitlyConfirmed: false,
+    evidenceStatus: "plausible",
+  }));
+  const gaps = [];
+  typedRequirements
+    .filter((requirement) => !matchedRequirements.has(requirement.id))
+    .forEach((requirement) => {
+      const signalTokens = meaningfulTokens(
+        [...(requirement.proofSignals || []), ...(requirement.aliases || [])].join(" ")
+      );
+      const source = searchableSources
+        .map((candidate) => ({
+          ...candidate,
+          score: signalTokens.filter((token) => candidate.text.includes(token)).length,
+        }))
+        .sort((a, b) => b.score - a.score)[0];
+      const row = {
+        name: requirement.name,
+        category:
+          {
+            tool: "Tools & Software",
+            technology: "Technologies",
+            method: "Methods & Practices",
+            domain: "Industry Knowledge",
+            certification: "Certifications",
+          }[requirement.type] || "Professional Skills",
+        requirementId: requirement.id,
+        requirementPriority: requirement.priority,
+        explicitlyConfirmed: false,
+        evidenceStatus: source?.score > 0 ? "plausible" : "not_demonstrated",
+        reason:
+          source?.score > 0
+            ? `Your ${source.label || source.type} contains related activity, but does not explicitly prove this skill.`
+            : "The employer asks for this, but it is not demonstrated in your CV.",
+        evidence:
+          source?.score > 0
+            ? [
+                {
+                  type: source.type,
+                  refIndex: source.refIndex,
+                  sourceLabel: source.label,
+                  snippet: String(source.item?.description || "").slice(0, 220),
+                },
+              ]
+            : [],
+      };
+      if (source?.score > 0) confirmation.push(row);
+      else gaps.push(row);
+    });
+
+  // Credentials never become addable skill rows. Keep unmatched employer credentials
+  // visible as honest requirements, while recognizing certificates already saved in the
+  // draft's dedicated Certifications section.
+  const savedCredentialNames = (certifications || []).map((item) =>
+    String(typeof item === "string" ? item : item?.name || item?.title || "").toLowerCase()
+  );
+  certificationRequirements.forEach((requirement) => {
+    const terms = [requirement.name, ...(requirement.aliases || [])]
+      .map((term) => String(term || "").toLowerCase())
+      .filter(Boolean);
+    const alreadySaved = savedCredentialNames.some((saved) =>
+      terms.some((term) => saved.includes(term) || term.includes(saved))
+    );
+    if (!alreadySaved) {
+      gaps.push({
+        name: requirement.name,
+        category: "Certifications",
+        requirementId: requirement.id,
+        requirementPriority: requirement.priority,
+        requirementKind: "certification",
+        explicitlyConfirmed: false,
+        evidenceStatus: "not_demonstrated",
+        reason:
+          "The employer requests this credential, but it is not in your Certifications section.",
+        evidence: [],
+      });
+    }
+  });
+
+  return {
+    mode: "job",
+    important,
+    additional,
+    confirmation: confirmation
+      .filter(
+        (row, index, list) =>
+          !seen.has(String(row.name || "").toLowerCase()) &&
+          list.findIndex(
+            (candidate) =>
+              String(candidate.name || "").toLowerCase() === String(row.name || "").toLowerCase()
+          ) === index
+      )
+      .slice(0, 6),
+    gaps: gaps.slice(0, 8),
+  };
+};
+
 const generateSkills = async (req, res) => {
   const { education, experience, projects, targetJob, draftId } = req.body;
 
@@ -489,9 +716,15 @@ const generateSkills = async (req, res) => {
       .createHash("sha256")
       .update(
         JSON.stringify({
+          // Bump when the extraction/category contract changes so stale layouts are not
+          // served forever. Model is part of the identity because a user explicitly
+          // choosing Claude must not receive a cached Standard-model result.
+          skillsGenSchema: 3,
+          modelId,
           education: education || [],
           experience: experience || [],
           projects: projects || [],
+          certifications: draft?.certifications || [],
           targetJob: (targetJob || "").trim().toLowerCase().replace(/\s+/g, " "),
           briefHash: draft?.targetJob?.briefHash || "",
         })
@@ -506,6 +739,18 @@ const generateSkills = async (req, res) => {
       return res.json({
         suggestions: draft.skillsGenCache.suggestions,
         bestForRole: draft.skillsGenCache.bestForRole || [],
+        reviewGroups:
+          draft.skillsGenCache.reviewGroups ||
+          skillReviewGroups({
+            suggestions: draft.skillsGenCache.suggestions,
+            bestForRole: draft.skillsGenCache.bestForRole || [],
+            roleBrief: draft?.targetJob?.brief || null,
+            targetJob,
+            education: education || [],
+            experience: experience || [],
+            projects: projects || [],
+            certifications: draft?.certifications || [],
+          }),
         isPaid,
         fromCache: true,
         remainingCredits: subscription.availableCredits(user),
@@ -524,7 +769,7 @@ const generateSkills = async (req, res) => {
       });
     }
 
-    const suggestions = await require("../services/ai.service").generateSkillsFromContext(
+    const generated = await require("../services/ai.service").generateSkillsFromContext(
       education || [],
       experience || [],
       projects || [],
@@ -537,6 +782,7 @@ const generateSkills = async (req, res) => {
         brief: draft?.targetJob?.brief?.toObject
           ? draft.targetJob.brief.toObject()
           : draft?.targetJob?.brief || null,
+        certifications: draft?.certifications || [],
         meta: {
           userId: req.user.id,
           operation: "generateSkills",
@@ -544,6 +790,10 @@ const generateSkills = async (req, res) => {
         },
       }
     );
+    const suggestions = Array.isArray(generated) ? generated : generated?.suggestions || [];
+    const confirmationCandidates = Array.isArray(generated)
+      ? []
+      : generated?.confirmationCandidates || [];
     if (!Array.isArray(suggestions) || suggestions.length === 0) {
       return res.status(502).json({
         message:
@@ -558,6 +808,17 @@ const generateSkills = async (req, res) => {
       description: targetJob || "",
       aiKeywords: draft?.targetJob?.aiKeywords || [],
       roleBrief: draft?.targetJob?.brief || null,
+    });
+    const reviewGroups = skillReviewGroups({
+      suggestions,
+      bestForRole,
+      roleBrief: draft?.targetJob?.brief || null,
+      targetJob,
+      education: education || [],
+      experience: experience || [],
+      projects: projects || [],
+      certifications: draft?.certifications || [],
+      confirmationCandidates,
     });
 
     // Charge BEFORE caching, so a failed charge never leaves a cached result the user can
@@ -577,7 +838,7 @@ const generateSkills = async (req, res) => {
 
     // Persist the cache on the draft so re-opens/re-clicks are free.
     if (draft) {
-      draft.skillsGenCache = { hash: inputHash, suggestions, bestForRole };
+      draft.skillsGenCache = { hash: inputHash, suggestions, bestForRole, reviewGroups };
       draft.markModified("skillsGenCache");
       await draft.save();
     }
@@ -585,6 +846,7 @@ const generateSkills = async (req, res) => {
     res.json({
       suggestions,
       bestForRole,
+      reviewGroups,
       isPaid,
       fromCache: false,
       charged: charge.charged,
@@ -856,4 +1118,6 @@ module.exports = {
   getKeywordCoverage,
   generateSkills,
   tightenSummary,
+  // Pure classifier exported for the evidence/ranking regression tests.
+  skillReviewGroups,
 };

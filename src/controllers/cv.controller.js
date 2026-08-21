@@ -34,7 +34,7 @@ const saveDraft = async (req, res) => {
       }
 
       if (draft.userId.toString() !== req.user.id) {
-        return res.status(401).json({ message: "Not authorized" });
+        return res.status(403).json({ message: "Not authorized to edit this CV" });
       }
 
       draft = await DraftCV.findByIdAndUpdate(_id, data, { new: true });
@@ -97,7 +97,7 @@ const getDraftById = async (req, res) => {
     }
 
     if (draft.userId.toString() !== req.user.id) {
-      return res.status(401).json({ message: "Not authorized" });
+      return res.status(403).json({ message: "Not authorized to view this CV" });
     }
 
     res.json(draft);
@@ -119,7 +119,7 @@ const deleteDraft = async (req, res) => {
     }
 
     if (draft.userId.toString() !== req.user.id) {
-      return res.status(401).json({ message: "Not authorized" });
+      return res.status(403).json({ message: "Not authorized to delete this CV" });
     }
 
     await DraftCV.findByIdAndDelete(req.params.id);

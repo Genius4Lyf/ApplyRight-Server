@@ -219,7 +219,15 @@ const persistLog = (entry) => {
  * @param {object} [params.meta] - Logging context: { operation, userId, applicationId }.
  * @returns {Promise<object>} Parsed JSON response (object or array).
  */
-const callJSON = async ({ system, user, messages, temperature = 0.2, maxTokens, meta = {} }) => {
+const callJSON = async ({
+  system,
+  user,
+  messages,
+  temperature = 0.2,
+  maxTokens,
+  disableThinking = false,
+  meta = {},
+}) => {
   if (activeProvider === "mock") {
     throw new AIUnavailableError();
   }
@@ -240,6 +248,7 @@ const callJSON = async ({ system, user, messages, temperature = 0.2, maxTokens, 
       json: true,
       temperature,
       maxTokens,
+      disableThinking,
       meta: { ...meta, __langApplied: true },
     });
   }
@@ -506,7 +515,16 @@ const resolveModelCall = (modelId) => {
 
 const callModel = async (
   modelId,
-  { system = "", user, messages, json = false, temperature = 0.4, maxTokens, meta = {} } = {}
+  {
+    system = "",
+    user,
+    messages,
+    json = false,
+    temperature = 0.4,
+    maxTokens,
+    disableThinking = false,
+    meta = {},
+  } = {}
 ) => {
   // Output-language chokepoint for callers that hit the dispatcher DIRECTLY
   // (e.g. generateSkillsFromContext). callJSON/callText already appended the
@@ -551,8 +569,14 @@ const callModel = async (
         model: apiModel,
         max_tokens: maxTokens || 1024,
         // Sonnet 5 enables adaptive thinking by default and rejects non-default
-        // sampling parameters. Older Anthropic models keep the caller's temperature.
-        ...(apiModel === "claude-sonnet-5" ? {} : { temperature }),
+        // sampling parameters. Small structured-output operations can explicitly
+        // disable thinking so reasoning tokens cannot consume the response budget.
+        // Older Anthropic models keep the caller's temperature.
+        ...(apiModel === "claude-sonnet-5"
+          ? disableThinking
+            ? { thinking: { type: "disabled" } }
+            : {}
+          : { temperature }),
         // Prompt caching on the system block (system prompt + JD + CV context) — the big
         // margin lever on flagship: repeated turns reuse the cached prefix.
         system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
@@ -3747,6 +3771,11 @@ OUTPUT STRICT JSON: { "bullets": [{ "text": "<bullet>", "evidenceIds": ["ev_..."
     system,
     user,
     temperature: 0.4,
+    // Sonnet 5 otherwise enables adaptive thinking by default, and thinking shares
+    // max_tokens with the visible response. Bullet writing is a short structured-output
+    // task, so disable thinking and leave enough room for six bullets plus citations.
+    disableThinking: true,
+    maxTokens: 4096,
     meta: { ...(options.meta || {}), model, operation: "coachGenerateBullets" },
   });
 
@@ -4478,6 +4507,289 @@ ${cv}`;
   );
 };
 
+const GENERIC_SKILL_CATEGORIES = new Set(
+  [
+    "technical skills",
+    "professional skills",
+    "hard skills",
+    "general",
+    "general skills",
+    "other",
+    "miscellaneous",
+    "additional skills",
+    "uncategorized",
+    "skills",
+  ].map((value) => value.toLowerCase())
+);
+
+// These are credentials rather than capabilities. Named credentials from the user's
+// certification section and the Role Brief are also supplied at runtime, so this list is
+// only a guard for common acronyms that contain no word such as "certificate".
+const CERTIFICATION_ACRONYM_RE =
+  /\b(?:PMP|PRINCE2|NEBOSH|IOSH|CFA|CPA|ACCA|CISSP|CISM|CISA|CCNA|CCNP|CEH|ITIL|CSM|SHRM(?:-CP|-SCP)?|PHR|SPHR|AWS\s+CERTIFIED|AZ-\d{3}|PL-\d{3}|DP-\d{3})\b/i;
+
+const skillIdentity = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\brestful\b/g, "rest")
+    .replace(/[^a-z0-9+#.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const credentialName = (item) =>
+  String(typeof item === "string" ? item : item?.name || item?.title || "").trim();
+
+const isCertificationLikeSkill = (name, category = "", knownCertifications = []) => {
+  const skill = String(name || "").trim();
+  const bucket = String(category || "").trim();
+  const combined = `${bucket} ${skill}`;
+  if (!skill) return false;
+  if (
+    /\b(certifications?|certificates?|credentials?|licen[cs](?:e|ed|es|ing)?)\b/i.test(combined) ||
+    CERTIFICATION_ACRONYM_RE.test(skill)
+  ) {
+    return true;
+  }
+
+  // Reject course/training meta-items without deleting real capabilities such as
+  // "Employee Training" or "Training Facilitation".
+  if (
+    /\b(?:completed|completion|industry|technical|professional|mandatory)\s+(?:courses?|training)\b/i.test(
+      skill
+    ) ||
+    /\btraining courses?\b/i.test(skill) ||
+    /\bcoursework\b/i.test(skill)
+  ) {
+    return true;
+  }
+
+  const identity = skillIdentity(skill);
+  return knownCertifications.some((item) => {
+    const known = skillIdentity(credentialName(item));
+    const knownCore = known
+      .replace(/\b(certification|certificate|credential|licence|license)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return Boolean(
+      known &&
+        (identity === known ||
+          identity === knownCore ||
+          (knownCore.length >= 4 && identity.includes(knownCore)))
+    );
+  });
+};
+
+const categoryWords = (value) =>
+  String(value || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+const isSpecificSkillCategory = (value) => {
+  const category = String(value || "").trim();
+  const words = categoryWords(category);
+  return Boolean(
+    category &&
+      words.length <= 3 &&
+      !GENERIC_SKILL_CATEGORIES.has(category.toLowerCase()) &&
+      !/\b(certifications?|credentials?|licen[cs]es?)\b/i.test(category)
+  );
+};
+
+const titleCaseWords = (value) =>
+  String(value || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+
+const meaningfulSkillTokens = (value) =>
+  (String(value || "").toLowerCase().match(/[a-z0-9+#.]{3,}/g) || []).filter(
+    (token) =>
+      ![
+        "and",
+        "the",
+        "with",
+        "skills",
+        "skill",
+        "professional",
+        "technical",
+        "using",
+        "management",
+      ].includes(token)
+  );
+
+const fallbackSkillCategory = (skillName, targetRole = "") => {
+  const role = String(targetRole || "").trim();
+  if (role && role.length <= 70) {
+    const roleTokens = meaningfulSkillTokens(role).slice(0, 2);
+    if (roleTokens.length) return `${titleCaseWords(roleTokens.join(" "))} Practice`;
+  }
+  const skillTokens = meaningfulSkillTokens(skillName).slice(0, 2);
+  return skillTokens.length ? `${titleCaseWords(skillTokens.join(" "))} Practice` : "Tools & Methods";
+};
+
+const safeSkillCategory = (category, skillName, targetRole = "") => {
+  const trimmed = String(category || "").trim();
+  return isSpecificSkillCategory(trimmed)
+    ? trimmed
+    : fallbackSkillCategory(skillName, targetRole);
+};
+
+const groupAffinity = (item, group) => {
+  const sourceTokens = new Set(
+    meaningfulSkillTokens(`${item.category || ""} ${item.name || ""}`)
+  );
+  const targetTokens = new Set(
+    meaningfulSkillTokens(`${group.category} ${group.items.map((row) => row.name).join(" ")}`)
+  );
+  let score = 0;
+  sourceTokens.forEach((token) => {
+    if (targetTokens.has(token)) score += 3;
+    else if ([...targetTokens].some((candidate) => candidate.includes(token) || token.includes(candidate)))
+      score += 1;
+  });
+  return score;
+};
+
+/**
+ * Server-side category contract. The organizer may suggest categories, but this function
+ * owns the invariants: credentials are removed, names are deduplicated, forbidden labels
+ * cannot survive, no category is left with one skill, and no more than six groups remain.
+ */
+const reconcileSkillGroups = (
+  suggestions,
+  assignments = [],
+  { targetRole = "", knownCertifications = [] } = {}
+) => {
+  const assignmentMap = new Map(
+    (Array.isArray(assignments) ? assignments : []).map((item) => [
+      String(item?.id || ""),
+      String(item?.category || "").trim(),
+    ])
+  );
+  const seen = new Set();
+  const flat = [];
+  let sequence = 0;
+
+  (Array.isArray(suggestions) ? suggestions : []).forEach((group) => {
+    const details = new Map(
+      (Array.isArray(group?.skillsDetailed) ? group.skillsDetailed : []).map((detail) => [
+        skillIdentity(detail?.name),
+        detail,
+      ])
+    );
+    (Array.isArray(group?.skills) ? group.skills : []).forEach((rawName) => {
+      const name = String(rawName || "").trim();
+      const identity = skillIdentity(name);
+      const id = `skill_${sequence++}`;
+      if (
+        !identity ||
+        seen.has(identity) ||
+        isCertificationLikeSkill(name, group?.category, knownCertifications)
+      )
+        return;
+      const detail = details.get(identity);
+      if (!detail) return;
+      seen.add(identity);
+      const proposed = assignmentMap.get(id);
+      const original = String(group?.category || "").trim();
+      const category = isSpecificSkillCategory(proposed)
+        ? proposed
+        : isSpecificSkillCategory(original)
+          ? original
+          : fallbackSkillCategory(name, targetRole);
+      flat.push({ id, name, category, detail });
+    });
+  });
+
+  const groups = [];
+  flat.forEach((item) => {
+    let group = groups.find((candidate) => candidate.category.toLowerCase() === item.category.toLowerCase());
+    if (!group) {
+      group = { category: item.category, items: [] };
+      groups.push(group);
+    }
+    group.items.push(item);
+  });
+
+  const mergeSmallestGroup = (onlySingletons = false) => {
+    const candidates = groups.filter((group) => !onlySingletons || group.items.length === 1);
+    if (groups.length <= 1 || !candidates.length) return false;
+    const source = candidates.sort((a, b) => a.items.length - b.items.length)[0];
+    const targets = groups.filter((group) => group !== source);
+    const target = targets.sort((a, b) => {
+      const affinity = groupAffinity(source.items[0], b) - groupAffinity(source.items[0], a);
+      return affinity || b.items.length - a.items.length;
+    })[0];
+    target.items.push(...source.items);
+    groups.splice(groups.indexOf(source), 1);
+    return true;
+  };
+
+  while (groups.some((group) => group.items.length === 1) && groups.length > 1) {
+    if (!mergeSmallestGroup(true)) break;
+  }
+  while (groups.length > 6) mergeSmallestGroup(false);
+
+  return groups.map((group) => ({
+    category: group.category,
+    skills: group.items.map((item) => item.name),
+    skillsDetailed: group.items.map((item) => item.detail),
+  }));
+};
+
+const organizeSkillCategoryAssignments = async (
+  suggestions,
+  { modelId, targetRole = "", meta = {} } = {}
+) => {
+  const skills = [];
+  let sequence = 0;
+  (Array.isArray(suggestions) ? suggestions : []).forEach((group) =>
+    (Array.isArray(group?.skills) ? group.skills : []).forEach((name) => {
+      skills.push({ id: `skill_${sequence++}`, name, currentCategory: group?.category || "" });
+    })
+  );
+  if (!skills.length) return [];
+
+  const system = `You organize an already verified CV skill list. Change categories only.
+Return JSON: { "assignments": [{ "id": string, "category": string }] }.
+Rules:
+- Return every supplied id exactly once. Never rename, add, or remove a skill.
+- Infer 3-6 short, profession-specific categories from the skills and target role.
+- Every category must contain at least two skills; merge singletons into the closest category.
+- Never use Technical Skills, Professional Skills, Hard Skills, General, Other, Miscellaneous, Additional Skills, or Certifications.
+- Certifications, licences, credentials, courses, and training records do not belong in Skills.`;
+  const user = `TARGET ROLE: ${String(targetRole || "Professional role").slice(0, 500)}\nSKILLS: ${JSON.stringify(skills)}`;
+
+  try {
+    const result = modelId
+      ? await callModel(modelId, {
+          system,
+          user,
+          json: true,
+          temperature: 0.2,
+          maxTokens: 2048,
+          disableThinking: true,
+          meta: { ...meta, operation: "organizeSkillCategories" },
+        })
+      : await callJSON({
+          system,
+          user,
+          temperature: 0.2,
+          maxTokens: 2048,
+          meta: { ...meta, operation: "organizeSkillCategories" },
+        });
+    return Array.isArray(result?.assignments) ? result.assignments : [];
+  } catch (error) {
+    // Generation already produced evidence-backed skills. Organizer failure is recoverable:
+    // reconcileSkillGroups still enforces the category contract using the original hints.
+    console.error("AI Skill Category Organization Failed (using guarded fallback):", error.message);
+    return [];
+  }
+};
+
 const generateSkillsFromContext = async (
   education,
   experience,
@@ -4517,6 +4829,19 @@ const generateSkillsFromContext = async (
     Responsibilities: ${(roleBrief.responsibilities || []).join("; ") || "none"}`
     : "NO TARGET ROLE BRIEF: rank skills by how central and recent the supporting evidence is.";
 
+  // Keep the old dedicated organizer's taxonomy contract in the generation path. The
+  // model may choose profession-specific labels, but it must not create singleton or
+  // generic buckets. Credentials live in DraftCV.certifications, never in skills[].
+  const taxonomyRules = `
+    CATEGORY RULES (strict):
+    - Infer categories from the skills and target profession; do not use a fixed universal list.
+    - Use 3-6 SHORT, domain-specific category names (2-3 words).
+    - Every category must contain at least 2 skills. Merge a singleton into its closest related category.
+    - Keep closely related capabilities together. For example, Electrical Troubleshooting belongs with Electrical Engineering or Maintenance & Troubleshooting, never in a one-item generic bucket.
+    - NEVER use generic categories: Technical Skills, Professional Skills, Hard Skills, General, Other, Miscellaneous, Additional Skills.
+    - CERTIFICATIONS ARE NOT SKILLS. Never output a certification, licence, certificate, credential, course, or training item, and never create a Certifications category. ApplyRight stores those in a separate Certifications section.
+    - Do not output meta-labels such as "technical certifications" or "industry certifications" as skills.`;
+
   const prompt = isPaid
     ? `
     You are an expert Career Coach and Technical Recruiter.
@@ -4538,13 +4863,15 @@ const generateSkillsFromContext = async (
     ${roleBriefText}
 
     INSTRUCTIONS:
-    1. Extract HARD, verifiable skills ONLY: tools, technologies, programming languages, frameworks, methods/practices, domain knowledge, certifications. Do NOT include soft skills (leadership, communication, teamwork, problem-solving, adaptability, etc.) — those belong in work-history bullets, not the skills list.
-    2. Group them into 4-6 specific categories (e.g., "Programming Languages", "Project Management", "Industry Knowledge"). Avoid "General" / "Other".
+    1. Extract HARD, verifiable skills ONLY: tools, technologies, programming languages, frameworks, methods/practices, and domain knowledge. Do NOT include soft skills (leadership, communication, teamwork, problem-solving, adaptability, etc.) — those belong in work-history bullets, not the skills list.
+    2. Categorize them using the strict taxonomy below.
+    ${taxonomyRules}
     3. Generate 8-15 strongest supported skills total. Return fewer when the profile supports fewer; NEVER pad the list to hit a quota. The job description changes ranking only — it is never evidence that the candidate has a skill.
     4. For EACH skill, also produce a "skillsDetailed" entry with:
        - "name": same skill name
        - "evidence": 1-3 sources from the profile. Each: { "type": "experience"|"education"|"project", "refIndex": 0-based bracket number, "snippet": short paraphrase of THAT specific entry showing the skill }
        - "talkingPoint": a STAR-shaped 1-2 sentence interview-rehearsal answer about the skill, using SPECIFIC details from the cited evidence. The user should be able to read this aloud in an interview.
+    5. Separately, return up to 5 "confirmationCandidates": hard skills that are NOT explicitly proven, but a specific profile activity makes reasonable to ask about. Each needs a profile evidence reference and a neutral question. Do not repeat a proven skill. Never return a certification, licence, credential, course, or training item here. If nothing is genuinely plausible, return [].
 
     CRITICAL: Only cite evidence ACTUALLY present in the profile. Do NOT invent companies, project names, tools, certifications, or numbers. If a skill has no clear source in the profile, omit it entirely. A JD requirement with no profile evidence must stay absent.
 
@@ -4564,6 +4891,15 @@ const generateSkillsFromContext = async (
                 }
               ]
             }
+        ],
+        "confirmationCandidates": [
+          {
+            "name": "Possible Skill",
+            "category": "Tools & Software",
+            "reason": "Why the cited activity makes this reasonable to confirm",
+            "question": "Did you use this for that activity? It is fine if not.",
+            "evidence": [{ "type": "experience", "refIndex": 0, "snippet": "The related activity" }]
+          }
         ]
     }
     `
@@ -4587,11 +4923,13 @@ const generateSkillsFromContext = async (
     ${roleBriefText}
 
     INSTRUCTIONS:
-    1. Extract HARD, verifiable skills ONLY: tools, technologies, programming languages, frameworks, methods/practices, domain knowledge, certifications. Do NOT include soft skills (leadership, communication, teamwork, problem-solving, adaptability, etc.) — those belong in work-history bullets, not the skills list.
-    2. Group them into 4-6 specific categories (e.g., "Programming Languages", "Project Management", "Industry Knowledge"). Avoid "General" / "Other".
+    1. Extract HARD, verifiable skills ONLY: tools, technologies, programming languages, frameworks, methods/practices, and domain knowledge. Do NOT include soft skills (leadership, communication, teamwork, problem-solving, adaptability, etc.) — those belong in work-history bullets, not the skills list.
+    2. Categorize them using the strict taxonomy below.
+    ${taxonomyRules}
     3. Generate 8-15 strongest supported skills total. Return fewer when the profile supports fewer; NEVER pad the list to hit a quota. The job description changes ranking only — it is never evidence that the candidate has a skill.
     4. For EACH skill, produce a matching "skillsDetailed" entry with "name" and 1-3 evidence sources: { "type": "experience"|"education"|"project", "refIndex": the bracket number, "snippet": a short paraphrase of that exact entry }. Do not generate talking points.
     5. If a skill has no clear source in the profile, omit it. A JD requirement with no profile evidence must stay absent.
+    6. Separately, return up to 5 "confirmationCandidates": hard skills that are NOT explicitly proven, but a specific profile activity makes reasonable to ask about. Each needs a profile evidence reference and a neutral question. Do not repeat a proven skill. Never return a certification, licence, credential, course, or training item here. If nothing is genuinely plausible, return [].
 
     OUTPUT STRICT JSON:
     {
@@ -4608,6 +4946,15 @@ const generateSkillsFromContext = async (
                 }
               ]
             }
+        ],
+        "confirmationCandidates": [
+          {
+            "name": "Possible Skill",
+            "category": "Tools & Software",
+            "reason": "Why the cited activity makes this reasonable to confirm",
+            "question": "Did you use this for that activity? It is fine if not.",
+            "evidence": [{ "type": "experience", "refIndex": 0, "snippet": "The related activity" }]
+          }
         ]
     }
     `;
@@ -4616,10 +4963,15 @@ const generateSkillsFromContext = async (
     let resultText = "";
     if (options.modelId) {
       // Selected model → multi-provider dispatcher. Raw text (json:false) so the tolerant
-      // fence/brace parse below still runs identically.
+      // fence/brace parse below still runs identically. Sonnet 5's adaptive thinking
+      // shares max_tokens with the visible response; skills JSON is substantially larger
+      // than bullet JSON (groups + evidence + paid talking points), so keep thinking off
+      // and give the paid shape additional output headroom.
       resultText = await callModel(options.modelId, {
         user: prompt,
         json: false,
+        disableThinking: true,
+        maxTokens: isPaid ? 8192 : 4096,
         meta: { ...(options.meta || {}), operation: options.meta?.operation || "generateSkills" },
       });
     } else if (activeProvider === "openai") {
@@ -4645,6 +4997,12 @@ const generateSkillsFromContext = async (
     }
 
     const data = JSON.parse(jsonStr);
+    const knownCertifications = [
+      ...(Array.isArray(options.certifications) ? options.certifications : []),
+      ...(Array.isArray(roleBrief?.requirements)
+        ? roleBrief.requirements.filter((item) => item?.type === "certification")
+        : []),
+    ];
     const sourceCounts = {
       experience: experience.length,
       education: education.length,
@@ -4652,7 +5010,7 @@ const generateSkillsFromContext = async (
     };
     // Evidence is a server-enforced requirement on every plan. The paid tier may add a
     // talking point, but it does not get a different truth standard.
-    return (Array.isArray(data.suggestions) ? data.suggestions : [])
+    const suggestions = (Array.isArray(data.suggestions) ? data.suggestions : [])
       .map((group) => {
         const details = (Array.isArray(group?.skillsDetailed) ? group.skillsDetailed : [])
           .map((detail) => {
@@ -4676,10 +5034,15 @@ const generateSkillsFromContext = async (
         const detailedNames = new Set(details.map((detail) => detail.name.toLowerCase()));
         const skills = (Array.isArray(group?.skills) ? group.skills : [])
           .map((skill) => String(skill || "").trim())
-          .filter((skill) => skill && detailedNames.has(skill.toLowerCase()));
+          .filter(
+            (skill) =>
+              skill &&
+              detailedNames.has(skill.toLowerCase()) &&
+              !isCertificationLikeSkill(skill, group?.category, knownCertifications)
+          );
         if (!skills.length) return null;
         return {
-          category: String(group?.category || "Professional Skills").trim(),
+          category: String(group?.category || "").trim(),
           skills,
           skillsDetailed: details.filter((detail) =>
             skills.some((skill) => skill.toLowerCase() === detail.name.toLowerCase())
@@ -4687,9 +5050,50 @@ const generateSkillsFromContext = async (
         };
       })
       .filter(Boolean);
+    const categoryAssignments = await organizeSkillCategoryAssignments(suggestions, {
+      modelId: options.modelId,
+      targetRole: roleBrief?.role || targetJob,
+      meta: options.meta,
+    });
+    const organizedSuggestions = reconcileSkillGroups(suggestions, categoryAssignments, {
+      targetRole: roleBrief?.role || targetJob,
+      knownCertifications,
+    });
+    const provenNames = new Set(
+      organizedSuggestions.flatMap((group) => group.skills || []).map((name) => skillIdentity(name))
+    );
+    const confirmationCandidates = (
+      Array.isArray(data.confirmationCandidates) ? data.confirmationCandidates : []
+    )
+      .map((candidate) => {
+        const name = String(candidate?.name || "").trim();
+        if (isCertificationLikeSkill(name, candidate?.category, knownCertifications)) return null;
+        const evidence = (Array.isArray(candidate?.evidence) ? candidate.evidence : []).filter(
+          (item) =>
+            Object.prototype.hasOwnProperty.call(sourceCounts, item?.type) &&
+            Number.isInteger(item?.refIndex) &&
+            item.refIndex >= 0 &&
+            item.refIndex < sourceCounts[item.type]
+        );
+        if (!name || provenNames.has(skillIdentity(name)) || !evidence.length) return null;
+        return {
+          name,
+          category: safeSkillCategory(candidate?.category, name, roleBrief?.role || targetJob),
+          reason: String(candidate?.reason || "")
+            .trim()
+            .slice(0, 300),
+          question: String(candidate?.question || "")
+            .trim()
+            .slice(0, 300),
+          evidence: evidence.slice(0, 2),
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 5);
+    return { suggestions: organizedSuggestions, confirmationCandidates };
   } catch (error) {
     console.error("AI Skills Generation Failed:", error);
-    return [];
+    return { suggestions: [], confirmationCandidates: [] };
   }
 };
 
@@ -4855,6 +5259,10 @@ module.exports = {
   draftJobDescription,
   suggestProjects,
   generateSkillsFromContext,
+  // Pure category guard exported for regression tests. AI suggests the taxonomy;
+  // this function is the server-owned contract that makes the result safe to persist.
+  reconcileSkillGroups,
+  isCertificationLikeSkill,
 
   generateStructuredSkills,
   categorizeSkillsList,

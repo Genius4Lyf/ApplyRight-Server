@@ -246,7 +246,7 @@ describe("POST /api/studio/project-ideas", () => {
 
     const res = await post();
 
-    expect(res.statusCode).toBe(401);
+    expect(res.statusCode).toBe(403);
     expect(aiService.suggestProjects).not.toHaveBeenCalled();
     expect(Transaction.create).not.toHaveBeenCalled();
   });

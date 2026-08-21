@@ -257,7 +257,7 @@ const tailorStart = async (req, res) => {
       return res.status(404).json({ message: "Draft not found" });
     }
     if (source.userId.toString() !== req.user.id) {
-      return res.status(401).json({ message: "Not authorized" });
+      return res.status(403).json({ message: "Not authorized to use this CV" });
     }
 
     // CV agents must hold an active plan to CREATE CVs — same gate as
@@ -356,7 +356,7 @@ const loadOwnedDraft = async (req, res, draftId) => {
     return null;
   }
   if (draft.userId.toString() !== req.user.id) {
-    res.status(401).json({ message: "Not authorized" });
+    res.status(403).json({ message: "Not authorized to use this CV" });
     return null;
   }
   return draft;
