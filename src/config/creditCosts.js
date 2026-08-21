@@ -36,7 +36,7 @@ const DEFAULT_CREDIT_COSTS = Object.freeze({
   // Coach: AI-generate ONE career-stage-aware, JD-tailored professional summary.
   // EACH re-roll charges again (paid tiers draw from allowance). Admin-overridable.
   GENERATE_SUMMARY: 3,
-  // Aria drafts a typical job description from just a job title (Aria Studio job capture).
+  // Aria generates a typical role profile from just a job title (Aria Studio job capture).
   // Server-pinned to the Standard (light) model, so this light price is the only price it
   // charges: free-tier pays it; paid plans draw their light allowance (free).
   DRAFT_JD: 1,

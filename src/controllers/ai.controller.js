@@ -416,15 +416,23 @@ const generateSummaries = async (req, res) => {
 // with the target job's keywords (synonym + fuzzy match via the normalizer — no
 // AI call, no cost). Returns the matching generated skill NAMES. Empty when there
 // is no job description to rank against, which drives the "add a target job" UI.
-const scoreBestForRole = (skillNames, { description = "", aiKeywords = [] } = {}) => {
+const scoreBestForRole = (
+  skillNames,
+  { description = "", aiKeywords = [], roleBrief = null } = {}
+) => {
   if (!Array.isArray(skillNames) || skillNames.length === 0) return [];
 
   const { compareSkills, normalizeSkill } = require("../services/skillNormalizer.service");
 
   // Prefer the richer cached AI keywords; else derive deterministically from the
   // JD text (same extraction the free keyword baseline uses).
-  let jdKeywords =
-    Array.isArray(aiKeywords) && aiKeywords.length
+  const briefKeywords = [
+    ...(Array.isArray(roleBrief?.mustHaves) ? roleBrief.mustHaves : []),
+    ...(Array.isArray(roleBrief?.niceToHaves) ? roleBrief.niceToHaves : []),
+  ];
+  let jdKeywords = briefKeywords.length
+    ? briefKeywords
+    : Array.isArray(aiKeywords) && aiKeywords.length
       ? aiKeywords
       : description
         ? require("../services/extraction.service")
@@ -485,6 +493,7 @@ const generateSkills = async (req, res) => {
           experience: experience || [],
           projects: projects || [],
           targetJob: (targetJob || "").trim().toLowerCase().replace(/\s+/g, " "),
+          briefHash: draft?.targetJob?.briefHash || "",
         })
       )
       .digest("hex");
@@ -525,6 +534,9 @@ const generateSkills = async (req, res) => {
       // DOCUMENT action — skills are CV content, so they follow the CV's language.
       {
         modelId,
+        brief: draft?.targetJob?.brief?.toObject
+          ? draft.targetJob.brief.toObject()
+          : draft?.targetJob?.brief || null,
         meta: {
           userId: req.user.id,
           operation: "generateSkills",
@@ -532,6 +544,12 @@ const generateSkills = async (req, res) => {
         },
       }
     );
+    if (!Array.isArray(suggestions) || suggestions.length === 0) {
+      return res.status(502).json({
+        message:
+          "Aria couldn't find enough supported skills yet. Add more detail to your experience or projects and try again.",
+      });
+    }
 
     // Deterministic best-for-role set (prefers cached richer JD keywords).
     const allNames = [];
@@ -539,6 +557,7 @@ const generateSkills = async (req, res) => {
     const bestForRole = scoreBestForRole(allNames, {
       description: targetJob || "",
       aiKeywords: draft?.targetJob?.aiKeywords || [],
+      roleBrief: draft?.targetJob?.brief || null,
     });
 
     // Charge BEFORE caching, so a failed charge never leaves a cached result the user can

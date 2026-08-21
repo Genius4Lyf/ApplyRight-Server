@@ -116,7 +116,7 @@ const draftJd = async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     // Draft JD ALWAYS runs on the Standard (light) model, whatever the user's gen-model
-    // pick is. A generic posting doesn't need a flagship model, and pinning here (a)
+    // pick is. A generic role profile doesn't need a flagship model, and pinning here (a)
     // sidesteps the flagship (Claude) thinking-token truncation that returned 502s and
     // (b) keeps the price predictable at the light DRAFT_JD rate. The client's model
     // pick is intentionally ignored for this action.
@@ -157,7 +157,7 @@ const draftJd = async (req, res) => {
       console.error("Studio draft-jd AI error:", genErr.message);
       return res
         .status(502)
-        .json({ message: "Couldn't draft a description for that job title. Please try again." });
+          .json({ message: "Couldn't generate a role profile for that job title. Please try again." });
     }
 
     const jobDescription = (result || "").trim();
@@ -166,14 +166,14 @@ const draftJd = async (req, res) => {
       // that isn't a plausible job title — either way, don't charge for it.
       return res
         .status(502)
-        .json({ message: "Aria couldn't draft a description for that job title." });
+        .json({ message: "Aria couldn't generate a role profile for that job title." });
     }
 
     // Charge only on confirmed success — tier-aware (flagship always meters; light
     // free on an active paid plan).
     const charge = await modelSelection.chargeForModel(user, cost, tier, {
       type: TRANSACTION_TYPES.DRAFT_JD,
-      description: "Aria job description draft",
+      description: "Aria typical role profile",
     });
     if (charge.insufficient) {
       return res.status(402).json({
@@ -196,7 +196,7 @@ const draftJd = async (req, res) => {
         .json({ message: "AI is not configured right now. Please try again later." });
     }
     console.error("Studio Draft JD Error:", error);
-    return res.status(500).json({ message: "Failed to draft job description" });
+    return res.status(500).json({ message: "Failed to generate role profile" });
   }
 };
 

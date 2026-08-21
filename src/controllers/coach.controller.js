@@ -54,6 +54,66 @@ const buildBriefForJd = async (jobDescription, title, meta) => {
   return { brief, hash: briefHashFor(jd) };
 };
 
+const requirementIdFor = (type, name) =>
+  `req_${crypto
+    .createHash("sha1")
+    .update(
+      `${type}|${String(name || "")
+        .trim()
+        .toLowerCase()}`
+    )
+    .digest("hex")
+    .slice(0, 12)}`;
+
+// Add a safe typed checklist to briefs created before requirements[] existed. This is
+// deliberately deterministic: old must-have chips become generic skills and old
+// responsibility strings remain responsibilities. A future JD edit/re-read upgrades
+// them with richer aliases and proof signals from the parser.
+const typedRequirementsForLegacyBrief = (brief) => {
+  const plain = brief?.toObject ? brief.toObject() : brief || {};
+  if (Array.isArray(plain.requirements) && plain.requirements.length) return plain.requirements;
+  const skillRows = [
+    ...(Array.isArray(plain.mustHaves)
+      ? plain.mustHaves.map((item) => ({ item, priority: "must_have" }))
+      : []),
+    ...(Array.isArray(plain.niceToHaves)
+      ? plain.niceToHaves.map((item) => ({ item, priority: "nice_to_have" }))
+      : []),
+  ];
+  const skills = skillRows
+    .map(({ item, priority }) => {
+      const name = String(typeof item === "string" ? item : item?.name || "").trim();
+      if (!name) return null;
+      return {
+        id: requirementIdFor("skill", name),
+        name,
+        type: "skill",
+        priority,
+        explicit: true,
+        aliases: [],
+        proofSignals: [],
+        sourceText: name,
+        plausibleExperienceTypes: [],
+      };
+    })
+    .filter(Boolean);
+  const responsibilities = (Array.isArray(plain.responsibilities) ? plain.responsibilities : [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .map((name) => ({
+      id: requirementIdFor("responsibility", name),
+      name,
+      type: "responsibility",
+      priority: "must_have",
+      explicit: true,
+      aliases: [],
+      proofSignals: [],
+      sourceText: name,
+      plausibleExperienceTypes: [],
+    }));
+  return [...skills, ...responsibilities];
+};
+
 // Resolve (and cache) Aria's Role Brief for a draft. The brief is keyed by a hash
 // of the current JD text: a cache hit (brief present AND briefHash matches the
 // current JD) returns the stored brief untouched — crucially preserving a
@@ -66,8 +126,13 @@ const resolveDraftBrief = async (draft, meta) => {
 
   const cached = draft.targetJob?.brief;
   if (cached && draft.targetJob?.briefHash === hash) {
-    // JD unchanged — return the cached brief as-is (keeps a confirmed companyType).
-    return cached.toObject ? cached.toObject() : cached;
+    const plain = cached.toObject ? cached.toObject() : cached;
+    // JD unchanged — preserve the user's confirmed companyType. Older briefs get an
+    // additive local checklist migration; no AI call and no charge.
+    if (!Array.isArray(plain.requirements) || !plain.requirements.length) {
+      return { ...plain, requirements: typedRequirementsForLegacyBrief(plain) };
+    }
+    return plain;
   }
 
   const { brief } = await buildBriefForJd(jd, draft.targetJob?.title, meta);
@@ -99,6 +164,231 @@ const openMustHavesFromDraft = (draft, brief, cap = 6) => {
     .sort((a, b) => (b.importance === "must_have" ? 1 : 0) - (a.importance === "must_have" ? 1 : 0))
     .slice(0, cap)
     .map((r) => ({ name: r.name, importance: r.importance }));
+};
+
+// Narrow the CV-wide open requirements to the few that are most plausible for the
+// entry Aria is interviewing NOW. The model still makes the final plausibility call;
+// this deterministic pre-filter stops a long JD from turning every role into the same
+// keyword interrogation.
+const targetRequirementsForEntry = (draft, brief, entry, turns = [], cap = 3) => {
+  const typed = Array.isArray(brief?.requirements) ? brief.requirements : [];
+  const openSkills = openMustHavesFromDraft(draft, brief, Math.max(cap * 3, 6));
+  // Responsibilities are not skill chips, but they are valuable interview leads. They
+  // join the candidate pool as typed requirements and can rank only when this role's
+  // title/answers make them plausible.
+  const responsibilityLeads = typed
+    .filter((item) => item?.type === "responsibility" && item?.name)
+    .map((item) => ({ name: item.name, importance: item.priority || "must_have" }));
+  const open = [...openSkills, ...responsibilityLeads].filter(
+    (item, index, items) =>
+      items.findIndex(
+        (candidate) =>
+          String(candidate.name || "").toLowerCase() === String(item.name || "").toLowerCase()
+      ) === index
+  );
+  if (!open.length) return [];
+
+  const byName = new Map(typed.map((r) => [String(r?.name || "").toLowerCase(), r]));
+  const context = [
+    entry?.title,
+    entry?.company,
+    entry?.entryType,
+    ...(turns || []).filter((m) => m?.who === "user").map((m) => m.text),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const tokens = new Set(context.match(/[a-z0-9+#.]{3,}/g) || []);
+  const overlap = (value) =>
+    String(value || "")
+      .toLowerCase()
+      .match(/[a-z0-9+#.]{3,}/g)
+      ?.filter((token) => tokens.has(token)).length || 0;
+
+  return open
+    .map((item, index) => {
+      const meta = byName.get(String(item.name || "").toLowerCase()) || {};
+      const signals = [item.name, ...(meta.aliases || []), ...(meta.proofSignals || [])];
+      const relevance = signals.reduce((score, signal) => score + overlap(signal), 0);
+      return {
+        ...item,
+        ...(meta.id ? { id: meta.id } : {}),
+        ...(meta.type ? { type: meta.type } : {}),
+        aliases: meta.aliases || [],
+        proofSignals: meta.proofSignals || [],
+        relevance,
+        originalIndex: index,
+      };
+    })
+    .sort((a, b) => b.relevance - a.relevance || a.originalIndex - b.originalIndex)
+    .slice(0, cap)
+    .map((item) => {
+      const result = { ...item };
+      delete result.originalIndex;
+      return result;
+    });
+};
+
+const normalizedProbeText = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9+#.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const probeTerms = (requirement) =>
+  [requirement?.name, ...(requirement?.aliases || [])]
+    .map(normalizedProbeText)
+    .filter((term) => term.length >= 3);
+
+// Make JD guidance visible without turning the interview into a checklist. The first
+// user answer stays activity-led. From answer two onward, one relevant, not-yet-asked
+// requirement can be made explicit. If the previous Aria turn was already a JD probe,
+// the next response returns to the user's work before another requirement is considered.
+const selectRequiredRequirementProbe = (requirements, turns = [], buildTurns = 0) => {
+  if (Number(buildTurns) < 2 || !Array.isArray(requirements) || !requirements.length) return null;
+
+  const latestUser = [...turns].reverse().find((turn) => turn?.who === "user" && turn.text);
+  if (/\?\s*$/.test(String(latestUser?.text || "").trim())) return null;
+
+  const ariaTurns = (turns || [])
+    .filter((turn) => turn?.who === "aria" && turn.text)
+    .map((turn) => normalizedProbeText(turn.text));
+  const lastAria = ariaTurns.at(-1) || "";
+  const wasNamedIn = (requirement, text) =>
+    !!text && probeTerms(requirement).some((term) => text.includes(term));
+
+  // Alternate between explicit JD checks and normal evidence-building follow-ups.
+  if (requirements.some((requirement) => wasNamedIn(requirement, lastAria))) return null;
+
+  return (
+    requirements.find(
+      (requirement) =>
+        Number(requirement?.relevance || 0) > 0 &&
+        !ariaTurns.some((turnText) => wasNamedIn(requirement, turnText))
+    ) || null
+  );
+};
+
+const cleanEvidenceList = (value, cap = 8) =>
+  (Array.isArray(value) ? value : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .slice(0, cap);
+
+const normalizedEvidenceText = (value) =>
+  String(value || "")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+// Evidence is accepted only when the model supplies a quote copied from a real USER
+// turn. The model may summarize the claim, but it cannot create an unattached fact and
+// have that fact reach the bullet writer.
+const verifiedInterviewEvidence = (rawEvidence, turns, requirements = []) => {
+  const userTurns = (turns || [])
+    .filter((m) => m?.who === "user" && m.text)
+    .map((m, index) => ({
+      index,
+      text: String(m.text).trim(),
+      normalized: normalizedEvidenceText(m.text),
+    }));
+  const requirementsById = new Map(
+    (requirements || []).map((requirement) => [requirement?.id, requirement]).filter(([id]) => id)
+  );
+  const seen = new Set();
+
+  return (Array.isArray(rawEvidence) ? rawEvidence : [])
+    .map((item) => {
+      const quote = String(item?.sourceQuote || "").trim();
+      const normalizedQuote = normalizedEvidenceText(quote);
+      if (normalizedQuote.length < 3) return null;
+      const source = userTurns.find((turn) => turn.normalized.includes(normalizedQuote));
+      if (!source) return null;
+      const claim = String(item?.claim || quote)
+        .trim()
+        .slice(0, 500);
+      const key = `${normalizedQuote}|${normalizedEvidenceText(claim)}`;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      const id = `ev_${crypto.createHash("sha1").update(key).digest("hex").slice(0, 12)}`;
+      const skills = cleanEvidenceList(item?.skills, 10);
+      const tools = cleanEvidenceList(item?.tools, 10);
+      const evidenceText = normalizedEvidenceText([quote, claim, ...skills, ...tools].join(" "));
+      const supportedRequirementIds = cleanEvidenceList(item?.requirementIds, 8).filter(
+        (idValue) => {
+          const requirement = requirementsById.get(idValue);
+          if (!requirement) return false;
+          const exactTerms = [requirement.name, ...(requirement.aliases || [])]
+            .map(normalizedEvidenceText)
+            .filter(Boolean);
+          if (exactTerms.some((term) => evidenceText.includes(term))) return true;
+          // A tool/technology/certification must be NAMED. Activity signals can make
+          // Excel plausible to ask about, but preparing a report does not prove Excel.
+          if (["tool", "technology", "certification"].includes(requirement.type)) return false;
+          return (requirement.proofSignals || [])
+            .map(normalizedEvidenceText)
+            .filter(Boolean)
+            .some((signal) => evidenceText.includes(signal));
+        }
+      );
+      return {
+        id,
+        claim,
+        sourceQuote: quote,
+        sourceTurn: source.index,
+        skills,
+        tools,
+        outcomes: cleanEvidenceList(item?.outcomes, 6),
+        metrics: cleanEvidenceList(item?.metrics, 6),
+        requirementIds: supportedRequirementIds,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 12);
+};
+
+const verifiedRequirementChecks = (rawChecks, requirements, evidence) => {
+  const allowed = new Map((requirements || []).map((r) => [r?.id, r]).filter(([id]) => id));
+  const evidenceIds = new Set((evidence || []).map((item) => item.id));
+  const statuses = new Set([
+    "confirmed",
+    "demonstrated",
+    "related",
+    "not_demonstrated",
+    "not_applicable",
+  ]);
+  const seen = new Set();
+  return (Array.isArray(rawChecks) ? rawChecks : [])
+    .map((item) => {
+      const requirement = allowed.get(item?.requirementId);
+      const status = statuses.has(item?.status) ? item.status : null;
+      if (!requirement || !status || seen.has(requirement.id)) return null;
+      const indexedEvidence = Number.isInteger(item?.evidenceIndex)
+        ? evidence[item.evidenceIndex]?.id
+        : null;
+      const evidenceId =
+        indexedEvidence || (evidenceIds.has(item?.evidenceId) ? item.evidenceId : null);
+      const citedEvidence = (evidence || []).find((entry) => entry.id === evidenceId);
+      if (
+        ["confirmed", "demonstrated", "related"].includes(status) &&
+        (!evidenceId || !citedEvidence?.requirementIds?.includes(requirement.id))
+      )
+        return null;
+      seen.add(requirement.id);
+      return {
+        requirementId: requirement.id,
+        name: requirement.name,
+        status,
+        evidenceId,
+        note: String(item?.note || "")
+          .trim()
+          .slice(0, 240),
+      };
+    })
+    .filter(Boolean);
 };
 
 // @desc    Live conversational CV coach — a short, personal, gap-aware message
@@ -233,6 +523,11 @@ const generateBullets = async (req, res) => {
       );
     }
 
+    const evidenceMap = draft.coachEvidence?.toObject
+      ? draft.coachEvidence.toObject()
+      : draft.coachEvidence || {};
+    const evidenceLedger = evidenceMap[sortId] || null;
+
     // Resolve the model (session pick → user default → DEFAULT_MODEL), gate it, and price
     // the bullet by its TIER (flagship costs more per bullet). count × per-bullet cost.
     const {
@@ -251,7 +546,7 @@ const generateBullets = async (req, res) => {
     // is free — a charged generation re-grants exactly one; using it flips the flag.
     const descHash = crypto
       .createHash("sha256")
-      .update(`${section}|${sortId}|${desc}|${n}`)
+      .update(`${section}|${sortId}|${desc}|${n}|${JSON.stringify(evidenceLedger?.evidence || [])}`)
       .digest("hex");
     const entryState = draft.genState?.[sortId];
     const isFreeReroll =
@@ -268,12 +563,14 @@ const generateBullets = async (req, res) => {
       });
     }
 
-    let bullets;
+    let bulletDetails;
     try {
-      bullets = await aiService.generateBulletsFromDescription(desc, n, {
+      bulletDetails = await aiService.generateBulletsFromDescription(desc, n, {
         brief,
         role: entry.title || (section === "experience" ? "this role" : "this project"),
         section,
+        evidenceLedger,
+        returnDetails: true,
         // Route through the multi-provider dispatcher via the selected model id.
         meta: { ...meta, modelId },
       });
@@ -286,9 +583,32 @@ const generateBullets = async (req, res) => {
       console.error("Coach generateBullets AI error:", genErr.message);
       return res.status(502).json({ message: "Couldn't generate right now. Please try again." });
     }
-    if (!Array.isArray(bullets) || bullets.length === 0) {
+    // Once a verified ledger exists, an uncited output is rejected before charging.
+    // This makes traceability a backend invariant rather than a UI promise.
+    if (evidenceLedger?.evidence?.length) {
+      bulletDetails = (bulletDetails || []).filter((item) => item.evidenceIds?.length);
+    }
+    if (!Array.isArray(bulletDetails) || bulletDetails.length === 0) {
       return res.status(502).json({ message: "Couldn't generate right now. Please try again." });
     }
+    const evidenceById = new Map((evidenceLedger?.evidence || []).map((item) => [item.id, item]));
+    const requirementById = new Map((brief?.requirements || []).map((item) => [item.id, item]));
+    const safeDetails = bulletDetails.map((item) => ({
+      text: item.text,
+      evidence: (item.evidenceIds || [])
+        .map((id) => evidenceById.get(id))
+        .filter(Boolean)
+        .map((evidence) => ({
+          id: evidence.id,
+          claim: evidence.claim,
+          sourceQuote: evidence.sourceQuote,
+        })),
+      requirements: (item.requirementIds || [])
+        .map((id) => requirementById.get(id))
+        .filter(Boolean)
+        .map((requirement) => ({ id: requirement.id, name: requirement.name })),
+    }));
+    const bullets = safeDetails.map((item) => item.text);
 
     // Charge on success (skipped for a free re-roll). Rare race: a concurrent spend
     // between the pre-check and here can still come back insufficient.
@@ -318,6 +638,7 @@ const generateBullets = async (req, res) => {
 
     return res.json({
       bullets,
+      bulletDetails: safeDetails,
       wasFree: isFreeReroll,
       cost: isFreeReroll ? 0 : cost,
       remainingCredits: subscription.availableCredits(user),
@@ -828,14 +1149,18 @@ const chat = async (req, res) => {
       console.error("Coach chat resolveDraftBrief error (brief-less):", briefErr.message);
     }
 
-    // The role's still-uncovered must-haves, only on a focused build interview. Computed
-    // with the scorer's own matcher so Aria steers the same coverage the scan measures.
-    const openMustHaves = focus ? openMustHavesFromDraft(draft, brief) : [];
-
     const stepLabel = STEP_LABELS[currentStepId] || "your CV";
     // Studio can unpack several activities across ten user turns, so retain the opening
     // activity list for that whole interview. Other coach surfaces keep the smaller window.
     const window = turns.slice(-(studioInterview === true ? 22 : 12));
+    // The role's still-uncovered must-haves, narrowed to three candidates ranked by
+    // signals in THIS entry and THIS conversation. The model must still skip anything
+    // implausible; ranking is guidance, never evidence.
+    const openMustHaves = focus ? targetRequirementsForEntry(draft, brief, entry, window, 3) : [];
+    const requiredProbe =
+      focus && !mustFinish
+        ? selectRequiredRequirementProbe(openMustHaves, window, buildTurns)
+        : null;
 
     // NO focus → every turn is a general answer (metered like /coach/ask). Pre-check
     // the balance BEFORE spending an AI call the user can't pay for — but only when the
@@ -885,6 +1210,7 @@ const chat = async (req, res) => {
         cvSummary,
         brief,
         openMustHaves,
+        requiredProbe,
         mustFinish,
         meta,
       });
@@ -952,11 +1278,47 @@ const chat = async (req, res) => {
       await user.save();
     }
 
+    let evidenceLedger = null;
+    const readyToDraft = intent === "ready" || (!!focus && mustFinish);
+    if (focus && readyToDraft) {
+      let evidence = verifiedInterviewEvidence(result.evidence, window, openMustHaves);
+      // A provider that omits the structured evidence cannot strand a paid generation.
+      // Fall back to the user's exact turns: less polished, but fully truthful and still
+      // traceable. The bullet writer receives no unsupported model summary.
+      if (!evidence.length) {
+        const fallback = window
+          .filter((m) => m?.who === "user" && m.text)
+          .slice(-8)
+          .map((m) => ({ claim: m.text, sourceQuote: m.text }));
+        evidence = verifiedInterviewEvidence(fallback, window, openMustHaves);
+      }
+      const requirementChecks = verifiedRequirementChecks(
+        result.requirementChecks,
+        openMustHaves,
+        evidence
+      );
+      evidenceLedger = {
+        section: focus.section,
+        sortId: focus.sortId,
+        entryType: entry?.entryType || "",
+        evidence,
+        requirementChecks,
+        updatedAt: new Date().toISOString(),
+      };
+      const current = draft.coachEvidence?.toObject
+        ? draft.coachEvidence.toObject()
+        : draft.coachEvidence || {};
+      draft.coachEvidence = { ...current, [focus.sortId]: evidenceLedger };
+      if (typeof draft.markModified === "function") draft.markModified("coachEvidence");
+      if (typeof draft.save === "function") await draft.save();
+    }
+
     return res.json({
       reply: result.reply,
       intent,
-      readyToDraft: intent === "ready" || (!!focus && mustFinish),
+      readyToDraft,
       description: intent === "ready" ? result.description : "",
+      evidenceLedger,
       // Answer scaffolds — only while building (Aria just asked a follow-up).
       suggestions: intent === "building" ? result.suggestions || [] : [],
       exampleAnswer: intent === "building" ? result.exampleAnswer || "" : "",
@@ -1093,4 +1455,8 @@ module.exports = {
   // Pure + request-free, so the "covered while building" rule can be unit-tested
   // against the scorer's own matcher without going through the chat route.
   openMustHavesFromDraft,
+  targetRequirementsForEntry,
+  selectRequiredRequirementProbe,
+  verifiedInterviewEvidence,
+  verifiedRequirementChecks,
 };

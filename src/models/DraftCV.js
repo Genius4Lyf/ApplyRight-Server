@@ -39,7 +39,7 @@ const draftCVSchema = new mongoose.Schema(
     targetJob: {
       title: String,
       description: String, // Context for AI tailoring
-      // 'ai_drafted' when the JD came from Aria's "draft a typical JD" assist rather
+      // 'ai_drafted' when the JD came from Aria's "generate a typical role profile" assist rather
       // than a real posting the user pasted. The fit score, Role Brief and per-section
       // verdicts are all computed AGAINST the JD, so a synthetic one describes the
       // general role rather than a real posting — this lets the UI say so.
@@ -82,6 +82,25 @@ const draftCVSchema = new mongoose.Schema(
         mustHaves: [{ name: String, importance: String }],
         niceToHaves: [{ name: String, importance: String }],
         responsibilities: [String],
+        // Typed requirement checklist used by Aria's role-by-role interview. The
+        // legacy mustHaves/niceToHaves arrays remain the scoring contract; this richer
+        // list tells the coach WHAT a JD item is and what truthful evidence to look for.
+        requirements: [
+          {
+            id: String,
+            name: String,
+            // `type` is also Mongoose's schema-type keyword. Nesting the declaration
+            // makes this a real subdocument field instead of accidentally telling
+            // Mongoose that each requirement is itself a String.
+            type: { type: String }, // tool|technology|method|domain|certification|responsibility|skill
+            priority: String, // must_have|nice_to_have
+            explicit: { type: Boolean, default: true },
+            aliases: [String],
+            proofSignals: [String],
+            sourceText: String,
+            plausibleExperienceTypes: [String],
+          },
+        ],
       },
       briefHash: String,
     },
@@ -430,6 +449,10 @@ const draftCVSchema = new mongoose.Schema(
     // navigation, refresh, and other devices. { [stepId]: [{ who, text }] }. Session
     // flags (skip choice, always-allow, target ack) stay in the frontend coachState.
     coachChats: { type: mongoose.Schema.Types.Mixed, default: {} },
+    // Evidence gathered by the focused Aria interview, keyed by an entry's stable
+    // _sortId. Kept outside experience/projects so a later narrow list autosave cannot
+    // accidentally erase the server-verified interview record.
+    coachEvidence: { type: mongoose.Schema.Types.Mixed, default: {} },
     // The language this CV DOCUMENT is written in — distinct from the user's
     // interface language (User.interfaceLang). Aria can coach in English while
     // writing a French CV; that split is the point.

@@ -98,6 +98,17 @@ describe("coachChatTurn — role-targeting steering block", () => {
     expect(system).toMatch(/genuinely absent requirement is fine/i);
   });
 
+  it("makes a scheduled JD confirmation explicit and neutral", async () => {
+    await turn({ openMustHaves, requiredProbe: openMustHaves[1] });
+    const system = systemPrompt();
+
+    expect(system).toContain("VISIBLE JD CONFIRMATION — REQUIRED THIS TURN");
+    expect(system).toContain('selected requirement is "MS Excel"');
+    expect(system).toMatch(/appears in the job description/i);
+    expect(system).toMatch(/no is completely fine/i);
+    expect(system).toMatch(/do not claim they have it/i);
+  });
+
   it("is absent when nothing is open (and when the param is omitted entirely)", async () => {
     await turn({ openMustHaves: [] });
     expect(systemPrompt()).not.toContain(TARGETING);
