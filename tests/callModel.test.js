@@ -50,6 +50,19 @@ beforeEach(() => {
 });
 
 describe("callModel — routes to the correct provider client", () => {
+  it("keeps cover-letter fact-check failures on the documented array contract", async () => {
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    mockOpenAICreate.mockRejectedValueOnce(new Error("provider unavailable"));
+
+    await expect(
+      ai.factCheckCoverLetter(
+        "A sufficiently detailed resume body for the candidate.",
+        "This cover letter is intentionally long enough to trigger the advisory fact-check call."
+      )
+    ).resolves.toEqual([]);
+    errorSpy.mockRestore();
+  });
+
   it("an OpenAI model → openai chat.completions with its apiModel", async () => {
     const out = await ai.callModel("gpt-4o", { user: "hi" });
     expect(out).toBe("openai-out");
@@ -93,7 +106,6 @@ describe("callModel — routes to the correct provider client", () => {
       ],
       usage: {},
     });
-
     await expect(
       ai.generateBulletsFromDescription("Built and maintained reliable backend APIs", 1, {
         meta: { modelId: "claude-sonnet-5" },
@@ -154,6 +166,16 @@ describe("callModel — routes to the correct provider client", () => {
       ],
       usage: {},
     });
+    mockAnthropicCreate.mockResolvedValueOnce({
+      content: [
+        {
+          text: JSON.stringify({
+            assignments: [{ id: "skill_0", category: "Data Management" }],
+          }),
+        },
+      ],
+      usage: {},
+    });
 
     await expect(
       ai.generateSkillsFromContext(
@@ -166,7 +188,9 @@ describe("callModel — routes to the correct provider client", () => {
       )
     ).resolves.toEqual(
       expect.objectContaining({
-        suggestions: [expect.objectContaining({ skills: ["SQL"] })],
+        suggestions: [
+          expect.objectContaining({ category: "Data Management", skills: ["SQL"] }),
+        ],
         confirmationCandidates: [],
       })
     );

@@ -23,16 +23,22 @@ describe("skill category reconciliation", () => {
       },
       {
         category: "Maintenance and Troubleshooting",
-        skills: ["Preventive Maintenance", "Equipment Inspection", "Electrical Troubleshooting"],
+        skills: [
+          "Preventive Maintenance",
+          "Mechanical Troubleshooting",
+          "Electrical Troubleshooting",
+        ],
         skillsDetailed: [
           detail("Preventive Maintenance"),
-          detail("Equipment Inspection"),
+          detail("Mechanical Troubleshooting"),
           detail("Electrical Troubleshooting"),
         ],
       },
     ];
     const assignments = [
-      { id: "skill_0", category: "Maintenance Operations" },
+      // Even if the organizer leaves this skill stranded in a one-item category,
+      // the server must merge it into the closest supported group.
+      { id: "skill_0", category: "Electrical Engineering" },
       { id: "skill_1", category: "Field Operations" },
       { id: "skill_2", category: "Field Operations" },
       { id: "skill_3", category: "Maintenance Operations" },
@@ -55,7 +61,7 @@ describe("skill category reconciliation", () => {
         "Rigging Preparation",
         "Wireline Equipment",
         "Preventive Maintenance",
-        "Equipment Inspection",
+        "Mechanical Troubleshooting",
       ])
     );
     expect(
