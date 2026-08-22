@@ -11,6 +11,7 @@ const {
   rewriteRole,
   projectIdeas,
   sessions,
+  updateTargetJob,
 } = require("../controllers/studio.controller");
 
 const { protect } = require("../middleware/auth.middleware");
@@ -37,6 +38,10 @@ router.get("/sessions", protect, sessions);
 // correct) Aria's read before a tailored copy exists. Free, like /coach/brief: the
 // extraction cache makes a re-preview of the same JD cost nothing.
 router.post("/brief-preview", protect, aiLimiter, briefPreview);
+
+// A persistent Studio CV can add or replace its JD at any point. The endpoint refreshes
+// the Role Brief and invalidates every JD-derived cache as one coordinated operation.
+router.post("/target-job", protect, aiLimiter, updateTargetJob);
 
 // Aria Studio — draft a realistic, generic job posting from just a job title, for a
 // user who has no real posting to paste. Charges DRAFT_JD, only after a non-empty

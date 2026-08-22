@@ -93,6 +93,119 @@ const briefPreview = async (req, res) => {
   }
 };
 
+// @desc    Replace or add the target job on an existing Studio CV. This is the ONE
+//          write path for a JD edit after a draft exists: the JD and its freshly-read
+//          Role Brief land together, while every cache derived from the previous JD is
+//          invalidated in the same database update. Existing CV prose is deliberately
+//          preserved — changing the target must never silently rewrite the user's CV.
+// @route   POST /api/studio/target-job
+// @access  Private
+const updateTargetJob = async (req, res) => {
+  const { draftId, jobTitle, jobDescription, model, brief: confirmedBrief } = req.body || {};
+  if (!mongoose.Types.ObjectId.isValid(draftId)) {
+    return res.status(400).json({ message: "A valid draftId is required" });
+  }
+
+  const title = String(jobTitle || "").trim();
+  const description = String(jobDescription || "").trim();
+  const invalid = validateJob(title, description);
+  if (invalid) return res.status(400).json({ message: invalid });
+  if (description.length > 40_000) {
+    return res.status(400).json({ message: "jobDescription is too long" });
+  }
+
+  try {
+    const draft = await DraftCV.findById(draftId);
+    if (!draft) return res.status(404).json({ message: "Draft not found" });
+    if (draft.userId.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Not authorized to edit this CV" });
+    }
+
+    const currentTitle = String(draft.targetJob?.title || "").trim();
+    const currentDescription = String(draft.targetJob?.description || "").trim();
+    const nextHash = briefHashFor(description);
+    if (
+      currentTitle === title &&
+      currentDescription === description &&
+      draft.targetJob?.brief &&
+      draft.targetJob?.briefHash === nextHash
+    ) {
+      return res.json({
+        changed: false,
+        targetJob: draft.targetJob,
+        studioScan: draft.studioScan || null,
+      });
+    }
+
+    let modelId;
+    if (model) {
+      let gate = await modelSelection.gateModel(model);
+      if (!gate.ok) gate = await modelSelection.gateModel(modelSelection.DEFAULT_MODEL);
+      modelId = gate.ok ? gate.modelId : modelSelection.DEFAULT_MODEL;
+    }
+
+    let brief =
+      confirmedBrief && typeof confirmedBrief === "object" && !Array.isArray(confirmedBrief)
+        ? confirmedBrief
+        : null;
+    if (!brief) {
+      try {
+        const built = await buildBriefForJd(description, title, {
+          userId: req.user.id,
+          operation: "studioUpdateTargetJob",
+          modelId,
+          lang: req.lang,
+        });
+        brief = built.brief || null;
+      } catch (error) {
+        // Saving the user's JD is more important than the advisory read. A later coach
+        // request will retry resolveDraftBrief because no matching brief is persisted.
+        console.error("Studio target-job brief refresh failed (JD still saved):", error.message);
+      }
+    }
+
+    const source = draft.targetJob?.source === "ai_drafted" ? "ai_drafted" : "pasted";
+    const set = {
+      "targetJob.title": title,
+      "targetJob.description": description,
+      "targetJob.source": source,
+      "tailoredForJob.title": title,
+    };
+    if (brief) {
+      set["targetJob.brief"] = brief;
+      set["targetJob.briefHash"] = nextHash;
+    }
+
+    const unset = {
+      "targetJob.aiKeywords": 1,
+      "targetJob.aiKeywordsHash": 1,
+      skillsGenCache: 1,
+      studioScan: 1,
+      genState: 1,
+    };
+    if (!brief) {
+      unset["targetJob.brief"] = 1;
+      unset["targetJob.briefHash"] = 1;
+    }
+
+    const updated = await DraftCV.findByIdAndUpdate(
+      draftId,
+      { $set: set, $unset: unset },
+      { new: true, runValidators: true }
+    );
+
+    return res.json({
+      changed: true,
+      targetJob: updated.targetJob,
+      studioScan: updated.studioScan || null,
+      reviewSuggested: true,
+    });
+  } catch (error) {
+    console.error("Studio Target Job Update Error:", error);
+    return res.status(500).json({ message: "Failed to update target job" });
+  }
+};
+
 // @desc    Draft a realistic, generic job posting from just a job title — for a user
 //          who knows the role they want but has no real posting to paste. Runs BEFORE
 //          a tailor session exists (still on the capture form), so there is no draft
@@ -1069,6 +1182,7 @@ module.exports = {
   tailorStart,
   buildStart,
   briefPreview,
+  updateTargetJob,
   draftJd,
   scan,
   recompute,
