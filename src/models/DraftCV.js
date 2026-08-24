@@ -176,6 +176,7 @@ const draftCVSchema = new mongoose.Schema(
         degree: String,
         school: String,
         graduationDate: String,
+        cgpa: String, // Free text: grading scales vary ("3.8/4.0", "4.5/5.0", "Second Class Upper")
         description: String,
       },
     ],
