@@ -163,3 +163,60 @@ describe("generateBulletsFromDescription — citation backfill", () => {
     expect(details).toHaveLength(2);
   });
 });
+
+// The writer used to be entirely stage-blind: Aria could interview a student gently and
+// then hand the transcript to this function, which had never heard of career stage.
+describe("generateBulletsFromDescription — career stage reaches the writer", () => {
+  const userPrompt = () =>
+    mockOpenAICreate.mock.calls[0][0].messages.find((m) => m.role === "user").content;
+
+  beforeEach(() => {
+    mockOpenAICreate.mockResolvedValue(
+      respond([{ text: "Built the class booking tool", evidenceIds: ["ev_1"] }])
+    );
+  });
+
+  it("carries the grad directive, and no metric pressure with it", async () => {
+    await ai.generateBulletsFromDescription("Built a booking tool for my class.", 1, {
+      ...baseOptions(),
+      stage: "grad",
+    });
+
+    const user = userPrompt();
+    expect(user).toMatch(/CANDIDATE STAGE/);
+    expect(user).toMatch(/START of their career/i);
+    expect(user).toMatch(/do NOT reach for a business metric/i);
+    expect(user).toMatch(/EXECUTION LEVEL/);
+  });
+
+  it("uses the PROJECT section note when the section is a project", async () => {
+    await ai.generateBulletsFromDescription("Built a booking tool.", 1, {
+      ...baseOptions(),
+      section: "project",
+      stage: "grad",
+    });
+
+    expect(userPrompt()).toMatch(/SECTION NOTE — PROJECTS/);
+  });
+
+  it("stays byte-identical to the old behaviour when no stage is resolved", async () => {
+    await ai.generateBulletsFromDescription("Did the thing.", 1, baseOptions());
+    expect(userPrompt()).not.toMatch(/CANDIDATE STAGE/);
+  });
+
+  // briefContextBlock injects the JOB's seniority into the same prompt. It used to say
+  // "match bullet authority/scope to this level", which told the model to write a grad up
+  // to a senior posting — the one instruction in the file that asked for inflation.
+  it("defuses the seniority conflict instead of asking the model to referee it", async () => {
+    await ai.generateBulletsFromDescription("Built a booking tool.", 1, {
+      ...baseOptions(),
+      stage: "grad",
+      brief: { role: "Analyst", company: "Acme", seniority: "senior", requirements: [] },
+    });
+
+    const user = userPrompt();
+    expect(user).toMatch(/CONFLICT NOTICE/);
+    expect(user).toMatch(/the JOB's level, not the candidate's/);
+    expect(user).not.toMatch(/match bullet authority\/scope to this level/);
+  });
+});

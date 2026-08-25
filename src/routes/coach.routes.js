@@ -7,6 +7,7 @@ const {
   setCompanyType,
   setModel,
   getBrief,
+  setNoTarget,
   askAria,
   chat,
 } = require("../controllers/coach.controller");
@@ -36,6 +37,10 @@ router.post("/model", protect, setModel);
 // Fetch (or build+cache) Aria's Role Brief — powers the "Aria's read" strip.
 // Cheap on repeat (same-JD cache hit); no target JD → { brief: null }.
 router.post("/brief", protect, getBrief);
+
+// Record "no target job — build a strong all-rounder", and cache the role-family
+// vocabulary that stands in for a brief. Free (extraction-cached inference).
+router.post("/no-target", protect, setNoTarget);
 
 // Aria's free-form coach chat — warm, guardrailed Q&A on the cheap base model.
 // Draws from the shared daily chat allowance, then ARIA_CHAT_MESSAGE credits each.

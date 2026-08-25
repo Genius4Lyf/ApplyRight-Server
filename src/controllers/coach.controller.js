@@ -142,6 +142,59 @@ const resolveDraftBrief = async (draft, meta) => {
   return brief;
 };
 
+// The no-JD counterpart of resolveDraftBrief, and the ONLY consumer of inferRoleKeywords
+// on the coach path — it was written and documented as the "no job description available"
+// fallback, then wired only to the CV Builder's keyword panel, so with no JD the coach
+// gave the model zero role vocabulary beyond the raw title string.
+//
+// Returns { roleFamily, keywords } or null. Cached on the draft by a hash of the role
+// family so a title change re-infers and an unchanged one is free (inferRoleKeywords is
+// itself withExtractionCache-backed, and returns [] in mock mode).
+//
+// HARD RULE, enforced by shape: these keywords are id-less. They can never be minted as
+// req_* ids and never enter requirementChecks — the ledger verifies against
+// brief.requirements, and admitting inferred guesses would put unverifiable "requirements"
+// into the one record that is supposed to be provable.
+const roleFamilyForDraft = (draft) =>
+  String(
+    draft?.targetJob?.noJd?.roleFamily ||
+      draft?.targetJob?.title ||
+      draft?.experience?.find?.((e) => String(e?.title || "").trim())?.title ||
+      ""
+  ).trim();
+
+const resolveNoJdContext = async (draft, meta) => {
+  // A real JD always wins; this path is only for its absence.
+  if ((draft?.targetJob?.description || "").trim()) return null;
+  const roleFamily = roleFamilyForDraft(draft);
+  if (!roleFamily) return null;
+
+  const hash = briefHashFor(roleFamily.toLowerCase());
+  const cached = draft.targetJob?.noJd;
+  if (cached?.keywordsHash === hash && Array.isArray(cached.keywords)) {
+    return { roleFamily, keywords: cached.keywords };
+  }
+
+  const { keywords = [] } = (await aiService.inferRoleKeywords(roleFamily, meta)) || {};
+  const clean = keywords
+    .map((k) => ({
+      name: String(k?.name || "").trim(),
+      importance: k?.importance === "must_have" ? "must_have" : "nice_to_have",
+    }))
+    .filter((k) => k.name)
+    .slice(0, 14);
+
+  if (!draft.targetJob) draft.targetJob = {};
+  draft.targetJob.noJd = {
+    ...(cached?.toObject ? cached.toObject() : cached || {}),
+    roleFamily,
+    keywords: clean,
+    keywordsHash: hash,
+  };
+  await draft.save();
+  return { roleFamily, keywords: clean };
+};
+
 // The role's must-haves NOT yet covered by the draft — computed with the scoring
 // engine's own matcher so "covered while building" agrees with the later scan. Empty
 // when there's no brief/must-haves. Must-haves first, then capped.
@@ -166,12 +219,119 @@ const openMustHavesFromDraft = (draft, brief, cap = 6) => {
     .map((r) => ({ name: r.name, importance: r.importance }));
 };
 
+// ── The cross-history hunt ──────────────────────────────────────────────────
+//
+// Every requirement the user has explicitly said they have NOT done, by lowercased name.
+// One lookup, consulted by every surface that could ask again.
+// The SAME id derivation verifiedInterviewEvidence uses, so a fact banked by the hunt is
+// indistinguishable from one banked by the build interview — and re-confirming the same
+// thing twice cannot produce a duplicate.
+const evidenceIdFor = (sourceQuote, claim) =>
+  `ev_${crypto
+    .createHash("sha1")
+    .update(`${normalizedEvidenceText(sourceQuote)}|${normalizedEvidenceText(claim)}`)
+    .digest("hex")
+    .slice(0, 12)}`;
+
+const declinedRequirementKeys = (draft) => {
+  const rows = Array.isArray(draft?.skillDeclines) ? draft.skillDeclines : [];
+  return new Set(
+    rows.map((row) => String(row?.name || "").trim().toLowerCase()).filter(Boolean)
+  );
+};
+
+// Everywhere in this person's history the hunt may ask about. Offered to the model as
+// PLACES TO ASK — never as claims that anything happened there.
+const huntContextsForDraft = (draft) => {
+  const contexts = [];
+  (draft?.experience || []).forEach((row) => {
+    const label = [row?.title, row?.company].filter(Boolean).join(" at ");
+    if (row?._sortId && label)
+      contexts.push({
+        sortId: String(row._sortId),
+        kind: row?.entryType && row.entryType !== "job" ? String(row.entryType) : "experience",
+        label,
+      });
+  });
+  (draft?.projects || []).forEach((row) => {
+    const label = String(row?.title || row?.name || "").trim();
+    if (row?._sortId && label)
+      contexts.push({ sortId: String(row._sortId), kind: "project", label });
+  });
+  (draft?.education || []).forEach((row, i) => {
+    const label = [row?.degree || row?.field, row?.school].filter(Boolean).join(" at ");
+    if (label) contexts.push({ sortId: `edu-${i}`, kind: "education", label });
+  });
+  (draft?.certifications || []).forEach((row, i) => {
+    const label = String(row?.name || row?.title || "").trim();
+    if (label) contexts.push({ sortId: `cert-${i}`, kind: "training", label });
+  });
+  return contexts.slice(0, 12);
+};
+
+// Build the probe payload for ONE requirement, or null when it must not be asked.
+const buildHuntProbe = (draft, brief, requirementId) => {
+  const typed = Array.isArray(brief?.requirements) ? brief.requirements : [];
+  const requirement = typed.find((item) => item?.id === requirementId);
+  if (!requirement?.name) return null;
+  // Already declined → never ask again, from any entry point.
+  if (declinedRequirementKeys(draft).has(String(requirement.name).toLowerCase())) return null;
+  return {
+    requirementId: requirement.id,
+    name: requirement.name,
+    type: requirement.type || "skill",
+    sourceText: String(requirement.sourceText || "").slice(0, 240),
+    contexts: huntContextsForDraft(draft),
+  };
+};
+
+// Verify what the model reported before ANY of it is written down.
+//
+// The rules are the ones that already protect the build interview, reused deliberately:
+// the quote must appear verbatim in something the user actually typed, AND it must name
+// the requirement (or an alias). A proof signal is not enough — "I prepared the weekly
+// report" makes a spreadsheet tool plausible to ASK about; it does not prove they used
+// one. A cross-history hunt invites exactly that mistake, so the check matters more here
+// than anywhere else.
+//
+// Returns { level, verified, evidence } — `verified` false downgrades to 'deferred' and
+// writes nothing. Declines need no evidence: they only ever REMOVE things.
+const verifyProbeResult = ({ probeResult, evidence = [], turns = [], probe }) => {
+  const level = probeResult?.level;
+  if (!aiService.HUNT_LEVELS.includes(level)) return null;
+  if (!aiService.HUNT_LEVELS_ADDABLE.includes(level)) {
+    return { level, verified: true, evidence: null };
+  }
+
+  const index = probeResult.evidenceIndex;
+  const item = Number.isInteger(index) ? evidence[index] : null;
+  const quote = String(item?.sourceQuote || "").trim();
+  if (!quote) return { level, verified: false, evidence: null };
+
+  // The quote must be something they really typed.
+  const normalizedQuote = normalizedEvidenceText(quote);
+  const saidIt = (turns || []).some(
+    (turn) => turn?.who === "user" && normalizedEvidenceText(turn.text).includes(normalizedQuote)
+  );
+  if (!saidIt || !normalizedQuote) return { level, verified: false, evidence: null };
+
+  // …and it must NAME the thing, not merely be adjacent to it.
+  const terms = [probe?.name, ...(probe?.aliases || [])]
+    .map(normalizedEvidenceText)
+    .filter(Boolean);
+  const names = terms.some((term) => normalizedQuote.includes(term));
+  if (!names) return { level, verified: false, evidence: null };
+
+  return { level, verified: true, evidence: item };
+};
+
 // Narrow the CV-wide open requirements to the few that are most plausible for the
 // entry Aria is interviewing NOW. The model still makes the final plausibility call;
 // this deterministic pre-filter stops a long JD from turning every role into the same
 // keyword interrogation.
 const targetRequirementsForEntry = (draft, brief, entry, turns = [], cap = 3) => {
   const typed = Array.isArray(brief?.requirements) ? brief.requirements : [];
+  const declined = declinedRequirementKeys(draft);
   const openSkills = openMustHavesFromDraft(draft, brief, Math.max(cap * 3, 6));
   // Responsibilities are not skill chips, but they are valuable interview leads. They
   // join the candidate pool as typed requirements and can rank only when this role's
@@ -179,13 +339,17 @@ const targetRequirementsForEntry = (draft, brief, entry, turns = [], cap = 3) =>
   const responsibilityLeads = typed
     .filter((item) => item?.type === "responsibility" && item?.name)
     .map((item) => ({ name: item.name, importance: item.priority || "must_have" }));
-  const open = [...openSkills, ...responsibilityLeads].filter(
-    (item, index, items) =>
-      items.findIndex(
-        (candidate) =>
-          String(candidate.name || "").toLowerCase() === String(item.name || "").toLowerCase()
-      ) === index
-  );
+  const open = [...openSkills, ...responsibilityLeads]
+    .filter(
+      (item, index, items) =>
+        items.findIndex(
+          (candidate) =>
+            String(candidate.name || "").toLowerCase() === String(item.name || "").toLowerCase()
+        ) === index
+    )
+    // A clear "no" is honoured everywhere, permanently. Being asked again about something
+    // you have already said you've never done is the fastest way to feel unheard.
+    .filter((item) => !declined.has(String(item.name || "").toLowerCase()));
   if (!open.length) return [];
 
   const byName = new Map(typed.map((r) => [String(r?.name || "").toLowerCase(), r]));
@@ -523,6 +687,17 @@ const generateBullets = async (req, res) => {
       );
     }
 
+    // No JD? Resolve the all-rounder context rather than leaving the writer with nothing
+    // but a job title. Non-fatal for the same reason the brief is.
+    let noJd = null;
+    if (!brief) {
+      try {
+        noJd = await resolveNoJdContext(draft, meta);
+      } catch (noJdErr) {
+        console.error("Coach resolveNoJdContext error (generateBullets, continuing):", noJdErr.message);
+      }
+    }
+
     const evidenceMap = draft.coachEvidence?.toObject
       ? draft.coachEvidence.toObject()
       : draft.coachEvidence || {};
@@ -572,6 +747,11 @@ const generateBullets = async (req, res) => {
         role: entry.title || (section === "experience" ? "this role" : "this project"),
         section,
         evidenceLedger,
+        // The same stage the interview ran on, so the writer can't undo the interview's
+        // care — a grad interviewed without metric pressure must not be written up to a
+        // metric-shaped rubric. Body value wins, else the pick persisted on the draft.
+        stage: aiService.resolveCareerStage({ stage: req.body?.stage, draft }),
+        noJd,
         returnDetails: true,
         // Route through the multi-provider dispatcher via the selected model id.
         meta: { ...meta, modelId },
@@ -1066,8 +1246,17 @@ const STUDIO_INTERVIEW_TURN_CAP = 10;
 // @route   POST /api/coach/chat
 // @access  Private (job-seekers only — not CV-agent client CVs)
 const chat = async (req, res) => {
-  const { draftId, currentStepId, messages, focus, buildTurns, stage, studioInterview } =
-    req.body || {};
+  const {
+    draftId,
+    currentStepId,
+    messages,
+    focus,
+    buildTurns,
+    stage,
+    studioInterview,
+    // { requirementId } — runs the cross-history hunt instead of the entry interview.
+    probe: probeRequest,
+  } = req.body || {};
   if (!draftId) {
     return res.status(400).json({ message: "draftId is required" });
   }
@@ -1151,6 +1340,17 @@ const chat = async (req, res) => {
       console.error("Coach chat resolveDraftBrief error (brief-less):", briefErr.message);
     }
 
+    // No JD? The interviewer gets the all-rounder framing plus soft trade leads, instead
+    // of the bare string "TARGET: none". Non-fatal.
+    let noJd = null;
+    if (!brief) {
+      try {
+        noJd = await resolveNoJdContext(draft, meta);
+      } catch (noJdErr) {
+        console.error("Coach chat resolveNoJdContext error (continuing):", noJdErr.message);
+      }
+    }
+
     const stepLabel = STEP_LABELS[currentStepId] || "your CV";
     // Studio can unpack several activities across ten user turns, so retain the opening
     // activity list for that whole interview. Other coach surfaces keep the smaller window.
@@ -1164,18 +1364,31 @@ const chat = async (req, res) => {
         ? selectRequiredRequirementProbe(openMustHaves, window, buildTurns)
         : null;
 
+    // The CROSS-HISTORY HUNT for one requirement. Null when the id is unknown or the user
+    // has already declined it — buildHuntProbe refuses rather than asking again.
+    const probe = probeRequest?.requirementId
+      ? buildHuntProbe(draft, brief, probeRequest.requirementId)
+      : null;
+
     // NO focus → every turn is a general answer (metered like /coach/ask). Pre-check
     // the balance BEFORE spending an AI call the user can't pay for — but only when the
     // turn will actually meter (a paid light user is unlimited and never blocked here;
     // a flagship user always meters, pool or no pool).
-    if (!focus && turnWillMeter(user, pre, tier) && subscription.availableCredits(user) < cost) {
+    if (
+      !focus &&
+      !probe &&
+      turnWillMeter(user, pre, tier) &&
+      subscription.availableCredits(user) < cost
+    ) {
       return refuseChatTurn(res, { tier, cost, user, pre });
     }
 
     // Build-with is free but bounded — block BEFORE spending an AI call once the
     // daily anti-abuse ceiling is hit. Client-supplied buildTurns/mustFinish above
     // is a conversation-quality cap, not a cost control; this is the real backstop.
-    if (focus && preBuild.exhausted) {
+    // A hunt turn is free like a build turn, so it draws on the same anti-abuse ceiling —
+    // otherwise it would be an uncapped free AI call.
+    if ((focus || probe) && preBuild.exhausted) {
       await User.updateOne(
         { _id: req.user.id },
         { $inc: { "ariaBuild.capHits": 1 }, $set: { "ariaBuild.lastCapHitAt": new Date() } }
@@ -1211,8 +1424,10 @@ const chat = async (req, res) => {
         stepLabel,
         cvSummary,
         brief,
+        noJd,
         openMustHaves,
         requiredProbe,
+        probe,
         mustFinish,
         meta,
       });
@@ -1245,7 +1460,10 @@ const chat = async (req, res) => {
     }
 
     // No focus → always a general answer; focused → trust the classifier.
-    const intent = focus ? result.intent : "answer";
+    // A HUNT turn is an interview turn, not a general question: it is Aria asking, and
+    // charging someone to be asked whether they have a skill would be indefensible. It
+    // takes the same free-on-light path build-with does.
+    const intent = focus || probe ? result.intent : "answer";
 
     // SMART PER-MESSAGE charging: a general 'answer' spends the chat allowance;
     // 'building'/'ready' (focused build-with) is free on LIGHT, metered on FLAGSHIP.
@@ -1260,7 +1478,7 @@ const chat = async (req, res) => {
       }
       charged = c.charged;
       freeRemaining = c.freeRemaining;
-    } else if (focus) {
+    } else if (focus || probe) {
       // Build-with is FREE on the LIGHT model — that's the point of Aria Studio.
       // FLAGSHIP meters even here: an unlimited Sonnet interview is exactly the
       // cost blow-out modelSelection.service is written to prevent.
@@ -1281,6 +1499,85 @@ const chat = async (req, res) => {
     }
 
     let evidenceLedger = null;
+    // ── The hunt's answer ────────────────────────────────────────────────────
+    // Verified, then written. A rung the user reached is never trusted on the model's
+    // say-so: 'regular'/'basic'/'coursework' need their own words, naming the thing.
+    let probeOutcome = null;
+    if (probe && result.probeResult) {
+      const verdict = verifyProbeResult({
+        probeResult: result.probeResult,
+        evidence: result.evidence,
+        turns: window,
+        probe,
+      });
+      if (verdict) {
+        const addable = aiService.HUNT_LEVELS_ADDABLE.includes(verdict.level);
+        const status = !addable ? "declined" : verdict.verified ? "confirmed" : "deferred";
+
+        // File the evidence under the entry the USER says it happened in — which is
+        // usually NOT the entry this conversation started from. That is the whole point of
+        // hunting across their history, and it means a confirmation here also strengthens
+        // that role's bullets, not just the skills list.
+        const contextSortId = result.probeResult.contextSortId || null;
+        if (status === "confirmed" && verdict.evidence && contextSortId) {
+          const current = draft.coachEvidence?.toObject
+            ? draft.coachEvidence.toObject()
+            : draft.coachEvidence || {};
+          const bucket = current[contextSortId] || { evidence: [], requirementChecks: [] };
+          const banked = {
+            ...verdict.evidence,
+            id: evidenceIdFor(verdict.evidence.sourceQuote, verdict.evidence.claim),
+            requirementIds: [probe.requirementId],
+            fromHunt: true,
+          };
+          current[contextSortId] = {
+            ...bucket,
+            evidence: [...(bucket.evidence || []), banked],
+            updatedAt: new Date().toISOString(),
+          };
+          draft.coachEvidence = current;
+          if (typeof draft.markModified === "function") draft.markModified("coachEvidence");
+          probeOutcome = { ...result.probeResult, status, evidenceId: banked.id };
+        } else {
+          probeOutcome = { ...result.probeResult, status, evidenceId: null };
+        }
+
+        // Record the probe, and — for a clear no — the decline that stops every surface
+        // asking again.
+        const probes = Array.isArray(draft.requirementProbes) ? draft.requirementProbes : [];
+        const existing = probes.find((row) => row.requirementId === probe.requirementId);
+        const patch = {
+          requirementId: probe.requirementId,
+          name: probe.name,
+          status,
+          level: verdict.level,
+          contextSortId: probeOutcome.evidenceId ? contextSortId : null,
+          contextKind: result.probeResult.contextKind || null,
+          evidenceId: probeOutcome.evidenceId,
+          answeredAt: new Date(),
+        };
+        if (existing) Object.assign(existing, patch);
+        else draft.requirementProbes = [...probes, { ...patch, askedAt: new Date() }];
+
+        if (status === "declined") {
+          const declines = Array.isArray(draft.skillDeclines) ? draft.skillDeclines : [];
+          if (!declines.some((row) => row.requirementId === probe.requirementId)) {
+            draft.skillDeclines = [
+              ...declines,
+              {
+                requirementId: probe.requirementId,
+                name: probe.name,
+                level: verdict.level,
+                source: "interview",
+                at: new Date(),
+              },
+            ];
+          }
+        }
+        if (typeof draft.save === "function") await draft.save();
+      }
+    }
+
     const readyToDraft = intent === "ready" || (!!focus && mustFinish);
     if (focus && readyToDraft) {
       let evidence = verifiedInterviewEvidence(result.evidence, window, openMustHaves);
@@ -1321,6 +1618,9 @@ const chat = async (req, res) => {
       readyToDraft,
       description: intent === "ready" ? result.description : "",
       evidenceLedger,
+      // The hunt's verified outcome: which rung, whether it was accepted, and where the
+      // evidence was filed. null on an ordinary turn, or while the user hasn't answered.
+      probeResult: probeOutcome,
       // Answer scaffolds — only while building (Aria just asked a follow-up).
       suggestions: intent === "building" ? result.suggestions || [] : [],
       exampleAnswer: intent === "building" ? result.exampleAnswer || "" : "",
@@ -1347,6 +1647,64 @@ const chat = async (req, res) => {
 //          same-JD read returns the cached brief (no fresh AI spend). No JD → null.
 // @route   POST /api/coach/brief
 // @access  Private (job-seekers only — not CV-agent client CVs)
+// @desc   Record that the user has NO target job, and cache the inferred role-family
+//         vocabulary that stands in for a Role Brief.
+// @route  POST /api/coach/no-target
+// @access Private
+//
+// "Not yet — build a strong all-rounder" used to be a chat line that changed nothing.
+// This is the state behind it. FREE: inferRoleKeywords is extraction-cached and runs on
+// the cheap base model, and charging someone for declining to paste a JD would be absurd.
+const setNoTarget = async (req, res) => {
+  const { draftId, roleFamily } = req.body || {};
+  if (!draftId) return res.status(400).json({ message: "draftId is required" });
+
+  try {
+    if (!mongoose.Types.ObjectId.isValid(draftId)) {
+      return res.status(400).json({ message: "Invalid draftId format" });
+    }
+    const draft = await DraftCV.findById(draftId);
+    if (!draft) return res.status(404).json({ message: "CV not found" });
+    if (draft.userId.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Not authorized to edit this CV" });
+    }
+    // A real JD outranks this. Declining after pasting one would be contradictory state.
+    if ((draft.targetJob?.description || "").trim()) {
+      return res.status(409).json({ message: "This CV already has a target job." });
+    }
+
+    if (!draft.targetJob) draft.targetJob = {};
+    const family = String(roleFamily || "").trim();
+    draft.targetJob.noJd = {
+      ...(draft.targetJob.noJd?.toObject
+        ? draft.targetJob.noJd.toObject()
+        : draft.targetJob.noJd || {}),
+      declined: true,
+      declinedAt: new Date(),
+      ...(family ? { roleFamily: family } : {}),
+    };
+    await draft.save();
+
+    // Best-effort: a failed inference must still leave `declined` recorded, because that
+    // is the part the rest of the flow branches on.
+    let noJd = null;
+    try {
+      noJd = await resolveNoJdContext(draft, {
+        userId: req.user.id,
+        operation: "coachNoTarget",
+        lang: req.lang,
+      });
+    } catch (inferErr) {
+      console.error("Coach setNoTarget inference failed (declined still saved):", inferErr.message);
+    }
+
+    return res.json({ noJd: noJd || { roleFamily: family, keywords: [] } });
+  } catch (error) {
+    console.error("Coach setNoTarget error:", error.message);
+    return res.status(500).json({ message: "Couldn't save that. Please try again." });
+  }
+};
+
 const getBrief = async (req, res) => {
   const { draftId, model } = req.body || {};
   if (!draftId) {
@@ -1447,8 +1805,10 @@ module.exports = {
   setCompanyType,
   setModel,
   getBrief,
+  setNoTarget,
   askAria,
   chat,
+  resolveNoJdContext,
   // Exported so Aria Studio can build+cache a Role Brief on a freshly-cloned draft
   // without duplicating the JD-hash cache logic. Not route handlers.
   resolveDraftBrief,
@@ -1458,6 +1818,11 @@ module.exports = {
   // against the scorer's own matcher without going through the chat route.
   openMustHavesFromDraft,
   targetRequirementsForEntry,
+  // The cross-history hunt — pure, so the ladder's rules can be unit-tested without a turn.
+  declinedRequirementKeys,
+  huntContextsForDraft,
+  buildHuntProbe,
+  verifyProbeResult,
   selectRequiredRequirementProbe,
   verifiedInterviewEvidence,
   verifiedRequirementChecks,

@@ -454,6 +454,134 @@ const scoreBestForRole = (
   return skillNames.filter((n) => matchedCanon.has(normalizeSkill(n).canonical.toLowerCase()));
 };
 
+// Re-key the interview ledger (draft.coachEvidence, keyed by _sortId) into the SAME
+// bracket-index space the skills prompt uses for experience/projects, so a citation can
+// point at a profile entry the model can actually see.
+//
+// Order matters and must match the prompt's own indexing: the prompt numbers the arrays
+// it is handed, so we resolve against those same arrays rather than against the draft.
+const interviewEvidenceForSkills = (draft, experience = [], projects = []) => {
+  const ledger = draft?.coachEvidence?.toObject
+    ? draft.coachEvidence.toObject()
+    : draft?.coachEvidence || {};
+  if (!ledger || typeof ledger !== "object") return [];
+
+  const indexOf = (list, sortId) =>
+    (Array.isArray(list) ? list : []).findIndex(
+      (row) => String(row?._sortId || "") === String(sortId)
+    );
+
+  const out = [];
+  Object.entries(ledger).forEach(([sortId, bucket]) => {
+    const evidence = Array.isArray(bucket?.evidence) ? bucket.evidence : [];
+    if (!evidence.length) return;
+
+    let type = "experience";
+    let refIndex = indexOf(experience, sortId);
+    if (refIndex < 0) {
+      refIndex = indexOf(projects, sortId);
+      type = "project";
+    }
+    // The entry was deleted after its interview. Dropping it is correct: an index we
+    // cannot resolve would point the model at the wrong row.
+    if (refIndex < 0) return;
+
+    evidence.forEach((item) => {
+      const claim = String(item?.claim || "").trim();
+      const sourceQuote = String(item?.sourceQuote || "").trim();
+      if (!claim || !sourceQuote) return;
+      out.push({
+        evidenceId: String(item?.id || ""),
+        type,
+        refIndex,
+        claim,
+        sourceQuote,
+        tools: Array.isArray(item?.tools) ? item.tools.filter(Boolean).slice(0, 6) : [],
+        requirementIds: Array.isArray(item?.requirementIds)
+          ? item.requirementIds.filter(Boolean).slice(0, 6)
+          : [],
+      });
+    });
+  });
+  return out.slice(0, 40);
+};
+
+// The skills-section gaps the scan already measured, read from the persisted scan rather
+// than trusted from the client. Sanitised the way coach.controller sanitises its own
+// keyword lists (strings, short, deduped, capped).
+const scanMissingSkillKeywords = (draft) => {
+  const scan = draft?.studioScan?.toObject ? draft.studioScan.toObject() : draft?.studioScan || {};
+  const fromSection = (Array.isArray(scan?.sections) ? scan.sections : []).find(
+    (section) => section?.key === "skills"
+  )?.missingKeywords;
+  const raw = [
+    ...(Array.isArray(fromSection) ? fromSection : []),
+    ...(Array.isArray(scan?.missingSkills) ? scan.missingSkills : []),
+  ];
+  const seen = new Set();
+  const out = [];
+  raw.forEach((entry) => {
+    const name = String(typeof entry === "string" ? entry : entry?.name || "").trim();
+    if (!name || name.length > 60) return;
+    const key = name.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(name);
+  });
+  return out.slice(0, 10);
+};
+
+// How strongly the PROFILE backs a skill, 0-100. Pure and deterministic — no AI, no cost.
+//
+// scoreBestForRole answers "does this skill match the job?" and stays the MATCHER. It was
+// also, accidentally, the whole ranker: a starred skill only ever meant "resembles a JD
+// keyword", and every row was stamped evidenceStatus 'demonstrated' regardless of how much
+// backed it. So a skill mentioned once in passing outranked one the user talked through in
+// an interview, as long as it matched a keyword.
+const evidenceStrength = (row) => {
+  const interview = (row?.evidence || []).filter((item) => item?.fromInterview);
+  const profile = (row?.evidence || []).filter((item) => !item?.fromInterview);
+
+  let score = 0;
+  // Named in their own words, server-verified against a real turn. The strongest signal
+  // available, and the reason feeding the ledger into generation was worth doing.
+  if (interview.length) score += 40;
+  // Breadth: the same skill showing up across separate parts of a life is corroboration.
+  const distinctSources = new Set(
+    (row?.evidence || []).map((item) => `${item?.type}:${item?.refIndex}`)
+  );
+  score += Math.min(50, distinctSources.size * 25);
+  // Recency: experience[0] is the most recent role, and recruiters read the top first.
+  if (profile.some((item) => item.type === "experience" && item.refIndex === 0)) score += 15;
+  // The user's own honesty rating, when they gave one. This is confirmationStatus's first
+  // real consumer — it has been stored and read by nothing.
+  if (row?.confirmationStatus === "direct") score += 10;
+  else if (row?.confirmationStatus === "basic") score += 4;
+  // Coursework is genuine evidence of a METHOD or a domain; for a TOOL it is much weaker
+  // than having used it at work, and should not present as a headline strength.
+  const onlyEducation =
+    (row?.evidence || []).length > 0 && (row?.evidence || []).every((i) => i?.type === "education");
+  if (onlyEducation) score -= 20;
+
+  return Math.max(0, Math.min(100, score));
+};
+
+// How much the JOB wants it, 0-100.
+const jobRelevance = (row, bestSet, requirementByName) => {
+  const key = String(row?.name || "").toLowerCase();
+  const requirement = requirementByName.get(key);
+  if (requirement) return requirement.priority === "must_have" ? 100 : 60;
+  return bestSet.has(key) ? 60 : 0;
+};
+
+// Honest status, replacing the flat 'demonstrated' stamp.
+const evidenceStatusFor = (row) => {
+  if ((row?.evidence || []).some((item) => item?.fromInterview)) return "confirmed";
+  if (row?.confirmationStatus === "basic") return "basic_exposure";
+  if ((row?.evidence || []).length) return "demonstrated";
+  return "related";
+};
+
 const skillSourceLabel = (item, type, index) => {
   if (type === "experience") return [item?.title, item?.company].filter(Boolean).join(" at ");
   if (type === "project") return item?.title || `Project ${index + 1}`;
@@ -470,6 +598,8 @@ const skillReviewGroups = ({
   projects,
   certifications = [],
   confirmationCandidates = [],
+  // draft.skillDeclines — requirements the user has explicitly said they've never done.
+  declinedSkills = [],
 }) => {
   const sources = { education, experience, project: projects };
   const bestSet = new Set((bestForRole || []).map((name) => String(name).toLowerCase()));
@@ -489,32 +619,51 @@ const skillReviewGroups = ({
       if (!key || seen.has(key)) return;
       seen.add(key);
       const detail = details.get(key) || {};
-      const evidence = (detail.evidence || []).map((item) => ({
-        ...item,
-        sourceLabel:
-          skillSourceLabel(sources[item.type]?.[item.refIndex], item.type, item.refIndex) ||
-          `${item.type} ${item.refIndex + 1}`,
-      }));
-      rows.push({
+      // Interview citations join the profile evidence as first-class sources, flagged so
+      // the UI (and evidenceStrength) can tell "you told me this" from "it's on your CV".
+      const evidence = [...(detail.evidence || []), ...(detail.interviewEvidence || [])].map(
+        (item) => ({
+          ...item,
+          sourceLabel:
+            skillSourceLabel(sources[item.type]?.[item.refIndex], item.type, item.refIndex) ||
+            `${item.type} ${item.refIndex + 1}`,
+        })
+      );
+      const requirementIds = [
+        ...new Set(
+          (detail.interviewEvidence || []).flatMap((item) =>
+            Array.isArray(item?.requirementIds) ? item.requirementIds : []
+          )
+        ),
+      ];
+      const row = {
         name: String(name).trim(),
         category: group.category || "Uncategorized",
         evidence,
         talkingPoint: detail.talkingPoint || "",
         explicitlyConfirmed: false,
-        evidenceStatus: "demonstrated",
+        ...(requirementIds.length ? { requirementIds } : {}),
         reason: evidence[0]?.snippet || "Demonstrated in your CV.",
         rank: groupIndex * 20 + skillIndex,
-      });
+      };
+      row.evidenceStatus = evidenceStatusFor(row);
+      row.evidenceStrength = evidenceStrength(row);
+      rows.push(row);
     });
   });
 
   const hasJobDescription = Boolean(String(targetJob || "").trim() || roleBrief?.role);
   if (!hasJobDescription) {
-    const coreCount = Math.min(8, Math.max(4, Math.ceil(rows.length * 0.55)));
+    // No job to rank against, so evidence strength IS the ranking — "core" means most
+    // strongly evidenced and most central, not "whatever the model listed first".
+    const byStrength = [...rows].sort(
+      (a, b) => b.evidenceStrength - a.evidenceStrength || a.rank - b.rank
+    );
+    const coreCount = Math.min(8, Math.max(4, Math.ceil(byStrength.length * 0.55)));
     return {
       mode: "profile",
-      core: rows.slice(0, coreCount),
-      additional: rows.slice(coreCount),
+      core: byStrength.slice(0, coreCount),
+      additional: byStrength.slice(coreCount),
       confirmation: (confirmationCandidates || []).map((candidate) => ({
         ...candidate,
         evidence: (candidate.evidence || []).map((item) => ({
@@ -530,11 +679,41 @@ const skillReviewGroups = ({
     };
   }
 
-  const important = rows.filter((row) => bestSet.has(row.name.toLowerCase()));
-  const additional = rows.filter((row) => !bestSet.has(row.name.toLowerCase()));
   const roleRequirements = Array.isArray(roleBrief?.requirements) ? roleBrief.requirements : [];
+  // Name/alias → requirement, so relevance can distinguish a must-have from a nice-to-have
+  // instead of treating every keyword match as equal.
+  const requirementByName = new Map();
+  roleRequirements.forEach((item) => {
+    if (!item?.name) return;
+    [item.name, ...(item.aliases || [])].forEach((alias) => {
+      const key = String(alias || "")
+        .trim()
+        .toLowerCase();
+      if (key && !requirementByName.has(key)) requirementByName.set(key, item);
+    });
+  });
+
+  // "Best for this role" now means strong on BOTH axes — the job wants it AND the
+  // candidate can actually show it — rather than "the name resembled a keyword".
+  rows.forEach((row) => {
+    row.jobRelevance = jobRelevance(row, bestSet, requirementByName);
+    row.matchScore = Math.round(0.6 * row.jobRelevance + 0.4 * row.evidenceStrength);
+  });
+  const byScore = (a, b) => b.matchScore - a.matchScore || a.rank - b.rank;
+
+  const important = rows.filter((row) => row.jobRelevance > 0).sort(byScore);
+  const additional = rows.filter((row) => row.jobRelevance === 0).sort(byScore);
   const certificationRequirements = roleRequirements.filter(
     (item) => item?.name && item?.type === "certification"
+  );
+  // Anything the user has explicitly told us they've never done. It stops being offered as
+  // something to confirm — being asked again about a "no" is the fastest way to feel
+  // unheard. It is NOT hidden from the gaps list: an honest gap is still worth knowing
+  // about, it just isn't a question any more.
+  const declined = new Set(
+    (declinedSkills || [])
+      .map((row) => String(typeof row === "string" ? row : row?.name || "").toLowerCase())
+      .filter(Boolean)
   );
   const typedRequirements = roleRequirements.filter(
     (item) =>
@@ -630,7 +809,10 @@ const skillReviewGroups = ({
               ]
             : [],
       };
-      if (source?.score > 0) confirmation.push(row);
+      // A declined requirement stays visible as an honest gap, but never as a question.
+      const wasDeclined = declined.has(requirement.name.toLowerCase());
+      if (wasDeclined) gaps.push({ ...row, evidenceStatus: "not_demonstrated", declined: true });
+      else if (source?.score > 0) confirmation.push(row);
       else gaps.push(row);
     });
 
@@ -683,6 +865,8 @@ const skillReviewGroups = ({
 
 const generateSkills = async (req, res) => {
   const { education, experience, projects, targetJob, draftId } = req.body;
+  // Lazily required, matching the rest of this controller (avoids a circular import).
+  const aiService = require("../services/ai.service");
 
   try {
     const user = await require("../models/User").findById(req.user.id);
@@ -710,6 +894,18 @@ const generateSkills = async (req, res) => {
       user,
     });
 
+    // What the user CONFIRMED in Aria's work-history interviews, re-keyed from the ledger
+    // (which is keyed by _sortId) into the SAME bracket-index space the skills prompt uses
+    // for experience/projects. Until now none of this reached skills generation at all:
+    // everything a user confirmed while building their CV was discarded before their skills
+    // were written.
+    const interviewEvidence = interviewEvidenceForSkills(draft, experience, projects);
+
+    // The gaps the scan already measured. Sourced SERVER-side from the persisted scan
+    // rather than trusted from the client — the Studio "fix skills" flow displayed these
+    // and then called a generator that had never heard of them.
+    const missingKeywords = scanMissingSkillKeywords(draft);
+
     // Hash of everything the generation depends on (whitespace/case-insensitive
     // on the JD so trivial edits don't bust the cache).
     const inputHash = require("crypto")
@@ -719,7 +915,12 @@ const generateSkills = async (req, res) => {
           // Bump when the extraction/category contract changes so stale layouts are not
           // served forever. Model is part of the identity because a user explicitly
           // choosing Claude must not receive a cached Standard-model result.
-          skillsGenSchema: 3,
+          //
+          // 4: skills became career-stage aware and now consume the interview ledger and
+          // the scan's missing keywords. WITHOUT these three in the hash, finishing an
+          // interview or changing career stage would serve the old ledger-blind result
+          // forever — the fix would look inert rather than wrong, which is worse.
+          skillsGenSchema: 4,
           modelId,
           education: education || [],
           experience: experience || [],
@@ -727,6 +928,9 @@ const generateSkills = async (req, res) => {
           certifications: draft?.certifications || [],
           targetJob: (targetJob || "").trim().toLowerCase().replace(/\s+/g, " "),
           briefHash: draft?.targetJob?.briefHash || "",
+          careerStage: aiService.resolveCareerStage({ stage: req.body?.stage, draft }),
+          interviewEvidence: interviewEvidence.map((item) => item.evidenceId).sort(),
+          missingKeywords: [...missingKeywords].sort(),
         })
       )
       .digest("hex");
@@ -750,6 +954,7 @@ const generateSkills = async (req, res) => {
             experience: experience || [],
             projects: projects || [],
             certifications: draft?.certifications || [],
+            declinedSkills: draft?.skillDeclines || [],
           }),
         isPaid,
         fromCache: true,
@@ -783,6 +988,9 @@ const generateSkills = async (req, res) => {
           ? draft.targetJob.brief.toObject()
           : draft?.targetJob?.brief || null,
         certifications: draft?.certifications || [],
+        interviewEvidence,
+        missingKeywords,
+        stage: aiService.resolveCareerStage({ stage: req.body?.stage, draft }),
         meta: {
           userId: req.user.id,
           operation: "generateSkills",
@@ -818,6 +1026,7 @@ const generateSkills = async (req, res) => {
       experience: experience || [],
       projects: projects || [],
       certifications: draft?.certifications || [],
+      declinedSkills: draft?.skillDeclines || [],
       confirmationCandidates,
     });
 

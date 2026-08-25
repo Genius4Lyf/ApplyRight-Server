@@ -379,9 +379,14 @@ describe("sectionScan.scanSections", () => {
         kind: "tenure",
         sections: ["experience", "summary"],
       });
+      // 'skills' is deliberately absent: Aria refuses to WRITE a soft skill into the
+      // skills list, so reporting one as a missing Skills keyword told the user to add
+      // something the product would not produce. Still fully satisfiable via the summary
+      // or a work-history bullet — where a recruiter believes it anyway, because it
+      // arrives attached to a real result.
       expect(classifyKeyword("Attention to detail")).toEqual({
         kind: "soft",
-        sections: ["summary", "experience", "skills"],
+        sections: ["summary", "experience"],
       });
       expect(classifyKeyword("Python")).toEqual({
         kind: "general",

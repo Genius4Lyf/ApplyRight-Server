@@ -27,7 +27,10 @@ const { dismissedSectionsOf } = require("../config/sections");
  * scan saved under older rules can be told apart from a fresh one (a section verdict is
  * only comparable to another computed the same way). Bump on every rules change.
  */
-const SCAN_RULES_VERSION = 3;
+// 4: soft-skill requirements no longer route to the Skills section (see CLASSIFICATION_RULES,
+// kind 'soft'). Persisted scans from version 3 still list soft terms as missing Skills
+// keywords, so they must read as stale rather than being silently compared against fresh ones.
+const SCAN_RULES_VERSION = 4;
 
 /**
  * Score → band. Mirrors the frontend's bandOf (src/lib/applicationInsights.js) so a
@@ -248,7 +251,17 @@ const CLASSIFICATION_RULES = [
   },
   {
     kind: "soft",
-    sections: ["summary", "experience", "skills"],
+    // 'skills' deliberately REMOVED. The product had one policy in three places and they
+    // contradicted each other: generateSkillsFromContext refuses to write a soft skill and
+    // the picker footnote tells the user they belong in bullets — while this rule reported
+    // "communication" as a keyword MISSING FROM YOUR SKILLS SECTION. Telling someone to add
+    // something Aria will not write is the kind of small incoherence that teaches people to
+    // distrust the rest of the read.
+    //
+    // A soft requirement is still fully satisfiable — via the summary or a work-history
+    // bullet, which is where a recruiter believes it anyway, because it comes attached to a
+    // real result.
+    sections: ["summary", "experience"],
     test: (lower) => {
       const flat = flatten(lower);
       return SOFT_TERMS.some((term) => containsPhrase(flat, term));

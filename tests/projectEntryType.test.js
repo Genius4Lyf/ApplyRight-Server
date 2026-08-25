@@ -136,8 +136,11 @@ describe("coachChatTurn — a PROJECT turn is framed by its type", () => {
     // The type is stated as KNOWN, with an explicit instruction not to ask for it.
     expect(system).toContain("PROJECT TYPE: course");
     expect(system).toMatch(/do NOT ask the user what kind of project it is/i);
-    // The project framing it must steer by is the one already in this branch.
-    expect(system).toContain("Course/academic → emphasize skills demonstrated");
+    // The type now selects a whole SEQUENCE, not just an emphasis. The three types are
+    // different kinds of evidence — coursework was set rather than chosen and assessed
+    // rather than used — so they get different questions in a different order.
+    expect(system).toContain("COURSE / ACADEMIC");
+    expect(system).toMatch(/Run the course sequence above/i);
     // And it must NOT reach for the experience wording.
     expect(system).not.toContain(EXPERIENCE_FRAMING);
   });

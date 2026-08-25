@@ -52,6 +52,65 @@ describe("career-stage resolution (resolveCareerStage)", () => {
     );
     expect(resolveCareerStage()).toBe("grad");
   });
+
+  // Several callers legitimately have no `stage` to send (askAria, projectIdeas, every
+  // interview-prep entry point). Before this, they fell straight through to the CV-shape
+  // guess and silently discarded what the user actually picked — which is why a career
+  // changer could never be interviewed as one.
+  it("uses the stage PERSISTED on the draft when the caller sends none", () => {
+    expect(
+      resolveCareerStage({ draft: { careerStage: "changer", experience: [{ title: "Teacher" }] } })
+    ).toBe("changer");
+    expect(
+      resolveCareerStage({ draft: { careerStage: "grad", experience: [{ title: "Barista" }] } })
+    ).toBe("grad");
+  });
+
+  it("prefers an explicit this-turn stage over the persisted one", () => {
+    expect(resolveCareerStage({ stage: "experienced", draft: { careerStage: "grad" } })).toBe(
+      "experienced"
+    );
+  });
+
+  it("ignores a garbage persisted value and falls through to inference", () => {
+    expect(
+      resolveCareerStage({ draft: { careerStage: "wat", experience: [{ title: "Nurse" }] } })
+    ).toBe("experienced");
+    expect(resolveCareerStage({ draft: { careerStage: null, projects: [{ title: "Capstone" }] } }))
+      .toBe("grad");
+  });
+});
+
+// Lives here, NOT in interviewArchetypes.test.js: that suite asserts the archetype
+// module stays engine-agnostic by checking ai.service is absent from require.cache,
+// and requiring ai.service there would defeat it. The dependency is one-directional,
+// so exercising the pair from this side is safe.
+describe("career changers actually reach the changer evidence base", () => {
+  // Regression guard for a real production defect: every interview-prep entry point
+  // called inferCareerStage directly, and inference CANNOT return 'changer' (a pivot is
+  // not readable off CV shape). So the changer evidence base — written, exported and
+  // tested — was unreachable in production, and every career changer was interviewed as
+  // 'experienced'. Prep now resolves the stage, which honours the persisted pick.
+  const archetypes = require("../src/services/interviewArchetypes.service");
+  const draft = { careerStage: "changer", experience: [{ title: "Secondary School Teacher" }] };
+
+  it("resolves a persisted 'changer' pick into the changer archetype", () => {
+    const stage = resolveCareerStage({ draft });
+    expect(stage).toBe("changer");
+
+    const archetype = archetypes.selectArchetype({ role: "HR Business Partner", stage });
+    expect(archetype.stage).toBe("changer");
+    expect(archetype.evidenceBase).toMatch(/changing fields/i);
+    expect(archetype.evidenceBase).toMatch(/transferable/i);
+  });
+
+  it("documents what the old inference-only path did, so a revert fails loudly", () => {
+    expect(inferCareerStage(draft)).toBe("experienced");
+    expect(
+      archetypes.selectArchetype({ role: "HR Business Partner", stage: inferCareerStage(draft) })
+        .stage
+    ).toBe("experienced");
+  });
 });
 
 describe("experience coaching block — shared core rule (every stage)", () => {

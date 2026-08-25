@@ -319,7 +319,7 @@ exports.getOne = async (req, res) => {
     const { applicationId: id } = req.params;
     // Lazily required, matching the rest of this controller (avoids a circular
     // import at module load).
-    const { inferCareerStage } = require("../services/ai.service");
+    const { resolveCareerStage } = require("../services/ai.service");
 
     const application = await Application.findById(id)
       .populate("jobId", "title company description")
@@ -333,11 +333,13 @@ exports.getOne = async (req, res) => {
         ? prep.skillsWithEvidence
         : [];
       // Also used for the pre-call brief's career stage, so fetch experience with
-      // the skills rather than adding a second read.
+      // the skills rather than adding a second read. careerStage MUST be projected:
+      // without it resolveCareerStage sees undefined and silently falls back to the
+      // CV-shape guess, which can never return 'changer'.
       let linkedDraft = null;
       if (application.draftCVId) {
         linkedDraft = await DraftCV.findById(application.draftCVId)
-          .select("skills experience")
+          .select("skills experience careerStage")
           .lean();
       }
       if (skillsWithEvidence.length === 0 && linkedDraft) {
@@ -351,9 +353,10 @@ exports.getOne = async (req, res) => {
           // all interviewers unlocked.
           unlockAllInterviewers: !!req.user.unlockAllInterviewers,
           // Career stage for the pre-call brief's "what counts as evidence" section.
-          // Reuses the SAME inference the CV coach uses (any real job → experienced,
-          // else grad) so the two can't drift. No AI call — it's CV shape only.
-          careerStage: inferCareerStage(linkedDraft),
+          // Reuses the SAME resolution the CV coach uses (the user's persisted pick
+          // first, else CV shape) so the two can't drift, and so a career changer is
+          // interviewed as one — inference alone can never return 'changer'. No AI call.
+          careerStage: resolveCareerStage({ draft: linkedDraft }),
           // Which archetype this role selects, so the pre-call brief can say what
           // kind of interview it will be instead of guessing from the style
           // picker. Deterministic lookup, no AI call. Null (omitted) for an
@@ -361,7 +364,7 @@ exports.getOne = async (req, res) => {
           archetype:
             require("../services/interviewArchetypes.service").selectArchetype({
               role: prep.panel?.seats?.[0]?.role || application.jobTitle || application.jobId?.title || "",
-              stage: inferCareerStage(linkedDraft),
+              stage: resolveCareerStage({ draft: linkedDraft }),
             })?.key || "",
           interviewPrep: {
             ...prep,
@@ -389,7 +392,7 @@ exports.getOne = async (req, res) => {
       jobCompany: "",
       draftCVId: draft._id,
       unlockAllInterviewers: !!req.user.unlockAllInterviewers,
-      careerStage: inferCareerStage(draft),
+      careerStage: resolveCareerStage({ draft }),
       interviewPrep: { ...prep, skillsWithEvidence, userNotes: normalizeNotes(prep.userNotes) },
     };
     return res.json({ application: draftAsApplication });
@@ -1329,7 +1332,7 @@ const panelInputsFromApplication = (application) => {
  */
 const selectArchetypeFor = async (application, roleOverride = "") => {
   const archetypes = require("../services/interviewArchetypes.service");
-  const { inferCareerStage } = require("../services/ai.service");
+  const { resolveCareerStage } = require("../services/ai.service");
   const role =
     roleOverride ||
     application.jobTitle ||
@@ -1337,8 +1340,12 @@ const selectArchetypeFor = async (application, roleOverride = "") => {
     "";
   let stage = "experienced";
   if (application.draftCVId) {
-    const d = await DraftCV.findById(application.draftCVId).select("experience").lean();
-    stage = inferCareerStage(d);
+    // careerStage MUST be projected alongside experience — resolveCareerStage prefers
+    // the user's persisted pick, and 'changer' is reachable ONLY that way.
+    const d = await DraftCV.findById(application.draftCVId)
+      .select("experience careerStage")
+      .lean();
+    stage = resolveCareerStage({ draft: d });
   }
   return archetypes.selectArchetype({ role, stage });
 };

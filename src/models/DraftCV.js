@@ -103,6 +103,21 @@ const draftCVSchema = new mongoose.Schema(
         ],
       },
       briefHash: String,
+      // The NO-job-description path. "Not yet — build a strong all-rounder" used to be a
+      // chat line with no state behind it, so nothing downstream could honour the answer.
+      // Lives on targetJob (not top-level) because every "is there a target?" reader
+      // already looks here, and the moment a real JD arrives resolveDraftBrief wins and
+      // this becomes history.
+      //
+      // `keywords` are INFERRED FROM A TITLE (inferRoleKeywords) — deliberately id-less,
+      // so they can never be cited as requirements the way brief.requirements can.
+      noJd: {
+        declined: { type: Boolean, default: false },
+        declinedAt: Date,
+        roleFamily: String,
+        keywords: [{ name: String, importance: String }],
+        keywordsHash: String,
+      },
     },
     // Cached "Auto-fill skills" generation. Keyed by a hash of the inputs the
     // generation depends on (education + experience + projects + target job), so
@@ -200,14 +215,25 @@ const draftCVSchema = new mongoose.Schema(
         // (or DraftCV.interviewPrep when no application is linked yet).
         evidence: [
           {
-            type: { type: String }, // 'experience' | 'education' | 'project'
+            // 'experience' | 'education' | 'project', or 'user_confirmed' when the user
+            // themselves vouched for it (the job-keyword honesty check). No enum, so the
+            // client-written kind needs no migration.
+            type: { type: String },
             refIndex: Number,
             snippet: String,
+            // Set when the support came from Aria's work-history interview: the user's own
+            // words, server-verified against a real turn. Persisted rather than derived so
+            // the provenance survives a reload — Mongoose would otherwise strip both.
+            sourceQuote: String,
+            fromInterview: Boolean,
           },
         ],
         talkingPoint: String,
         explicitlyConfirmed: { type: Boolean, default: false },
-        confirmationStatus: String, // direct|basic; encountered/no are never added
+        // A rung of the honesty ladder: 'direct' (uses it) | 'basic' (basic use).
+        // 'encountered'/'no' are never added at all. Read by the skills ranker
+        // (evidenceStrength) — for a long time this was written and read by nothing.
+        confirmationStatus: String,
       },
     ],
     // Interview Prep saved against this CV when the user has no linked job
@@ -457,6 +483,43 @@ const draftCVSchema = new mongoose.Schema(
     // _sortId. Kept outside experience/projects so a later narrow list autosave cannot
     // accidentally erase the server-verified interview record.
     coachEvidence: { type: mongoose.Schema.Types.Mixed, default: {} },
+    // The CROSS-HISTORY HUNT. When the employer wants something the CV hasn't shown, Aria
+    // looks for it across the user's WHOLE history (other jobs, school, volunteering,
+    // projects, training) before recording it as a gap — because people routinely forget
+    // where they've done something.
+    //
+    // `askedIn` is what stops the hunt becoming nagging: a requirement is never re-asked
+    // in a context it has already been asked about.
+    requirementProbes: [
+      {
+        requirementId: String,
+        name: String,
+        status: { type: String, default: "open" }, // open|confirmed|declined|deferred
+        // A rung of the honesty ladder — regular|basic|coursework|encountered|never.
+        // Only the first three may put anything on the CV, and 'coursework' is labelled.
+        level: { type: String, default: null },
+        contextSortId: { type: String, default: null }, // WHERE they said they did it
+        contextKind: { type: String, default: null }, // experience|project|education|training|volunteering|personal
+        evidenceId: { type: String, default: null }, // links into coachEvidence
+        askedIn: [String], // sortIds already asked — never re-ask in the same place
+        askedAt: Date,
+        answeredAt: Date,
+      },
+    ],
+    // A clear "no", recorded once and honoured EVERYWHERE. This is the single mechanism
+    // behind "she doesn't keep asking after you've said no" — read by the interview's
+    // requirement ranking, the forced JD probe, the skills review groups, and every hunt
+    // entry point. Deliberately separate from requirementProbes so a decline survives even
+    // if the probe row is later rebuilt.
+    skillDeclines: [
+      {
+        requirementId: String,
+        name: String,
+        level: String, // encountered|never
+        source: String, // interview|skills_card|keyword_panel
+        at: { type: Date, default: Date.now },
+      },
+    ],
     // The language this CV DOCUMENT is written in — distinct from the user's
     // interface language (User.interfaceLang). Aria can coach in English while
     // writing a French CV; that split is the point.

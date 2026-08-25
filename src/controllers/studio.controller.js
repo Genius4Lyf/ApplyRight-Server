@@ -956,6 +956,9 @@ const rewriteRole = async (req, res) => {
         role: entry.jobTitle || entry.title || entry.name || "",
         section,
         missingKeywords: scopedMissingKeywords(draft, section),
+        // Bounds what a "sharpened" bullet may claim: promoting "helped with" to "led"
+        // is a legitimate sharpen for a manager and an invented promotion for a student.
+        stage: aiService.resolveCareerStage({ stage: req.body?.stage, draft }),
         meta: { ...meta, modelId },
       });
     } catch (genError) {
