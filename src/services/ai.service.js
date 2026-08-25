@@ -3728,7 +3728,7 @@ const generateBulletsFromDescription = async (description, count, options = {}) 
   const model = options.model || MODEL; // tier-based (resolveTextModel)
   const brief = options.brief || null;
   const role = options.role || "this role";
-  const n = Math.max(1, Math.min(6, parseInt(count, 10) || 1));
+  const n = Math.max(1, Math.min(8, parseInt(count, 10) || 1));
   const desc = String(description || "").trim();
   const evidence = Array.isArray(options.evidenceLedger?.evidence)
     ? options.evidenceLedger.evidence
@@ -3755,49 +3755,92 @@ const generateBulletsFromDescription = async (description, count, options = {}) 
   const system =
     "You are an expert resume writer and ATS optimization specialist. From the facts the user describes, write strong, truthful, ATS-parseable bullets. PRIME DIRECTIVE: use ONLY facts present in the description and verified evidence — NEVER invent a number, tool, certification, scope, outcome, client, or company-specific term. Never add [X] placeholders; when no metric was provided, write a strong qualitative bullet. The target job changes emphasis and truthful vocabulary only; it is never evidence. Lead each bullet with a strong action verb. Output STRICT JSON.";
 
-  const user = `ROLE: "${role}"
+  // One generation pass for `want` bullets. `avoidTexts`, when given, are already-accepted
+  // bullets from a prior pass — passed back to the model so a backfill retry covers a
+  // different facet instead of re-writing what was already produced.
+  const runGeneration = async (want, avoidTexts, operation) => {
+    const avoidBlock = avoidTexts?.length
+      ? `\nALREADY WRITTEN (do not repeat these — cover a different facet):\n${avoidTexts
+          .map((t) => `- ${t}`)
+          .join("\n")}\n`
+      : "";
+
+    const user = `ROLE: "${role}"
 
 ${contextBlock}WHAT THE USER DID (their words):
 ${desc}
 
 ${evidenceBlock}
-
-Write EXACTLY ${n} distinct bullets, each a different facet of this work (no repeats).
+${avoidBlock}
+Write EXACTLY ${want} distinct bullets, each a different facet of this work (no repeats).
 For every bullet, cite the VERIFIED EVIDENCE ids that support it. Cite a target requirement id only when the cited user evidence genuinely demonstrates it. A JD requirement on its own is never support.
 
-OUTPUT STRICT JSON: { "bullets": [{ "text": "<bullet>", "evidenceIds": ["ev_..."], "requirementIds": ["req_..."] }] } with exactly ${n} items.`;
+OUTPUT STRICT JSON: { "bullets": [{ "text": "<bullet>", "evidenceIds": ["ev_..."], "requirementIds": ["req_..."] }] } with exactly ${want} items.`;
 
-  const data = await callJSON({
-    system,
-    user,
-    temperature: 0.4,
-    // Sonnet 5 otherwise enables adaptive thinking by default, and thinking shares
-    // max_tokens with the visible response. Bullet writing is a short structured-output
-    // task, so disable thinking and leave enough room for six bullets plus citations.
-    disableThinking: true,
-    maxTokens: 4096,
-    meta: { ...(options.meta || {}), model, operation: "coachGenerateBullets" },
-  });
+    const data = await callJSON({
+      system,
+      user,
+      temperature: 0.4,
+      // Sonnet 5 otherwise enables adaptive thinking by default, and thinking shares
+      // max_tokens with the visible response. Bullet writing is a short structured-output
+      // task, so disable thinking and leave enough room for EIGHT bullets plus citations
+      // (the picker's ceiling). Eight bullets of JSON run ~1k tokens, so this is several
+      // times the real need — headroom is free here, since max_tokens caps generation
+      // rather than reserving spend, and truncated JSON is a hard failure.
+      disableThinking: true,
+      maxTokens: 4096,
+      meta: { ...(options.meta || {}), model, operation },
+    });
 
-  const out = Array.isArray(data?.bullets) ? data.bullets : [];
-  const details = out
-    .map((item) => {
-      const text = String(typeof item === "string" ? item : item?.text || "")
-        .replace(/^[•\-*\s]+/, "")
-        .trim();
-      if (!text) return null;
-      return {
-        text,
-        evidenceIds: (Array.isArray(item?.evidenceIds) ? item.evidenceIds : []).filter((id) =>
-          validEvidenceIds.has(id)
-        ),
-        requirementIds: (Array.isArray(item?.requirementIds) ? item.requirementIds : []).filter(
-          (id) => validRequirementIds.has(id)
-        ),
-      };
-    })
-    .filter(Boolean)
-    .slice(0, n);
+    const out = Array.isArray(data?.bullets) ? data.bullets : [];
+    return out
+      .map((item) => {
+        const text = String(typeof item === "string" ? item : item?.text || "")
+          .replace(/^[•\-*\s]+/, "")
+          .trim();
+        if (!text) return null;
+        return {
+          text,
+          evidenceIds: (Array.isArray(item?.evidenceIds) ? item.evidenceIds : []).filter((id) =>
+            validEvidenceIds.has(id)
+          ),
+          requirementIds: (Array.isArray(item?.requirementIds) ? item.requirementIds : []).filter(
+            (id) => validRequirementIds.has(id)
+          ),
+        };
+      })
+      .filter(Boolean);
+  };
+
+  // Once a verified ledger exists, an uncited bullet is rejected before it ever reaches
+  // the user — traceability is a backend invariant, not a UI promise. That can leave the
+  // model short of `n`, so one bounded backfill pass tops it back up before we give up and
+  // return (and, upstream, charge for) fewer than requested.
+  const enforceCitations = evidence.length > 0;
+  let details = await runGeneration(n, null, "coachGenerateBullets");
+  if (enforceCitations) {
+    details = details.filter((item) => item.evidenceIds.length);
+  }
+  details = details.slice(0, n);
+
+  if (enforceCitations && details.length < n) {
+    const shortfall = n - details.length;
+    let backfill = await runGeneration(
+      shortfall,
+      details.map((item) => item.text),
+      "coachGenerateBulletsBackfill"
+    );
+    backfill = backfill.filter((item) => item.evidenceIds.length);
+    const seen = new Set(details.map((item) => item.text.toLowerCase()));
+    for (const item of backfill) {
+      if (details.length >= n) break;
+      const key = item.text.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      details.push(item);
+    }
+  }
+
   return options.returnDetails ? details : details.map((item) => item.text);
 };
 
@@ -4334,7 +4377,12 @@ Return STRICT JSON ONLY: { "summary": "<the summary paragraph>" }`;
     system,
     user,
     temperature: 0.5,
-    maxTokens: 300,
+    // Sonnet 5 otherwise enables adaptive thinking by default, and thinking shares
+    // max_tokens with the visible response — a summary is one short JSON string, so
+    // disable thinking rather than trying to out-guess its reasoning-token appetite
+    // with a bigger cap (see generateBulletsFromDescription for the same fix).
+    disableThinking: true,
+    maxTokens: 800,
     meta: { ...meta, model: model || MODEL, operation: meta.operation || "coachSummary" },
   });
 

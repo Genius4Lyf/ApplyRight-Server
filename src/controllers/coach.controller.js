@@ -473,8 +473,8 @@ const generateBullets = async (req, res) => {
       .json({ message: "draftId, section ('experience'|'project') and sortId are required" });
   }
   const n = parseInt(count, 10);
-  if (!Number.isInteger(n) || n < 1 || n > 6) {
-    return res.status(400).json({ message: "count must be an integer between 1 and 6" });
+  if (!Number.isInteger(n) || n < 1 || n > 8) {
+    return res.status(400).json({ message: "count must be an integer between 1 and 8" });
   }
   const desc = String(description || "").trim();
   if (desc.length < 15) {
@@ -540,7 +540,9 @@ const generateBullets = async (req, res) => {
       draft,
       user,
     });
-    const cost = n * perBullet;
+    // Worst-case cost, for the balance pre-check only — the ACTUAL charge is computed
+    // after generation from however many bullets are really delivered (see below).
+    const maxCost = n * perBullet;
 
     // The first re-roll of an IDENTICAL request (same section+sortId+description+count)
     // is free — a charged generation re-grants exactly one; using it flips the flag.
@@ -554,11 +556,11 @@ const generateBullets = async (req, res) => {
 
     // PRE-CHECK the balance before spending an AI call the user can't pay for
     // (paid tiers pass via their allowance — availableCredits includes it).
-    if (!isFreeReroll && subscription.availableCredits(user) < cost) {
+    if (!isFreeReroll && subscription.availableCredits(user) < maxCost) {
       return res.status(403).json({
         code: "INSUFFICIENT_CREDITS",
         message: "Insufficient credits",
-        required: cost,
+        required: maxCost,
         remainingCredits: subscription.availableCredits(user),
       });
     }
@@ -583,14 +585,14 @@ const generateBullets = async (req, res) => {
       console.error("Coach generateBullets AI error:", genErr.message);
       return res.status(502).json({ message: "Couldn't generate right now. Please try again." });
     }
-    // Once a verified ledger exists, an uncited output is rejected before charging.
-    // This makes traceability a backend invariant rather than a UI promise.
-    if (evidenceLedger?.evidence?.length) {
-      bulletDetails = (bulletDetails || []).filter((item) => item.evidenceIds?.length);
-    }
+    // Citation enforcement + a bounded backfill retry already ran inside
+    // generateBulletsFromDescription, so whatever comes back here is ledger-clean. Charge
+    // for what was ACTUALLY delivered, not what was requested — a thin description can
+    // legitimately fall short of `n` well-cited bullets, and that's honest, not an error.
     if (!Array.isArray(bulletDetails) || bulletDetails.length === 0) {
       return res.status(502).json({ message: "Couldn't generate right now. Please try again." });
     }
+    const cost = bulletDetails.length * perBullet;
     const evidenceById = new Map((evidenceLedger?.evidence || []).map((item) => [item.id, item]));
     const requirementById = new Map((brief?.requirements || []).map((item) => [item.id, item]));
     const safeDetails = bulletDetails.map((item) => ({
@@ -617,7 +619,7 @@ const generateBullets = async (req, res) => {
       // FLAGSHIP always meters, even for paid subscribers.
       const charge = await modelSelection.chargeForModel(user, cost, tier, {
         type: TRANSACTION_TYPES.GENERATE_BULLET,
-        description: `Aria bullets (${n})`,
+        description: `Aria bullets (${bulletDetails.length})`,
       });
       if (charge.insufficient) {
         return res.status(402).json({
