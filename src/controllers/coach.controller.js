@@ -285,6 +285,46 @@ const buildHuntProbe = (draft, brief, requirementId) => {
   };
 };
 
+// When an entry interview closes, which of ITS unproven requirements are worth taking
+// to the rest of the CV?
+//
+// Server-owned deliberately. `skillDeclines` is the one mechanism enforcing "never ask
+// again after a clear no" across every surface, and a client that re-derived this list
+// would be the way a declined skill comes back. The client is told WHAT to offer; it is
+// never trusted to work out what may be asked.
+//
+// A requirement qualifies only when all three hold: this interview genuinely could not
+// prove it HERE, it has never been hunted CV-wide before, and buildHuntProbe will
+// actually open it (which is where the decline check lives). Capped low on purpose —
+// the point is one useful offer at the end of a role, not a checklist to grind through.
+const huntOffersForEntry = (draft, brief, requirementChecks = [], cap = 2) => {
+  const unproven = (Array.isArray(requirementChecks) ? requirementChecks : []).filter(
+    (row) => row?.requirementId && row?.status === "not_demonstrated"
+  );
+  if (!unproven.length) return [];
+
+  const alreadyHunted = new Set(
+    (Array.isArray(draft?.requirementProbes) ? draft.requirementProbes : [])
+      .map((row) => String(row?.requirementId || ""))
+      .filter(Boolean)
+  );
+
+  const offers = [];
+  for (const row of unproven) {
+    const requirementId = String(row.requirementId);
+    if (alreadyHunted.has(requirementId)) continue;
+    const probe = buildHuntProbe(draft, brief, requirementId);
+    if (!probe) continue;
+    // With only the entry we just interviewed to look at, a "hunt" would re-ask the
+    // question the user has just answered. Two contexts is the minimum for it to mean
+    // anything.
+    if (probe.contexts.length < 2) continue;
+    offers.push({ requirementId: probe.requirementId, name: probe.name });
+    if (offers.length >= cap) break;
+  }
+  return offers;
+};
+
 // Verify what the model reported before ANY of it is written down.
 //
 // The rules are the ones that already protect the build interview, reused deliberately:
@@ -1499,6 +1539,9 @@ const chat = async (req, res) => {
     }
 
     let evidenceLedger = null;
+    // Requirements this entry could not prove that are worth taking CV-wide. Filled only
+    // when the interview closes; [] on every other turn.
+    let huntOffers = [];
     // ── The hunt's answer ────────────────────────────────────────────────────
     // Verified, then written. A rung the user reached is never trusted on the model's
     // say-so: 'regular'/'basic'/'coursework' need their own words, naming the thing.
@@ -1610,6 +1653,9 @@ const chat = async (req, res) => {
       draft.coachEvidence = { ...current, [focus.sortId]: evidenceLedger };
       if (typeof draft.markModified === "function") draft.markModified("coachEvidence");
       if (typeof draft.save === "function") await draft.save();
+      // Computed AFTER the save so `requirementProbes` is current — a hunt run earlier in
+      // this same session must not be offered a second time.
+      huntOffers = huntOffersForEntry(draft, brief, requirementChecks);
     }
 
     return res.json({
@@ -1621,6 +1667,9 @@ const chat = async (req, res) => {
       // The hunt's verified outcome: which rung, whether it was accepted, and where the
       // evidence was filed. null on an ordinary turn, or while the user hasn't answered.
       probeResult: probeOutcome,
+      // Requirements this entry could not prove that are worth looking for elsewhere in
+      // the CV. Empty except on the turn an entry interview closes.
+      huntOffers,
       // Answer scaffolds — only while building (Aria just asked a follow-up).
       suggestions: intent === "building" ? result.suggestions || [] : [],
       exampleAnswer: intent === "building" ? result.exampleAnswer || "" : "",
@@ -1822,6 +1871,7 @@ module.exports = {
   declinedRequirementKeys,
   huntContextsForDraft,
   buildHuntProbe,
+  huntOffersForEntry,
   verifyProbeResult,
   selectRequiredRequirementProbe,
   verifiedInterviewEvidence,
