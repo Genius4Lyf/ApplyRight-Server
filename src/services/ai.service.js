@@ -3352,257 +3352,7 @@ Return JSON matching exactly:
   });
 };
 
-const generateBulletPoints = async (
-  role,
-  context,
-  type = "experience",
-  targetJob = "",
-  options = {}
-) => {
-  const model = options.model || MODEL; // tier-based (resolveTextModel)
-  if (activeProvider === "mock") {
-    return ["Developed a feature using React.", "Optimized backend performance."];
-  }
-
-  // ApplyRight ATS mode (paid): same plumbing as the generic generator below,
-  // but a job-keyword-targeted, truth-locked prompt and a larger count.
-  const atsMode = type === "experience" && options.mode === "ats";
-  const atsCount = Math.max(1, Math.min(20, options.count || 10));
-  const atsKeywords = Array.isArray(options.keywords) ? options.keywords : [];
-
-  // Customize prompt based on type
-  let prompt = "";
-
-  if (type === "summary") {
-    prompt = `
-        You are an expert Resume Writer.
-        Write a powerful, professional summary for a CV (Resume) based on the candidate's background.
-
-        INPUT DATA:
-        Role/Title: ${role}
-        Details: ${context}
-
-        INSTRUCTIONS:
-        1. Write a SINGLE, cohesive paragraph (3-4 sentences max).
-        2. Do NOT use bullet points.
-        3. Base the summary ENTIRELY on the candidate's own CV — their Work History, Key Skills, and any existing summary draft. Do NOT pull in or align with any target job description; never invent skills, titles, or achievements to match a role.
-        4. Structure:
-           - Start with a strong professional identity. IMPORTANT: Use the candidate's *actual* recent job title from their Work History (e.g. "Experienced Wireline Operator"). Do NOT "upgrade" titles (e.g. do not change "Operator" to "Engineer") unless the evidence is explicit.
-           - Mention key achievements and industries found in the "Work History Summary".
-           - weave in the "Key Skills" naturally.
-        5. Tone: Professional, confident, and factual.
-        6. AVOID generic fluff like "hard worker" or "team player". Focus on tangible value.
-        
-        Output STRICT JSON:
-        {
-            "suggestions": ["<The entire summary paragraph string>"]
-        }
-        `;
-  } else if (type === "project") {
-    const projectTitle = role || "Project";
-    prompt = `
-You are an expert Resume Writer.
-
-Rewrite a PROJECT's bullets into 10 strong, varied, ATS-optimized OPTIONS the candidate can pick from. Accuracy and factual integrity matter more than sounding impressive.
-
-INPUT:
-Project Title: "${projectTitle}"
-Project Context / Existing Notes: "${context}"
-
-RULES:
-1. Preserve facts. Do NOT add new tools, metrics, users, business outcomes, or claims not in the input.
-2. If metrics are not provided, use qualitative impact without numbers — do NOT invent figures.
-3. Keep scope at project level; avoid company-wide or organizational claims.
-4. Prefer action verbs and technical specificity only when provided.
-5. If the context is thin, keep bullets general and credible rather than speculative.
-6. Ignore any target job description completely.
-7. Provide exactly 10 DISTINCT options covering different angles (goal/problem, implementation/approach, technologies used, outcome/impact, collaboration, lessons) and varied phrasings, so the candidate can choose the best few.
-
-OUTPUT STRICT JSON ONLY (exactly 10 items):
-{
-  "suggestions": [${Array.from({ length: 10 }, (_, i) => `"Option ${i + 1}"`).join(", ")}]
-}
-`;
-  } else if (atsMode) {
-    // ── APPLYRIGHT ATS SUGGESTIONS (paid) ──
-    // The premium tier. Reframes the candidate's REAL experience in the target
-    // job's vocabulary. Truth is non-negotiable: keywords are used only where the
-    // candidate genuinely matches them — never to fabricate skills or metrics.
-    const mustHave = atsKeywords
-      .filter((k) => k && k.importance === "must_have")
-      .map((k) => k.name)
-      .filter(Boolean);
-    const niceToHave = atsKeywords
-      .filter((k) => k && k.importance !== "must_have")
-      .map((k) => k.name)
-      .filter(Boolean);
-
-    prompt = `
-You are an expert Resume Writer, Technical Recruiter, and ATS optimization specialist.
-
-Generate ${atsCount} ATS-optimized bullet points for ONE work-history role. These must be the strongest, most interview-defensible bullets possible — but they MUST stay 100% truthful to the candidate's real experience.
-
-INPUT:
-Job Title: "${role}"
-Candidate's real experience / context: "${context}"
-
-TARGET JOB KEYWORDS (from the job the candidate is applying to):
-MUST-HAVE: ${mustHave.length ? mustHave.join(", ") : "none provided"}
-NICE-TO-HAVE: ${niceToHave.length ? niceToHave.join(", ") : "none provided"}
-
-HOW TO USE THE KEYWORDS (CRITICAL — this is the whole value of this feature):
-1. TRUTH FIRST. Do NOT inject a keyword unless the candidate's real experience genuinely involves it. A missing keyword is fine — never lie to cover a gap.
-2. REFRAME, don't fabricate. Where the candidate's real work matches a keyword's MEANING but uses different words, rewrite it using the recruiter's exact terminology (e.g. "handled customer issues" -> "stakeholder management"; "fixed machines" -> "preventive maintenance"). This mirroring is the core deliverable.
-3. Lead every bullet with a strong, role-appropriate action verb.
-4. QUANTIFY with fill-in placeholders — never invented numbers:
-   - If the context contains or clearly implies a real number, use that real number.
-   - Otherwise, where a metric would be natural for THIS role/bullet, write a clearly-marked fill-in placeholder token for the candidate to replace: use square brackets like [X]%, [N] users, [$X], [N]-person team, [from A to B], [X] hrs/week.
-   - NEVER write a specific invented figure (e.g. "38%", "12K users", "4s to 280ms"). A placeholder like [X]% is good; a fake concrete number is forbidden.
-   - Do NOT force a metric onto every bullet. Only add a placeholder where a number is genuinely plausible for this role. Roles with few natural metrics (e.g. junior/operational) get mostly volume-style placeholders or honest qualitative impact, not forced percentages.
-   - Aim for placeholders on roughly the bullets where impact is measurable; leave the rest qualitative. Never fabricate tools, certifications, scope, or achievements.
-5. Match the authority level implied by the title (execution vs specialist vs ownership). Do not inflate authority.
-6. Keep every bullet ATS-parseable: plain text, no tables, no special characters/symbols (square-bracket placeholders are allowed), one idea per bullet, ~1-2 lines.
-7. Prioritize covering MUST-HAVE keywords (where truthful) over nice-to-haves. Vary the ${atsCount} bullets across core responsibilities, collaboration, problem-solving, tools/technology, and measurable outcomes.
-
-EXAMPLE (format only — adapt to the real role/context; the bracketed tokens are placeholders the candidate fills in):
-- "Reduced average ticket resolution time by [X]% by introducing a triage workflow across a [N]-person support team."
-- "Migrated [N] services to a new platform, cutting deploy time from [A] to [B]."
-
-OUTPUT STRICT JSON ONLY:
-{
-  "suggestions": [${Array.from({ length: atsCount }, (_, i) => `"Bullet ${i + 1} text..."`).join(", ")}]
-}
-`;
-  } else {
-    // IMPROVED PROMPT FOR WORK HISTORY BULLETS
-    // User Requirement: "It shouldn't look at the Target Job Description... it should look at the company and what the role is for the company"
-    prompt = `
-You are an expert Resume Writer and Recruiter.
-
-Your task is to generate 6 realistic, ATS-optimized bullet points for a specific work history role.
-Accuracy and role realism are more important than sounding impressive. Imagine you are chatting with a user to uncover real, grounded achievements—avoid overly exaggerated claims ("too much") and generic fluff ("too little").
-
-INPUT:
-Job Title: "${role}"
-Context / Company Information: "${context}"
-
-MANDATORY REASONING STEPS (DO NOT SKIP):
-
-STEP 1: Infer Industry & Function
-- Infer the industry from the company name or context.
-- Infer the functional role from the job title.
-- Example: "Field Operator" ≠ "Field Engineer" ≠ "Manager"
-
-STEP 2: Determine Role Authority Level
-Classify the role into ONE category:
-
-• EXECUTION-LEVEL
-  (Operator, Technician, Assistant, Intern, Junior roles)
-  - Executes tasks
-  - Follows defined procedures
-  - Supports delivery
-
-• SPECIALIST-LEVEL
-  (Engineer, Analyst, Developer, Designer, Accountant)
-  - Applies expertise
-  - Solves defined technical problems
-  - Improves local workflows (not company-wide)
-
-• OWNERSHIP-LEVEL
-  (Senior, Lead, Principal, Manager, Head)
-  - Owns systems or outcomes
-  - Defines processes
-  - Drives measurable business impact
-
-STEP 3: Enforce Role Scope (CRITICAL)
-- Bullet points MUST stay within the authority of the classified level.
-- DO NOT assign:
-  - Strategic ownership
-  - System or process design
-  - Company-wide optimization
-  - Cost-saving claims
-UNLESS the role is OWNERSHIP-LEVEL.
-
-STEP 4: Generate 6 Varied Options
-Create 6 distinct bullet points covering different aspects of the job. For example:
-  1. Technical Execution or Daily Operations
-  2. Collaboration or Teamwork
-  3. Problem Solving or Troubleshooting
-  4. Process Adherence or Efficiency
-  5. Tools / Software / Equipment usage
-  6. Client / Stakeholder interaction (if applicable) or Quality Assurance
-
-GENERATION RULES:
-1. Ignore any future or target job description completely.
-2. Avoid generic phrases ("Worked on", "Helped with").
-3. Use strong but role-appropriate action verbs.
-   - EXECUTION: Executed, Performed, Monitored, Operated, Supported
-   - SPECIALIST: Analyzed, Implemented, Configured, Validated, Improved
-   - OWNERSHIP: Led, Designed, Optimized, Defined, Owned
-4. Be "real" - use plausible impact and scope matching the inferred seniority of the role.
-5. If user context lacks specifics, generate typical but believable, grounded duties.
-6. Do NOT exaggerate authority, impact, or use inflated metrics.
-
-OUTPUT STRICT JSON ONLY:
-{
-  "suggestions": [
-    "Bullet 1 text...",
-    "Bullet 2 text...",
-    "Bullet 3 text...",
-    "Bullet 4 text...",
-    "Bullet 5 text...",
-    "Bullet 6 text..."
-  ]
-}
-`;
-  }
-
-  // Legacy single-message path (no system role) — append the language directive
-  // to the prompt itself so bullets come back in the user's language.
-  prompt += langDirective(options.lang);
-
-  try {
-    let resultText = "";
-    if (activeProvider === "openai") {
-      const response = await openai.chat.completions.create({
-        model,
-        messages: [{ role: "user", content: prompt }],
-      });
-      resultText = response.choices[0].message.content;
-    } else if (activeProvider === "gemini") {
-      const result = await geminiModel.generateContent(prompt);
-      resultText = result.response.text();
-    }
-
-    let jsonStr = resultText
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
-    const startIndex = jsonStr.indexOf("{");
-    const endIndex = jsonStr.lastIndexOf("}");
-    if (startIndex !== -1 && endIndex !== -1) {
-      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
-    }
-
-    const data = JSON.parse(jsonStr);
-    return data.suggestions || [];
-  } catch (error) {
-    console.error("AI Bullet Generation Failed:", error);
-    return ["Error generating bullets. Please try again."];
-  }
-};
-
-// SURGICAL bullet improvement for the CV Coach. Unlike generateBulletPoints (which
-// regenerates a whole fresh set), this KEEPS bullets that are already strong exactly
-// as written and rewrites ONLY the ones that genuinely weaken the candidate with
-// recruiters/ATS (passive openers, buzzwords, first-person, vague/no-outcome, or a
-// clearly-missed must-have keyword the candidate truly matches). Truth-locked: a
-// weak-but-true bullet becomes a strong-but-true one, never fiction; metrics use
-// [X]-style placeholders, never invented numbers. Returns ONE entry per input
-// bullet, IN ORDER: { keep:boolean, text, reason }. When the role has no bullets,
-// it proposes a few fresh starters (all keep:false). Throws AIUnavailableError when
-// no AI is configured (callJSON) so the user is never charged for nothing.
-// company-type framing directives shared by every bullet writer. Each changes
+// Company-type framing directives shared by every bullet writer. Each changes
 // WORDING ONLY — never introduces a number, tool, cert, scope, or company-specific
 // term. "unknown" (and anything unmapped) intentionally omits the COMPANY TYPE line.
 const COMPANY_TYPE_FRAMING = {
@@ -4142,8 +3892,8 @@ const STAGE_WRITER = {
   },
 };
 
-// Lifted from the legacy JD-blind writer (generateBulletPoints), where this ladder was
-// written, is good, and has been unreachable from the Aria path.
+// The authority ladder. Written for the legacy JD-blind bullet writer, which has since
+// been retired; it was too good to lose, so it moved here where the Aria path can reach it.
 const AUTHORITY_CEILING = {
   execution:
     "AUTHORITY CEILING — EXECUTION LEVEL: they executed tasks, followed procedures and supported delivery. Bullets must NOT claim strategic ownership, system or process DESIGN, company-wide change, or cost savings. 'Helped run', 'supported', 'built for my class' is honest here; 'owned the strategy for' is not.",
@@ -4477,78 +4227,10 @@ NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Th
   };
 };
 
-// Generate one professional-summary variation PER requested tone, in a single
-// call. `tones` is [{ key, label, guidance }]. Returns [{ key, summary }] in the
-// same order. Grounded entirely in the candidate's own CV (never the JD), and
-// truth-locked: no invented skills, titles, or metrics.
-const generateSummaries = async (role, context, tones = [], options = {}) => {
-  const model = options.model || MODEL; // tier-based (resolveTextModel)
-  if (!Array.isArray(tones) || tones.length === 0) return [];
-
-  if (activeProvider === "mock") {
-    return tones.map((t) => ({
-      key: t.key,
-      summary: `Experienced ${role || "professional"} with a track record of delivering results. (${t.label} tone — mock)`,
-    }));
-  }
-
-  const prompt = `
-You are an expert Resume Writer.
-Write ${tones.length} professional summary variation(s) for a CV — one for EACH requested tone. Each is a single cohesive paragraph (2-4 sentences; for a "Concise" tone use 2 sentences max). No bullet points.
-
-Ground EVERY summary entirely in the candidate's own CV below (work history, skills, existing draft). Do NOT pull in or align with any target job description. NEVER invent skills, titles, metrics, or achievements. Use the candidate's ACTUAL recent job title — do not "upgrade" it. Avoid generic fluff ("hard worker", "team player").
-
-DO NOT include the candidate's name in any of the summaries. The candidate's name is already on the CV and including it in the professional summary is redundant and unprofessional.
-Write the summaries in the third-person telegraphic style standard for resumes (avoiding personal pronouns like "I", "me", "my", "he", "she", etc. where possible). Start the summary directly with the candidate's job title or a strong adjective followed by the job title (e.g., "Results-driven Full Stack Developer with..." or "Field Engineer with a strong background in...").
-
-CANDIDATE CONTEXT:
-${context}
-
-TONES (write one summary per tone, matching its style):
-${tones.map((t) => `- ${t.key}: ${t.label} — ${t.guidance}`).join("\n")}
-
-OUTPUT STRICT JSON ONLY (a "summaries" object keyed by the tone keys above):
-{
-  "summaries": { ${tones.map((t) => `"${t.key}": "<summary paragraph>"`).join(", ")} }
-}
-${langDirective(options.lang)}`;
-
-  try {
-    let resultText = "";
-    if (activeProvider === "openai") {
-      const response = await openai.chat.completions.create({
-        model,
-        messages: [{ role: "user", content: prompt }],
-      });
-      resultText = response.choices[0].message.content;
-    } else if (activeProvider === "gemini") {
-      const result = await geminiModel.generateContent(prompt);
-      resultText = result.response.text();
-    }
-
-    let jsonStr = resultText
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
-    const startIndex = jsonStr.indexOf("{");
-    const endIndex = jsonStr.lastIndexOf("}");
-    if (startIndex !== -1 && endIndex !== -1) {
-      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
-    }
-
-    const data = JSON.parse(jsonStr);
-    const map = data.summaries || {};
-    return tones.map((t) => ({ key: t.key, summary: (map[t.key] || "").trim() }));
-  } catch (error) {
-    console.error("AI Summary Generation Failed:", error);
-    return [];
-  }
-};
-
 // ONE career-stage-aware, JD-tailored professional summary for Aria's coach — a
-// CREDITED generation (unlike the free multi-tone generateSummaries). Third person,
+// CREDITED generation (unlike the retired free multi-tone variations). Third person,
 // grounded ONLY in the candidate's CV; tailors TOWARD a target job when one is given
-// (deliberately reversing generateSummaries' "never use the JD" rule). stage is
+// (deliberately reversing the retired writer's "never use the JD" rule). stage is
 // 'experienced' | 'grad' | 'changer'. Returns a single trimmed summary string ("" if
 // the model returns nothing parseable). Throws AIUnavailableError when AI is off.
 const generateSummaryForStage = async ({
@@ -5639,7 +5321,6 @@ module.exports = {
   assessInterview,
   extractResumeProfile,
   extractJobMetadata,
-  generateBulletPoints,
   generateBulletsFromDescription,
   rewriteRoleBullets,
   answerCoachQuestion,
@@ -5652,7 +5333,6 @@ module.exports = {
   HUNT_LEVELS_ADDABLE,
   HUNT_LEVEL_STATUS,
   experienceCoachingBlock,
-  generateSummaries,
   generateSummaryForStage,
   draftJobDescription,
   suggestProjects,

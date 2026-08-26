@@ -100,9 +100,11 @@ const userSchema = new mongoose.Schema(
       freeDownloadUsed: { type: Boolean, default: false },
       passRemaining: { type: Number, default: 0 },
     },
-    // ApplyRight ATS suggestions. Free users get ONE lifetime taste of the real
-    // (JD-keyword-targeted) suggestions on a single work-history role; afterwards
-    // the ATS column is a blurred upsell teaser. Claimed atomically on generate.
+    // RETIRED — kept for the data only. This was the one-time taste of the real
+    // (JD-keyword-targeted) suggestions in the two-column work-history picker, which
+    // the Ask Aria build-with replaced entirely (/coach/generate-bullets). Nothing
+    // reads or writes it any more; it stays declared so existing users' flags are not
+    // silently dropped from their documents on the next save.
     atsSuggestions: {
       freeTasteUsed: { type: Boolean, default: false },
     },
