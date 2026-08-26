@@ -777,9 +777,21 @@ const buildRoleBrief = async (jobDescription, { title } = {}, meta = {}) => {
     // straight into computeFitScore, and dropping it here meant every recompute scored
     // education against `null` — a silent zero for a requirement the JD actually stated.
     requiredEducation: req?.requiredEducation || null,
-    // Keep the compact arrays as the stable scorer/keyword contract.
-    mustHaves: mustHaves.map(({ name }) => ({ name, importance: "must_have" })),
-    niceToHaves: niceToHaves.map(({ name }) => ({ name, importance: "nice_to_have" })),
+    // Keep the compact arrays as the stable scorer/keyword contract — but carry the
+    // ALIASES onto them. Stripping those was why the scorer could report a requirement
+    // missing that Aria (reading the typed `requirements` below) already counted as
+    // covered: the generic synonym table knows industry-wide skills, only the JD knows
+    // that this posting names the same system two different ways.
+    mustHaves: mustHaves.map(({ name, aliases }) => ({
+      name,
+      importance: "must_have",
+      aliases: aliases || [],
+    })),
+    niceToHaves: niceToHaves.map(({ name, aliases }) => ({
+      name,
+      importance: "nice_to_have",
+      aliases: aliases || [],
+    })),
     responsibilities,
     // The coach consumes this checklist. Responsibilities remain typed separately so
     // phrases such as "three years in hospitality" can never become skill chips.
@@ -3910,10 +3922,27 @@ Be conservative: when a bullet is already fine, say so. When you would have to m
 OUTPUT STRICT JSON — exactly one entry per input bullet, SAME ORDER:
 { "bullets": [ { "before": "<the original, unchanged>", "after": "<the sharpened bullet, or null if blocked>", "changed": true|false, "blocked": true|false, "blockedReason": "<short phrase, or empty>" } ] }`;
 
+  // Sonnet 5 enables adaptive thinking by default, and thinking shares max_tokens with the
+  // visible response — so with no budget set, callModel's `maxTokens || 1024` fallback was
+  // spent reasoning and the JSON came back truncated mid-object. Every "Edit with Aria"
+  // rewrite 502'd the moment a user picked the Claude model (same fix as
+  // generateBulletsFromDescription and generateSummaryForStage).
+  //
+  // The budget can't be a constant the way it is for those two: this schema ECHOES every
+  // original bullet back alongside its rewrite, so the response scales with the input.
+  // Size it from the actual bullets — roughly 4 chars per token, doubled for before+after,
+  // then doubled again as headroom, plus per-row JSON scaffolding. max_tokens caps
+  // generation rather than reserving spend, so over-provisioning is free while truncation
+  // costs the whole call.
+  const inputChars = clean.reduce((n, b) => n + b.length, 0);
+  const maxTokens = Math.min(8192, 1024 + clean.length * 80 + inputChars);
+
   const data = await callJSON({
     system,
     user,
     temperature: 0.3,
+    disableThinking: true,
+    maxTokens,
     meta: { ...meta, model, operation: "studioRewriteRole" },
   });
 

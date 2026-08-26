@@ -432,12 +432,33 @@ const compareSkills = (candidateSkills, requiredSkills) => {
     const reqNorm = normalizeSkill(req.name);
     const reqKey = reqNorm.canonical.toLowerCase();
 
-    // Direct match
-    if (candidateSet.has(reqKey)) {
+    // Direct match — on the requirement's own name, or on any alias the JD itself used
+    // for it. The generic SYNONYMS table below only knows skills that are common across
+    // every industry; it cannot know that THIS posting calls its system both "Yardi
+    // Voyager" and "Yardi". extractJobRequirements captures those aliases from the JD,
+    // and dropping them here is what made the scorer disagree with Aria about the same
+    // word on the same screen.
+    const aliasHit = (req.aliases || []).find((alias) => {
+      const value = String(alias || "").trim();
+      if (!value) return false;
+      return (
+        candidateSet.has(value.toLowerCase()) ||
+        candidateSet.has(normalizeSkill(value).canonical.toLowerCase())
+      );
+    });
+
+    if (candidateSet.has(reqKey) || aliasHit) {
       matched.push({
+        // Requirement ids ride through when the caller passes typed requirements, so a
+        // result row can be mapped back to the EXACT requirement that produced it.
+        // Matching on the normalized name instead is ambiguous the moment two
+        // requirements share a canonical ("JavaScript" required, "JS" preferred).
+        ...(req.id ? { id: req.id } : {}),
         name: reqNorm.canonical,
         importance: req.importance || "nice_to_have",
         matchConfidence: reqNorm.confidence,
+        // A JD-alias hit is recorded like a fuzzy one so callers can show WHAT matched.
+        ...(candidateSet.has(reqKey) ? {} : { matchedWith: aliasHit }),
       });
       continue;
     }
@@ -455,6 +476,7 @@ const compareSkills = (candidateSkills, requiredSkills) => {
 
     if (bestFuzzy.rating >= 0.7) {
       matched.push({
+        ...(req.id ? { id: req.id } : {}),
         name: reqNorm.canonical,
         importance: req.importance || "nice_to_have",
         matchConfidence: bestFuzzy.rating,
@@ -469,6 +491,7 @@ const compareSkills = (candidateSkills, requiredSkills) => {
       });
     } else {
       missing.push({
+        ...(req.id ? { id: req.id } : {}),
         name: reqNorm.canonical,
         importance: req.importance || "nice_to_have",
       });
@@ -534,6 +557,69 @@ const textMentions = (lowerText, surface) => {
 };
 
 /**
+ * Every spelling that should count as a mention of `requirement`, lowercased.
+ *
+ * Accepts a bare string, the compact { name, importance } shape, or a full typed
+ * requirement from extractJobRequirements — whose JD-specific `aliases` are the whole
+ * point: the generic SYNONYMS table only knows skills common to every industry, so
+ * without them a posting's own second name for a thing is invisible to every matcher.
+ *
+ * @param {string|{ name?: string, aliases?: string[] }} requirement
+ * @returns {Set<string>} lowercased surface forms
+ */
+const requirementSurfaces = (requirement) => {
+  const raw = typeof requirement === "string" ? requirement : requirement?.name;
+  const name = String(raw || "").trim();
+  const surfaces = new Set();
+  if (!name) return surfaces;
+
+  const idx = buildSurfaceIndex();
+  const add = (value) => {
+    const v = String(value || "").trim().toLowerCase();
+    if (v) surfaces.add(v);
+  };
+
+  const expand = (value) => {
+    add(value);
+    const canonicalLower = normalizeSkill(value).canonical.toLowerCase();
+    add(canonicalLower);
+    if (idx.has(canonicalLower)) for (const s of idx.get(canonicalLower)) add(s);
+  };
+
+  expand(name);
+  // Aliases expand the same way, but ONLY when the caller supplied typed requirements.
+  const aliases = typeof requirement === "string" ? [] : requirement?.aliases;
+  (Array.isArray(aliases) ? aliases : []).forEach(expand);
+
+  return surfaces;
+};
+
+/**
+ * Does `text` mention `requirement`, under its own name or any of its spellings?
+ *
+ * The single free-text answer for the whole codebase. It used to be three: this one,
+ * a plain `.includes()` in the skills panel (so a requirement of "Excel" was satisfied
+ * by a skill called "Excellent written communication"), and a hand-rolled boundary
+ * regex in the analysis pass. Two of those ran in the SAME response, so the same word
+ * could be reported found in one place and missing in another.
+ *
+ * Boundary-safe via textMentions: "Java" never matches "JavaScript", while "C++",
+ * "C#", "CI/CD" and "Node.js" still match.
+ *
+ * @param {string|{ name?: string, aliases?: string[] }} requirement
+ * @param {string} text
+ * @returns {boolean}
+ */
+const mentionsRequirement = (requirement, text) => {
+  const lowerText = String(text || "").toLowerCase();
+  if (!lowerText) return false;
+  for (const surface of requirementSurfaces(requirement)) {
+    if (textMentions(lowerText, surface)) return true;
+  }
+  return false;
+};
+
+/**
  * Compute live keyword coverage for the CV builder. A keyword counts as covered
  * if it matches the candidate's discrete skills (via compareSkills — synonym +
  * fuzzy) OR appears in their free-text content (bullets) under any synonym.
@@ -545,7 +631,6 @@ const textMentions = (lowerText, surface) => {
  */
 const computeKeywordCoverage = (keywords = [], { text = "", skills = [] } = {}) => {
   const lowerText = (text || "").toLowerCase();
-  const idx = buildSurfaceIndex();
 
   // Discrete-skill matches (best accuracy) when a skills list is provided.
   let skillMatched = new Set();
@@ -565,16 +650,9 @@ const computeKeywordCoverage = (keywords = [], { text = "", skills = [] } = {}) 
       let covered =
         skillMatched.has(canonicalLower) || skillMatched.has(name.toLowerCase());
 
-      if (!covered && lowerText) {
-        const surfaces = new Set([name.toLowerCase(), canonicalLower]);
-        if (idx.has(canonicalLower)) for (const s of idx.get(canonicalLower)) surfaces.add(s);
-        for (const s of surfaces) {
-          if (textMentions(lowerText, s)) {
-            covered = true;
-            break;
-          }
-        }
-      }
+      // Free-text fallback, through the shared matcher — so a keyword's JD aliases count
+      // here exactly as they do in the scorer and the skills panel.
+      if (!covered && lowerText) covered = mentionsRequirement(kw, lowerText);
 
       return { name, importance, covered };
     });
@@ -596,6 +674,8 @@ module.exports = {
   normalizeSkills,
   compareSkills,
   computeKeywordCoverage,
+  requirementSurfaces,
+  mentionsRequirement,
   CANONICAL_SKILLS,
   SYNONYMS,
 };

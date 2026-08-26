@@ -601,6 +601,7 @@ const skillReviewGroups = ({
   // draft.skillDeclines — requirements the user has explicitly said they've never done.
   declinedSkills = [],
 }) => {
+  const { compareSkills } = require("../services/skillNormalizer.service");
   const sources = { education, experience, project: projects };
   const bestSet = new Set((bestForRole || []).map((name) => String(name).toLowerCase()));
   const rows = [];
@@ -724,15 +725,25 @@ const skillReviewGroups = ({
       // such as "technical certifications") leak into skills[].
       item?.type !== "certification"
   );
-  const matchedRequirements = new Set();
-  typedRequirements.forEach((requirement) => {
-    const terms = [requirement.name, ...(requirement.aliases || [])].map((term) =>
-      String(term || "").toLowerCase()
-    );
-    if (rows.some((row) => terms.some((term) => term && row.name.toLowerCase().includes(term)))) {
-      matchedRequirements.add(requirement.id);
-    }
-  });
+  // Which requirements the skills list already covers — through the SHARED matcher, so
+  // this agrees with the fit score and the "best for this role" stars computed in the
+  // same response. This was a plain substring test, which silently satisfied a
+  // requirement of "Excel" with a skill called "Excellent written communication" (and
+  // "Java" with "JavaScript") — marking it covered, so no gap chip was ever raised and
+  // Aria never asked about it. Requirement ids ride through compareSkills so each result
+  // maps back to the exact requirement that produced it.
+  const requirementComparison = compareSkills(
+    rows.map((row) => row.name),
+    typedRequirements.map((requirement) => ({
+      id: requirement.id,
+      name: requirement.name,
+      importance: requirement.priority,
+      aliases: requirement.aliases || [],
+    }))
+  );
+  const matchedRequirements = new Set(
+    (requirementComparison.matched || []).map((m) => m.id).filter(Boolean)
+  );
 
   const searchableSources = Object.entries(sources).flatMap(([type, list]) =>
     (list || []).map((item, refIndex) => ({

@@ -576,7 +576,10 @@ const runCVGenerationPipeline = async ({
     for (const s of aiEnhanced.skills || []) {
       allSkillNames.add(typeof s === "string" ? s : s.name);
     }
-    const { compareSkills } = require("../services/skillNormalizer.service");
+    const {
+      compareSkills,
+      mentionsRequirement,
+    } = require("../services/skillNormalizer.service");
     const candidateSkillStrings = (candidateData.skills || []).map((s) =>
       typeof s === "string" ? s : s.name
     );
@@ -584,11 +587,12 @@ const runCVGenerationPipeline = async ({
     const skillComparison = compareSkills(candidateSkillStrings, allJdSkills);
     for (const matched of skillComparison.matched) allSkillNames.add(matched.name);
 
-    // Word-boundary scan instead of plain substring includes(): "Java" in the
-    // JD must NOT match "JavaScript" in the resume, but "C++"/"C#"/".NET" DO
-    // need to match (a vanilla \b boundary fails on those because + and # are
-    // not word chars). The custom boundary below treats anything non-alnum as
-    // a separator, so trailing punctuation works correctly.
+    // Free-text scan of the bullets, through the SHARED matcher. This was a hand-rolled
+    // word-boundary regex — correct as far as it went ("Java" must not match
+    // "JavaScript", while "C++"/"C#"/".NET" must still match), but it was the third
+    // separate answer to "does this CV mention X?" in the codebase and knew nothing
+    // about a requirement's synonyms or its JD aliases. mentionsRequirement keeps the
+    // boundary behaviour and adds both.
     const allDescriptionText = [
       ...(candidateData.experience || []).map((e) =>
         Array.isArray(e.description) ? e.description.join(" ") : e.description || ""
@@ -598,15 +602,9 @@ const runCVGenerationPipeline = async ({
       ),
     ].join(" ");
 
-    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const skillBoundaryMatch = (skill, text) => {
-      const re = new RegExp(`(^|[^A-Za-z0-9])${escapeRegex(skill)}(?=[^A-Za-z0-9]|$)`, "i");
-      return re.test(text);
-    };
-
     for (const jdSkill of allJdSkills) {
       const name = typeof jdSkill === "string" ? jdSkill : jdSkill.name;
-      if (name && skillBoundaryMatch(name, allDescriptionText)) allSkillNames.add(name);
+      if (name && mentionsRequirement(jdSkill, allDescriptionText)) allSkillNames.add(name);
     }
 
     const categorized = await aiService.categorizeSkillsList(

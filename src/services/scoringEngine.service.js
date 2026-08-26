@@ -73,32 +73,34 @@ const scoreSkills = (candidateSkills, requiredSkills) => {
     requiredSkills
   );
 
-  // Weighted scoring: must_have = 2 points, nice_to_have = 1 point
+  // Weighted scoring: must_have = 2 points, nice_to_have = 1 point.
+  //
+  // compareSkills emits exactly ONE row per required skill — into `matched` or into
+  // `missing` — and copies that requirement's own importance onto the row. So the earned
+  // weight is a straight sum over `matched`, and by construction it cannot exceed the
+  // total.
+  //
+  // This was previously computed TWICE: once correctly over requiredSkills, then reset to
+  // zero and recomputed over `matched` through a name lookup that compared each match's
+  // NORMALIZED name against the requirements' RAW names. When a posting named the same
+  // skill twice — "JavaScript" under required and "JS" under preferred, which computeFitScore
+  // merges into one list — that lookup resolved BOTH rows to the must-have and charged
+  // weight 2 twice against a denominator holding 2 + 1. The result was a score inflated
+  // above the honest ratio, bounded only by the Math.min(100) below.
   let totalWeight = 0;
-  let earnedWeight = 0;
-
   for (const req of requiredSkills) {
-    const weight = req.importance === "must_have" ? 2 : 1;
-    totalWeight += weight;
-    if (comparison.matched.find((m) => m.name.toLowerCase() === req.name?.toLowerCase() ||
-        m.matchedWith?.toLowerCase() === req.name?.toLowerCase())) {
-      earnedWeight += weight;
-    }
+    totalWeight += req.importance === "must_have" ? 2 : 1;
   }
-
-  // Re-check using normalized comparison
-  earnedWeight = 0;
-  for (const m of comparison.matched) {
-    const reqEntry = requiredSkills.find(
-      (r) => r.name?.toLowerCase() === m.name?.toLowerCase()
-    );
-    const weight = (reqEntry?.importance || m.importance) === "must_have" ? 2 : 1;
-    earnedWeight += weight;
-  }
+  const earnedWeight = comparison.matched.reduce(
+    (sum, m) => sum + (m.importance === "must_have" ? 2 : 1),
+    0
+  );
 
   const score = totalWeight > 0 ? Math.round((earnedWeight / totalWeight) * 100) : 75;
 
   return {
+    // Kept as a guard, but no longer load-bearing: earnedWeight is now a subset sum of
+    // totalWeight, so a clamp here would mean compareSkills broke its own contract.
     score: Math.min(100, score),
     details: comparison,
   };

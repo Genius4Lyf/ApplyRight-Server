@@ -79,8 +79,14 @@ const draftCVSchema = new mongoose.Schema(
           degree: String,
           field: String,
         },
-        mustHaves: [{ name: String, importance: String }],
-        niceToHaves: [{ name: String, importance: String }],
+        // `aliases` are the OTHER names this posting used for the same thing. They ride on
+        // the compact arrays because these are what the scorer, the keyword-coverage
+        // tracker and the "still uncovered" check all read — and without them those three
+        // could only ever match the one canonical name, disagreeing with Aria (who reads
+        // the typed `requirements` below) about the same word on the same screen.
+        // Additive: briefs saved before this simply have none, and behave as they did.
+        mustHaves: [{ name: String, importance: String, aliases: [String] }],
+        niceToHaves: [{ name: String, importance: String, aliases: [String] }],
         responsibilities: [String],
         // Typed requirement checklist used by Aria's role-by-role interview. The
         // legacy mustHaves/niceToHaves arrays remain the scoring contract; this richer
