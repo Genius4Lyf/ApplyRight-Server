@@ -3647,8 +3647,7 @@ const PROJECT_FUNNEL = {
 const projectFunnel = (type) =>
   PROJECT_FUNNEL[type] || Object.values(PROJECT_FUNNEL).join("\n");
 
-// Build the CONTEXT block from Aria's Role Brief that grounds bullet writing
-// (improveBullets + generateBulletsFromDescription share this so they never drift).
+// Build the CONTEXT block from Aria's Role Brief that grounds bullet writing.
 // Returns "" when no brief is present so brief-less callers stay unchanged. The
 // trailing blank line means callers can prefix it directly onto the next section.
 // The counterpart for when there is NO target job. This used to be the empty string —
@@ -3693,107 +3692,9 @@ const briefContextBlock = (brief, role = "") => {
   return `${lines.join("\n")}\n\nCRITICAL: The framing above changes WORDING ONLY — never invent a number, tool, certification, scope, or a company-specific term.\n\n`;
 };
 
-const improveBullets = async (role, bullets = [], options = {}) => {
-  const model = options.model || MODEL; // tier-based (resolveTextModel)
-  const brief = options.brief || null;
-  // When Aria's Role Brief is present it is the source of truth for the
-  // keyword injection (must/nice come from the brief); otherwise fall back to
-  // the legacy options.keywords path so existing callers behave EXACTLY as today.
-  const keywords = brief
-    ? [...(brief.mustHaves || []), ...(brief.niceToHaves || [])]
-    : Array.isArray(options.keywords)
-      ? options.keywords
-      : [];
-  const mustHave = keywords
-    .filter((k) => k && k.importance === "must_have")
-    .map((k) => k.name)
-    .filter(Boolean);
-  const niceToHave = keywords
-    .filter((k) => k && k.importance !== "must_have")
-    .map((k) => k.name)
-    .filter(Boolean);
-  const clean = bullets
-    .map((b) =>
-      String(b || "")
-        .replace(/^[•\-*\s]+/, "")
-        .trim()
-    )
-    .filter(Boolean);
-
-  const kwBlock = `MUST-HAVE: ${mustHave.length ? mustHave.join(", ") : "none provided"}\nNICE-TO-HAVE: ${niceToHave.length ? niceToHave.join(", ") : "none provided"}`;
-
-  // CONTEXT block from Aria's Role Brief — empty (unchanged behaviour) when absent.
-  const contextBlock = briefContextBlock(brief, role);
-  // Empty unless the caller resolves a stage, so existing callers are unchanged.
-  const stageBlock = stageDirective(options.stage, "experience", { seniority: brief?.seniority });
-
-  let system;
-  let user;
-  if (clean.length === 0) {
-    system =
-      "You are an expert resume writer and ATS optimization specialist. Write strong, truthful, ATS-parseable work-history bullets. NEVER invent specific numbers, tools, certifications, or scope; use [X]-style placeholders only where a metric is genuinely natural. Output STRICT JSON.";
-    user = `ROLE: "${role}"
-
-This role has NO bullets yet. Propose 4 strong starter bullets — each leads with a strong action verb, mirrors the target job's vocabulary ONLY where genuinely plausible for this role, and quantifies with [X]-style placeholders only where natural (never an invented number).
-
-${stageBlock}${contextBlock}TARGET JOB KEYWORDS:
-${kwBlock}
-
-OUTPUT STRICT JSON: { "bullets": [ { "keep": false, "text": "<bullet>", "reason": "<≤8 words>" } ] } with exactly 4 items.`;
-  } else {
-    system =
-      "You are an expert resume writer, technical recruiter, and ATS optimization specialist performing a SURGICAL edit of ONE work-history role's bullets. PRIME DIRECTIVE: KEEP bullets that are already strong EXACTLY as written — never reword a good bullet. Rewrite ONLY the bullets that genuinely weaken the candidate. Truth is non-negotiable: a weak-but-true bullet becomes a strong-but-true bullet, never fiction. Output STRICT JSON.";
-    user = `ROLE: "${role}"
-
-${stageBlock}${contextBlock}TARGET JOB KEYWORDS:
-${kwBlock}
-
-CURRENT BULLETS (in order):
-${clean.map((b, i) => `${i + 1}. ${b}`).join("\n")}
-
-For EACH bullet decide:
-- KEEP (keep:true, return "text" UNCHANGED) if it already leads with a strong action verb, states a concrete action/result or scope, is truthful and ATS-parseable, and is not filler.
-- REWRITE (keep:false) ONLY if it has a real weakness: passive/duty opener ("Responsible for", "Helped", "Worked on", "Assisted"), buzzwords/filler ("team player", "hard worker"), first-person pronouns ("I", "my", "me"), vague with no outcome, OR it clearly misses a MUST-HAVE keyword the candidate's real work genuinely involves. When rewriting: lead with a strong verb, mirror the job's exact terminology ONLY where truthful, and quantify with a [X]-style placeholder ONLY where a metric is natural for this role — NEVER invent a concrete number, tool, certification, or scope.
-
-Be conservative: when a bullet is already fine, KEEP it. Do not rewrite just to reword.
-
-OUTPUT STRICT JSON — exactly one entry per input bullet, SAME ORDER:
-{ "bullets": [ { "keep": true|false, "text": "<unchanged original if keep, else the rewrite>", "reason": "<≤8 words: why kept, or what you fixed>" } ] }`;
-  }
-
-  const data = await callJSON({
-    system,
-    user,
-    temperature: 0.3,
-    meta: { ...(options.meta || {}), model, operation: "coachImproveBullets" },
-  });
-  const out = Array.isArray(data?.bullets) ? data.bullets : [];
-
-  // No bullets → fresh starters (all rewrites). Cap defensively.
-  if (clean.length === 0) {
-    return out
-      .slice(0, 6)
-      .map((o) => ({
-        keep: false,
-        text: String(o?.text || "").trim(),
-        reason: String(o?.reason || "").trim(),
-      }))
-      .filter((o) => o.text);
-  }
-
-  // Align strictly to the inputs (defensive: the model must return one per bullet,
-  // in order). A missing/blank entry falls back to keeping the original untouched.
-  return clean.map((orig, i) => {
-    const o = out[i] || {};
-    const text = String(o.text || "").trim() || orig;
-    const keep = o.keep === true || text === orig;
-    return { keep, text: keep ? orig : text, reason: String(o.reason || "").trim() };
-  });
-};
-
 // Aria "build-with" bullet GENERATION: turn what the user describes about a role/
 // project into `count` distinct, truthful, ATS-parseable bullets. Grounded on the
-// Role Brief (shares briefContextBlock with improveBullets) and truth-locked — it
+// Role Brief (via briefContextBlock) and truth-locked — it
 // uses ONLY facts in the description/evidence, never invents numbers/tools/certs/scope.
 // When returnDetails=true, each bullet also cites the verified interview evidence ids
 // that support it. Throws AIUnavailableError when no AI is configured.
@@ -5710,7 +5611,6 @@ module.exports = {
   extractResumeProfile,
   extractJobMetadata,
   generateBulletPoints,
-  improveBullets,
   generateBulletsFromDescription,
   rewriteRoleBullets,
   answerCoachQuestion,

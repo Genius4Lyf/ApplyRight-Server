@@ -45,7 +45,7 @@ src/
 ├── services/               # Business logic
 │   ├── ai.service.js       # Gemini / OpenAI integration
 │   ├── pdf.service.js      # Puppeteer PDF generation
-│   ├── scoring.service.js  # ATS resume scoring engine
+│   ├── scoringEngine.service.js  # JD ↔ CV fit scoring
 │   ├── extraction.service.js
 │   ├── jobScraper.service.js
 │   ├── resumeParser.service.js
