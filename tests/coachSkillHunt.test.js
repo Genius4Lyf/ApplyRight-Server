@@ -197,15 +197,26 @@ describe("verifyProbeResult — the honesty ladder is verified, not trusted", ()
 
   // Declines only ever REMOVE things, so demanding proof of a "no" would be absurd —
   // and would leave a user unable to say no cleanly.
-  it("accepts 'encountered' and 'never' with no evidence whatsoever", () => {
+  it("accepts 'encountered' and 'never' with no evidence in a BUILD-posture hunt", () => {
+    // They were asked a direct question mid-interview, so a decline needs no quote.
     ["encountered", "never"].forEach((level) => {
       const verdict = verifyProbeResult({
         probeResult: { level },
         evidence: [],
         turns: [],
-        probe: REQUIREMENT,
+        probe: { ...REQUIREMENT, mode: "build" },
       });
       expect(verdict).toEqual({ level, verified: true, evidence: null });
+    });
+  });
+
+  it("treats a probe with NO posture as the safe one, not the permissive one", () => {
+    // The defaulting must match buildHuntProbe's. Getting this backwards would let a probe
+    // assembled anywhere else silence a requirement by omission.
+    ["encountered", "never"].forEach((level) => {
+      expect(
+        verifyProbeResult({ probeResult: { level }, evidence: [], turns: [], probe: REQUIREMENT })
+      ).toMatchObject({ verified: false });
     });
   });
 
@@ -264,5 +275,103 @@ describe("declines are honoured by the entry interview too, not just the hunt", 
     );
 
     expect(leads.some((lead) => lead.name === "Triage")).toBe(false);
+  });
+});
+
+// ── The two postures ──────────────────────────────────────────────────────────────────
+//
+// The hunt now has one job in two moods. It presses for an answer only where an answer has
+// somewhere to go — mid-interview on an entry, where a verdict becomes a bullet. Tapping a
+// requirement on the job checklist at any other moment is curiosity, and the cost of getting
+// that wrong is not symmetric: a wrongly-recorded "never" silences the requirement on EVERY
+// surface, permanently, for someone who was only asking what it meant.
+describe("buildHuntProbe — posture", () => {
+  it("carries an explicit build posture through", () => {
+    expect(buildHuntProbe(draft(), BRIEF, "req_triage", "build").mode).toBe("build");
+  });
+
+  it("defaults to the posture that cannot do harm", () => {
+    // No mode, an unknown mode, or a junk value → 'open'. Nothing is silenced by accident.
+    expect(buildHuntProbe(draft(), BRIEF, "req_triage").mode).toBe("open");
+    expect(buildHuntProbe(draft(), BRIEF, "req_triage", "interrogate").mode).toBe("open");
+    expect(buildHuntProbe(draft(), BRIEF, "req_triage", null).mode).toBe("open");
+  });
+
+  it("still refuses a requirement already declined, in either posture", () => {
+    const declined = draft({
+      skillDeclines: [{ requirementId: "req_triage", name: "Triage", level: "never" }],
+    });
+    expect(buildHuntProbe(declined, BRIEF, "req_triage", "build")).toBeNull();
+    expect(buildHuntProbe(declined, BRIEF, "req_triage", "open")).toBeNull();
+  });
+});
+
+describe("verifyProbeResult — a decline must be earned in the OPEN posture", () => {
+  const probe = (mode) => buildHuntProbe(draft(), BRIEF, "req_triage", mode);
+  const said = (text) => [{ who: "user", text }];
+
+  it("accepts an unevidenced decline mid-interview, where they were asked directly", () => {
+    const verdict = verifyProbeResult({
+      probeResult: { level: "never" },
+      evidence: [],
+      turns: said("no"),
+      probe: probe("build"),
+    });
+    expect(verdict).toMatchObject({ level: "never", verified: true });
+  });
+
+  it("REFUSES an unevidenced decline in an exploring conversation", () => {
+    // The harm this prevents: someone taps a requirement to find out what it is, gives a
+    // shrug, and the model reports "never" — silencing it everywhere, forever.
+    const verdict = verifyProbeResult({
+      probeResult: { level: "never" },
+      evidence: [],
+      turns: said("hmm not sure what that means really"),
+      probe: probe("open"),
+    });
+    expect(verdict).toMatchObject({ level: "never", verified: false });
+  });
+
+  it("accepts an open decline when the user plainly said it, naming the thing", () => {
+    const verdict = verifyProbeResult({
+      probeResult: { level: "never", evidenceIndex: 0 },
+      evidence: [{ sourceQuote: "I have never done triage" }],
+      turns: said("I have never done triage, not once"),
+      probe: probe("open"),
+    });
+    expect(verdict).toMatchObject({ level: "never", verified: true });
+  });
+
+  it("refuses an open decline whose quote does not name the requirement", () => {
+    // Adjacency is not an answer — the same rule that already protects a CLAIM.
+    const verdict = verifyProbeResult({
+      probeResult: { level: "never", evidenceIndex: 0 },
+      evidence: [{ sourceQuote: "I worked nights" }],
+      turns: said("I worked nights"),
+      probe: probe("open"),
+    });
+    expect(verdict).toMatchObject({ verified: false });
+  });
+
+  it("leaves a CLAIM held to the same bar in both postures", () => {
+    for (const mode of ["build", "open"]) {
+      expect(
+        verifyProbeResult({
+          probeResult: { level: "regular", evidenceIndex: 0 },
+          evidence: [{ sourceQuote: "I ran triage every shift" }],
+          turns: said("I ran triage every shift"),
+          probe: probe(mode),
+        })
+      ).toMatchObject({ verified: true });
+
+      expect(
+        verifyProbeResult({
+          probeResult: { level: "regular", evidenceIndex: 0 },
+          evidence: [{ sourceQuote: "I prioritised patients" }],
+          turns: said("I prioritised patients"),
+          probe: probe(mode),
+        })
+      ).toMatchObject({ verified: false });
+    }
   });
 });

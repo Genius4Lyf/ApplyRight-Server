@@ -239,6 +239,52 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
     expect(aiService.coachChatTurn).not.toHaveBeenCalled();
   });
 
+  // A PROBE opens its own turn. Tapping a requirement on the job checklist is the trigger —
+  // there is no user message behind it. The client used to satisfy this check by pushing a
+  // sentence into the user's own bubble ("Can we check whether I've done X anywhere?"),
+  // which rendered exactly like something they had typed. The rule moved instead of the lie.
+  describe("a probe may open a turn with no user message", () => {
+    const probe = { requirementId: "req_triage", mode: "open" };
+
+    it("accepts a probe turn whose window ENDS with Aria", async () => {
+      aiService.coachChatTurn.mockResolvedValue({ reply: "Here's what they mean…", intent: "building", description: "" });
+
+      const res = await post({
+        draftId,
+        currentStepId: "skills",
+        probe,
+        messages: [{ who: "aria", text: "Anything else?" }],
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(aiService.coachChatTurn).toHaveBeenCalled();
+    });
+
+    it("accepts a probe turn with an EMPTY window — the very first thing they tap", async () => {
+      aiService.coachChatTurn.mockResolvedValue({ reply: "Here's what they mean…", intent: "building", description: "" });
+
+      const res = await post({ draftId, currentStepId: "skills", probe, messages: [] });
+
+      expect(res.statusCode).toBe(200);
+      expect(aiService.coachChatTurn).toHaveBeenCalled();
+    });
+
+    it("still 400s a NON-probe turn on both counts — the rule only moved for probes", async () => {
+      aiService.coachChatTurn.mockClear();
+
+      const endsWithAria = await post({
+        draftId,
+        currentStepId: "skills",
+        messages: [{ who: "aria", text: "Anything else?" }],
+      });
+      const empty = await post({ draftId, currentStepId: "skills", messages: [] });
+
+      expect(endsWithAria.statusCode).toBe(400);
+      expect(empty.statusCode).toBe(400);
+      expect(aiService.coachChatTurn).not.toHaveBeenCalled();
+    });
+  });
+
   it("404 when the focused entry is gone", async () => {
     aiService.coachChatTurn.mockResolvedValue({ reply: "x", intent: "building", description: "" });
     const res = await post({

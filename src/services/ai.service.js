@@ -4056,18 +4056,41 @@ Every turn, classify the user's latest message into ONE intent and act according
       .map((c) => `  · ${c.label} [${c.kind}, id=${c.sortId}]`)
       .join("\n");
 
+    // The user TAPPED a requirement on the job checklist. They did not ask a question, and
+    // nothing was typed on their behalf — so this turn opens a CONVERSATION about what the
+    // employer means, and only then goes looking. Leading with "have you done X?" asks
+    // someone to answer before they know what X is here.
+    const pressForAnswer = probe.mode === "build";
+
     system += `
-- HUNT MODE: the target job asks for "${probe.name}"${probe.sourceText ? ` — the job description says: "${probe.sourceText}"` : ""}. Their CV does not yet show it. Your ONE job this turn is to find out whether they have genuinely done it ANYWHERE, and where.
-- Tell them plainly that the employer asks for this, then ask ONE question that spans their whole history at once — this job, earlier jobs, school or coursework, training, volunteering, personal projects. Name a few of their actual contexts below so the question is concrete rather than abstract.
+- HUNT MODE: the user just tapped "${probe.name}" on the job's requirement checklist to find out about it. The target job asks for it${probe.sourceText ? ` — the job description says: "${probe.sourceText}"` : ""}, and their CV does not yet show it.
+- THIS IS A CONVERSATION, NOT A FORM. They tapped a chip; they did not ask you anything and nothing was typed for them. Do NOT thank them for a question they did not ask.
+- BEAT ONE — ORIENT, and do not skip it. Open by explaining what THIS posting means by "${probe.name}"${probe.sourceText ? `, quoting or paraphrasing the line above` : ""}, in plain language a non-specialist understands. Give TWO OR THREE concrete, everyday examples of what it looks like in practice, so someone who has done it under a different name can recognise it. Then invite a reaction — whether any of that sounds familiar, or whether they want it explained further.
+- DO NOT open with "have you used it" and DO NOT put the five options on a turn where they have not yet shown they know what it is. Someone cannot answer about a thing they cannot picture.
+- BEAT TWO — RECALL. Once they show they understand it (which may be their very first reply, if they clearly already know it), ask ONE question that spans their whole history at once — this job, earlier jobs, school or coursework, training, volunteering, personal projects — and offer the rungs. Name a few of their actual contexts below so the question is concrete rather than abstract.
 ${contextLines ? `- THEIR CONTEXTS (places to ASK about — never claims that they did it there):\n${contextLines}` : ""}
+- THE RUNGS, once beat two is reached: return \`suggestions\` as these five, in the user's language, adapted to sound natural for "${probe.name}": (1) I use it regularly, (2) I've used it a bit, (3) only in a course or training, (4) I've only come across it, (5) no, never. Set \`suggestionsLabel\` to a SHORT natural lead-in. Before beat two, return \`suggestions\`:[].
 - Include, in your own words, that "no" is a completely fine answer and that you will not ask again. Mean it.
-- OFFER THE RUNGS: return \`suggestions\` as these five, in the user's language, adapted to sound natural for "${probe.name}": (1) I use it regularly, (2) I've used it a bit, (3) only in a course or training, (4) I've only come across it, (5) no, never. Set \`suggestionsLabel\` to a SHORT natural lead-in.
-- NEVER supply the answer, never imply which rung is the right one, and never suggest they might have done it. You are asking, not steering.
+- NEVER supply the answer, never imply which rung is the right one, and never suggest they might have done it. You are explaining and asking, not steering.
 - If they say they HAVE used it, ask ONE follow-up about what they actually did with it — that is what decides whether it can go on their CV, and it must come from them.
 - When they have answered clearly, return \`probeResult\`: { "requirementId": "${probe.requirementId || ""}", "level": one of "regular"|"basic"|"coursework"|"encountered"|"never", "contextSortId": the id from THEIR CONTEXTS where they say it happened (or null), "contextKind": that context's kind (or null), "evidenceIndex": the zero-based index in \`evidence\` that backs it, or null }.
 - For levels regular/basic/coursework you MUST also return an \`evidence\` array whose cited item has a \`sourceQuote\` copied EXACTLY from one of THEIR messages, and that quote must actually name "${probe.name}" (or an obvious variant). Without that the claim is discarded — so ask until you have their own words, or accept that you don't.
-- For "encountered" or "never", return \`evidence\`:[] and warmly confirm you're leaving it off rather than overstating. Suggest, in one short sentence, that it could be worth learning if they want this kind of role. Stay kind — a gap is information, not a failure.
+- For "encountered" or "never", warmly confirm you're leaving it off rather than overstating. Suggest, in one short sentence, that it could be worth learning if they want this kind of role. Stay kind — a gap is information, not a failure.`;
+
+    if (pressForAnswer) {
+      system += `
+- POSTURE — SETTLE IT: you are mid-interview on one of their entries, so an answer here has somewhere to go: it becomes a bullet. After beat one, work toward a clear answer. Relate it to the entry you were just discussing first, then widen to the rest of their history.
+- For "encountered" or "never", return \`evidence\`:[].
 - Stay intent:'building' until they answer; use intent:'ready' only once \`probeResult\` is set.`;
+    } else {
+      system += `
+- POSTURE — EXPLORE: they are not mid-interview on any entry, so there is nowhere for a verdict to go yet and NOTHING has to be settled. They tapped this to understand it. Follow the conversation where they take it. Answer follow-up questions about the requirement itself as long as they keep asking.
+- Return \`probeResult\` ONLY if they clearly and unambiguously land on one of the five. A vague, uncertain, joking or half answer is NOT an answer — leave \`probeResult\` out entirely.
+- CRITICAL — do not manufacture a "no". A decline here silences this requirement everywhere, permanently. Only report "never" or "encountered" if they have plainly said so in their own words, and return an \`evidence\` array whose cited item quotes them saying it. If you cannot quote them, do not report a level at all.
+- If the conversation runs its course, moves on to something else, or they simply stop pursuing it → use intent:'answer', return no \`probeResult\`, and hand the conversation back to normal. Nothing recorded is the correct outcome for a chat that was only ever a question.
+- THAT EXIT DOES NOT APPLY TO THIS OPENING TURN. They have just tapped the requirement and said nothing yet, so there is nothing to have "moved on" from — the last thing in the conversation is your own previous line, and it is not a signal. On this turn you MUST do beat one: explain "${probe.name}". Never respond by carrying on the previous topic, never answer a general CV question they did not ask, and never open the skills step.
+- Otherwise stay intent:'building'; use intent:'ready' only once \`probeResult\` is set.`;
+    }
   } else if (focus) {
     system += `
 - FOCUS: you are gathering truthful material for several strong bullets for their ${section} entry titled '${entryTitle}'${entryCompany ? ` at ${entryCompany}` : ""}. You know, in general terms, what that role${entryCompany ? " and company" : ""} typically involves — use it to ask SPECIFIC, informed follow-ups, not generic filler.${experienceEntryTypeLine}
@@ -4167,6 +4190,22 @@ NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Th
   const turns = (messages || [])
     .map((m) => ({ role: m.who === "aria" ? "assistant" : "user", content: String(m.text || "") }))
     .filter((m) => m.content.trim());
+
+  // A tapped requirement has no user message behind it — that is the point, and the client
+  // no longer fabricates one to put in the user's bubble. But the window then ENDS WITH
+  // ARIA'S OWN LAST LINE, and a model reading that sees no new input: in the exploring
+  // posture it duly took the "conversation has moved on" exit and answered as if nothing
+  // had happened.
+  //
+  // So the trigger is stated here instead: an EVENT, in brackets, in our voice — never a
+  // sentence attributed to the user. It exists for this one request, is never displayed and
+  // never stored, and the transcript keeps the marker as its record.
+  if (probe?.name && turns[turns.length - 1]?.role !== "user") {
+    turns.push({
+      role: "user",
+      content: `[Event: the user tapped "${probe.name}" on the job requirement checklist to find out about it. They have not said anything yet — this is the opening turn.]`,
+    });
+  }
 
   const data = await callJSON({
     system,

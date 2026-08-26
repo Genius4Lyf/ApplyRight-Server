@@ -269,8 +269,16 @@ const huntContextsForDraft = (draft) => {
   return contexts.slice(0, 12);
 };
 
+// The two postures a hunt can take. They differ in ONE thing: whether Aria presses for an
+// answer. She does when there is somewhere to put one — a live role interview, where a
+// verdict becomes a bullet. Everywhere else the tap is curiosity ("what does this posting
+// even mean by that?"), and pinning someone down for merely asking is the wrong trade.
+// 'open' is the default because it is the posture that cannot do harm.
+const HUNT_MODES = ["build", "open"];
+const huntMode = (value) => (HUNT_MODES.includes(value) ? value : "open");
+
 // Build the probe payload for ONE requirement, or null when it must not be asked.
-const buildHuntProbe = (draft, brief, requirementId) => {
+const buildHuntProbe = (draft, brief, requirementId, mode = "open") => {
   const typed = Array.isArray(brief?.requirements) ? brief.requirements : [];
   const requirement = typed.find((item) => item?.id === requirementId);
   if (!requirement?.name) return null;
@@ -282,6 +290,7 @@ const buildHuntProbe = (draft, brief, requirementId) => {
     type: requirement.type || "skill",
     sourceText: String(requirement.sourceText || "").slice(0, 240),
     contexts: huntContextsForDraft(draft),
+    mode: huntMode(mode),
   };
 };
 
@@ -335,11 +344,21 @@ const huntOffersForEntry = (draft, brief, requirementChecks = [], cap = 2) => {
 // than anywhere else.
 //
 // Returns { level, verified, evidence } — `verified` false downgrades to 'deferred' and
-// writes nothing. Declines need no evidence: they only ever REMOVE things.
+// writes nothing.
+//
+// In a BUILD-posture hunt a decline needs no evidence: the user was asked a direct question
+// and a decline only ever REMOVES things. That reasoning does not survive the OPEN posture.
+// There the tap was curiosity — "what does this posting even mean by that?" — and a
+// wandering answer must never be turned into a permanent "never ask again". So an open
+// decline has to clear the same bar as a claim: the user's own words, naming the thing.
 const verifyProbeResult = ({ probeResult, evidence = [], turns = [], probe }) => {
   const level = probeResult?.level;
   if (!aiService.HUNT_LEVELS.includes(level)) return null;
-  if (!aiService.HUNT_LEVELS_ADDABLE.includes(level)) {
+  // Missing mode defaults to the OPEN rule, matching buildHuntProbe. The unevidenced
+  // shortcut has to be opted into explicitly, so a probe assembled anywhere else cannot
+  // silence a requirement by omission.
+  const isDecline = !aiService.HUNT_LEVELS_ADDABLE.includes(level);
+  if (isDecline && probe?.mode === "build") {
     return { level, verified: true, evidence: null };
   }
 
@@ -1305,19 +1324,25 @@ const chat = async (req, res) => {
       .status(400)
       .json({ message: "focus must be { section: 'experience'|'project', sortId }" });
   }
-  if (!Array.isArray(messages) || messages.length === 0) {
+  // A PROBE opens its own turn. Tapping a requirement is the trigger — there is no user
+  // message behind it, and the client must not invent one to satisfy this check (it used to
+  // push a sentence into the user's own bubble, which read as something they had typed).
+  // Every non-probe turn keeps both rules exactly as they were.
+  const probeOpensTurn = !!probeRequest?.requirementId;
+
+  if (!Array.isArray(messages) || (messages.length === 0 && !probeOpensTurn)) {
     return res.status(400).json({ message: "messages must be a non-empty array" });
   }
   // Normalize + validate: the LAST message must be the user's new turn.
-  const turns = messages
+  const turns = (Array.isArray(messages) ? messages : [])
     .filter((m) => m && (m.who === "aria" || m.who === "user") && typeof m.text === "string")
     .map((m) => ({ who: m.who, text: m.text.trim() }))
     .filter((m) => m.text);
   const last = turns[turns.length - 1];
-  if (!last || last.who !== "user") {
+  if ((!last || last.who !== "user") && !probeOpensTurn) {
     return res.status(400).json({ message: "The last message must be the user's turn." });
   }
-  if (last.text.length > 800) {
+  if (last && last.text.length > 800) {
     last.text = last.text.slice(0, 800);
   }
 
@@ -1407,7 +1432,7 @@ const chat = async (req, res) => {
     // The CROSS-HISTORY HUNT for one requirement. Null when the id is unknown or the user
     // has already declined it — buildHuntProbe refuses rather than asking again.
     const probe = probeRequest?.requirementId
-      ? buildHuntProbe(draft, brief, probeRequest.requirementId)
+      ? buildHuntProbe(draft, brief, probeRequest.requirementId, probeRequest.mode)
       : null;
 
     // NO focus → every turn is a general answer (metered like /coach/ask). Pre-check
@@ -1555,7 +1580,11 @@ const chat = async (req, res) => {
       });
       if (verdict) {
         const addable = aiService.HUNT_LEVELS_ADDABLE.includes(verdict.level);
-        const status = !addable ? "declined" : verdict.verified ? "confirmed" : "deferred";
+        // `verified` now gates BOTH directions. It always gated a claim; it gates a decline
+        // too in the open posture, where verifyProbeResult refuses an unbacked "never".
+        // Unverified either way → 'deferred': the probe is recorded as asked, but nothing
+        // enters the CV and nothing is silenced.
+        const status = verdict.verified ? (addable ? "confirmed" : "declined") : "deferred";
 
         // File the evidence under the entry the USER says it happened in — which is
         // usually NOT the entry this conversation started from. That is the whole point of
