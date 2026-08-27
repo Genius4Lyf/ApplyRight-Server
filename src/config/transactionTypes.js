@@ -36,6 +36,11 @@ const TRANSACTION_TYPES = Object.freeze({
   DRAFT_JD: "draft_jd",
   STUDIO_SCAN: "studio_scan",
   PROJECT_IDEAS: "project_ideas",
+  // Importing an uploaded CV into an Aria Studio session (POST /studio/upload-import).
+  // The CV builder's own paid upload (/resumes/upload-and-create) deliberately still
+  // writes the generic "usage" type — retyping it would silently reclassify every
+  // historical row in the admin charts.
+  CREATE_FROM_UPLOAD: "create_from_upload",
 });
 
 // The array form Mongoose's `enum` validator wants.

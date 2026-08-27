@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+const fs = require("fs");
 const mongoose = require("mongoose");
 const DraftCV = require("../models/DraftCV");
 const User = require("../models/User");
@@ -7,6 +9,7 @@ const settingsService = require("../services/settings.service");
 const modelSelection = require("../services/modelSelection.service");
 const atsCoach = require("../services/atsCoach.service");
 const langService = require("../services/language.service");
+const { parseResume } = require("../services/resumeParser.service");
 const scoringEngine = require("../services/scoringEngine.service");
 const { scanSections, SCAN_RULES_VERSION } = require("../services/sectionScan.service");
 const { isPaidActive } = require("../services/subscription.service");
@@ -789,6 +792,257 @@ const buildStart = async (req, res) => {
   }
 };
 
+// The CV-shaped fields an import writes. A draft carrying ANY of them is refused
+// rather than merged — see uploadImport's clobber guard.
+const IMPORTABLE_LISTS = ["experience", "projects", "education", "skills"];
+
+// A bullet array → the single description string the CV stores. Byte-identical to
+// resume.controller.uploadAndCreateDraft's mapping on purpose: an imported CV must
+// render exactly like an uploaded one, and two spellings of "how a bullet is stored"
+// is how they quietly stop matching.
+const bulletsToDescription = (description) =>
+  Array.isArray(description) ? description.map((d) => `• ${d}`).join("\n") : description || "";
+
+// Best-effort removal of multer's temp file. Never throws — a leaked temp file is a
+// disk-space problem, a thrown cleanup is a lost response.
+const dropTempFile = (filePath, context = "") => {
+  if (!filePath) return;
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (err) {
+    console.warn(`Studio upload-import: failed to delete temp file${context ? ` ${context}` : ""}:`, err.message);
+  }
+};
+
+// @desc    Import an uploaded CV into an EXISTING, empty Aria Studio build session.
+//
+//          Deliberately an IMPORT and not a create. The Studio asks for career stage and
+//          the target job BEFORE the upload, and both are saved onto a real draft — so
+//          the document already exists by the time the file arrives. That ordering is the
+//          whole point: the CV lands into a session that already knows who the user is
+//          and what they're aiming at.
+//
+//          Extraction runs VERBATIM (see ai.service.extractResumeProfile): the Studio's
+//          job is to improve the CV *with* the user, so rewriting their bullets on the way
+//          in would take away both their own words and the thing the coaching works on.
+//          The CV builder's upload (/resumes/upload-and-create) still polishes — that flow
+//          hands back a finished CV instead of opening a conversation about one.
+//
+//          Charges CREATE_FROM_UPLOAD — the same price the builder's upload charges, for
+//          the same work — and only once the extraction has actually produced something.
+// @route   POST /api/studio/upload-import
+// @access  Private
+const uploadImport = async (req, res) => {
+  const filePath = req.file?.path;
+
+  if (!req.file) {
+    return res.status(400).json({ message: "Please upload a file" });
+  }
+
+  const { draftId } = req.body || {};
+  if (!mongoose.Types.ObjectId.isValid(draftId)) {
+    dropTempFile(filePath);
+    return res.status(400).json({ message: "A valid draftId is required" });
+  }
+
+  try {
+    const draft = await DraftCV.findById(draftId);
+    if (!draft) {
+      dropTempFile(filePath);
+      return res.status(404).json({ message: "Draft not found" });
+    }
+    if (draft.userId.toString() !== req.user.id) {
+      dropTempFile(filePath);
+      return res.status(403).json({ message: "Not authorized to edit this CV" });
+    }
+
+    // Refuse to import over existing work. The Studio flow can't produce this — the
+    // upload card only ever appears on a fresh build session — so this exists purely so a
+    // stray retry or a hand-made request can never eat a CV someone has been writing.
+    const hasContent =
+      IMPORTABLE_LISTS.some((key) => (draft[key] || []).length > 0) ||
+      !!(draft.professionalSummary || "").trim();
+    if (hasContent) {
+      dropTempFile(filePath);
+      return res.status(409).json({
+        code: "DRAFT_NOT_EMPTY",
+        message: "This CV already has content. Start a new session to import a file.",
+      });
+    }
+
+    // Same lean projection draftJd uses, plus `role` — availableCredits/spendCredits need
+    // the balances and resolveTextModel needs role + plan to pick the text model.
+    const user = await User.findById(req.user.id).select("role plan tier subscription credits");
+    if (!user) {
+      dropTempFile(filePath);
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const cost = (await settingsService.getCreditCosts()).CREATE_FROM_UPLOAD;
+
+    // Balance checked BEFORE any expensive work, so a user who can't pay never waits
+    // through a parse and two model calls to be told so.
+    if (subscription.availableCredits(user) < cost) {
+      dropTempFile(filePath);
+      return res.status(403).json({
+        code: "INSUFFICIENT_CREDITS",
+        message: "Insufficient credits",
+        required: cost,
+        current: subscription.availableCredits(user),
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    const { rawText } = await parseResume(filePath, req.file.mimetype);
+    if (!rawText || !rawText.trim()) {
+      dropTempFile(filePath);
+      return res.status(422).json({
+        code: "NO_TEXT",
+        message:
+          "Could not read any text from that file. Please upload a text-based PDF or DOCX.",
+      });
+    }
+
+    const extracted = await aiService.extractResumeProfile(
+      rawText,
+      { userId: req.user.id, lang: req.lang },
+      { verbatim: true }
+    );
+
+    const experience = extracted?.experience || [];
+    const education = extracted?.education || [];
+    const projects = extracted?.projects || [];
+    const rawSkills = extracted?.skills || [];
+
+    // Nothing usable came back — an image-only CV, a cover letter, the wrong file. The
+    // user is NOT charged: the standing rule across this codebase is that nobody pays
+    // for output that isn't there.
+    if (!experience.length && !education.length && !projects.length && !rawSkills.length) {
+      dropTempFile(filePath);
+      return res.status(422).json({
+        code: "NOTHING_EXTRACTED",
+        message:
+          "Aria couldn't find any CV content in that file. Nothing was charged — check it's the right document, or type it out instead.",
+      });
+    }
+
+    // Categorising the skills is a nice-to-have, not the deliverable. A failure here
+    // falls back to the flat extracted list rather than sinking an import the user is
+    // about to pay for.
+    let structuredSkills = [];
+    try {
+      structuredSkills = await aiService.generateStructuredSkills(
+        { education, experience, projects, targetJob: draft.targetJob?.title || null },
+        { model: aiService.resolveTextModel(user), lang: langService.newCvLang(req) }
+      );
+    } catch (skillsError) {
+      console.error("Studio upload-import: skill categorisation failed", skillsError.message);
+    }
+
+    const charge = await subscription.spendCredits(user, cost, {
+      type: TRANSACTION_TYPES.CREATE_FROM_UPLOAD,
+      description: "Import an uploaded CV into Aria Studio",
+    });
+    if (charge.insufficient) {
+      dropTempFile(filePath);
+      return res.status(403).json({
+        code: "INSUFFICIENT_CREDITS",
+        message: "Insufficient credits",
+        required: cost,
+        current: subscription.availableCredits(user),
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    // EVERY list entry gets a fresh _sortId. This is not cosmetic: Aria's writers resolve
+    // the entry they're editing server-side by _sortId, so an entry without one is
+    // invisible to every generate/rewrite/interview action in the Studio.
+    const contact = extracted?.contactInfo || {};
+    const existing = draft.personalInfo || {};
+
+    draft.source = "upload";
+    // Contact info the CV itself carries beats the profile values build-start seeded —
+    // same precedence as resume.controller.uploadAndCreateDraft.
+    draft.personalInfo = {
+      fullName: contact.fullName || existing.fullName || "",
+      email: contact.email || existing.email || "",
+      phone: contact.phone || existing.phone || "",
+      linkedin: contact.linkedin || existing.linkedin || "",
+      website: contact.website || existing.website || "",
+      address: contact.address || existing.address || "",
+    };
+    draft.professionalSummary = (extracted?.summary || "").trim();
+    draft.experience = experience.map((e) => ({
+      _sortId: crypto.randomUUID(),
+      title: e.role || "",
+      company: e.company || "",
+      startDate: e.startDate || "",
+      endDate: e.endDate || "",
+      description: bulletsToDescription(e.description),
+    }));
+    draft.education = education.map((e) => ({
+      _sortId: crypto.randomUUID(),
+      degree: e.degree || "",
+      school: e.school || "",
+      field: e.field || "",
+      graduationDate: e.date || "",
+    }));
+    draft.projects = projects.map((p) => ({
+      _sortId: crypto.randomUUID(),
+      title: p.title || "",
+      link: p.link || "",
+      description: bulletsToDescription(p.description),
+    }));
+    draft.skills =
+      structuredSkills && structuredSkills.length
+        ? structuredSkills.map((s) => ({ ...s, isAutoGenerated: true }))
+        : rawSkills.map((name) => ({ name, category: "Uncategorized", isAutoGenerated: false }));
+
+    await draft.save();
+    dropTempFile(filePath);
+
+    return res.json({
+      draft,
+      cost,
+      remainingCredits:
+        typeof charge.remainingCredits === "number"
+          ? charge.remainingCredits
+          : subscription.availableCredits(user),
+      // What actually landed, so the chat can say it out loud rather than guess.
+      imported: {
+        experience: draft.experience.length,
+        education: draft.education.length,
+        projects: draft.projects.length,
+        skills: draft.skills.length,
+        summary: !!draft.professionalSummary,
+      },
+    });
+  } catch (error) {
+    dropTempFile(filePath, "in error handler");
+
+    if (error.code === "UNSUPPORTED_FILE_TYPE") {
+      return res
+        .status(400)
+        .json({ message: "Unsupported file type. Please upload a PDF or DOC/DOCX CV." });
+    }
+    if (error.code === "EMPTY_RESUME_TEXT") {
+      return res.status(422).json({
+        code: "NO_TEXT",
+        message:
+          "Could not read any text from that file. Please upload a text-based PDF or DOCX.",
+      });
+    }
+    if (error instanceof aiService.AIUnavailableError) {
+      return res
+        .status(503)
+        .json({ message: "AI is not configured right now. Please try again later." });
+    }
+
+    console.error("Studio Upload Import Error:", error);
+    return res.status(500).json({ message: "Couldn't read that CV. Please try again." });
+  }
+};
+
 // How many sessions the rail shows. Far past what anyone scrolls, and it bounds the
 // response regardless of how many CVs a heavy user accumulates.
 const SESSION_LIMIT = 50;
@@ -1184,6 +1438,7 @@ const projectIdeas = async (req, res) => {
 module.exports = {
   tailorStart,
   buildStart,
+  uploadImport,
   briefPreview,
   updateTargetJob,
   draftJd,

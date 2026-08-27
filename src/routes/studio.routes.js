@@ -1,9 +1,11 @@
 const express = require("express");
 const rateLimit = require("express-rate-limit");
+const multer = require("multer");
 const router = express.Router();
 const {
   tailorStart,
   buildStart,
+  uploadImport,
   briefPreview,
   draftJd,
   scan,
@@ -57,6 +59,18 @@ router.post("/tailor-start", protect, tailorStart);
 // Aria Studio — start a BUILD session: an empty CV prefilled with the user's contact
 // details, optionally aimed at a job. Same create gate as tailor-start.
 router.post("/build-start", protect, buildStart);
+
+// Aria Studio — import an uploaded CV into an existing, EMPTY build session. Same multer
+// limits as resume.routes (5MB, temp file deleted on every exit path) and behind aiLimiter
+// because it runs two model calls. Charges CREATE_FROM_UPLOAD — the same price the CV
+// builder's upload charges — and only once the extraction has produced something.
+router.post(
+  "/upload-import",
+  protect,
+  aiLimiter,
+  multer({ dest: "uploads/", limits: { fileSize: 5 * 1024 * 1024 } }).single("resume"),
+  uploadImport
+);
 
 // Aria Studio — full scan: AI fit analysis + deterministic per-section verdicts.
 // Charges ANALYSIS, and only after the AI succeeds.
