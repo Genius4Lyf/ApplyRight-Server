@@ -122,7 +122,12 @@ app.use("/api/resumes", resumeRoutes);
 app.use("/api/ai", aiLimiter, aiRoutes); // Apply AI-specific rate limiter
 app.use("/api/applications", applicationRoutes);
 app.use("/api/analysis", require("./routes/analysis.routes"));
-app.use("/api/coach", aiLimiter, require("./routes/coach.routes")); // CV Builder ATS Coach (AI deep scan)
+// Aria coach + Studio conversation. NOT globally AI-limited, and deliberately so: this
+// router IS the build conversation, and aiLimiter (20/hour/IP) could not finish a single
+// one — a real build runs ~40 turns. The router applies conversationLimiter itself, AFTER
+// protect, so the budget is keyed to the ACCOUNT rather than to an IP shared by every
+// user behind the same mobile carrier. Spend is metered per user by credits, not here.
+app.use("/api/coach", require("./routes/coach.routes"));
 // Aria Studio (agentic tailor) — builds a Role Brief. NOT globally AI-limited: most of
 // this router (sessions/build-start/tailor-start/recompute) is document CRUD, not a
 // model call. The router applies aiLimiter itself, only to the routes that call the
