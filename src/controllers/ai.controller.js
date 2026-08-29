@@ -697,9 +697,15 @@ const generateSkills = async (req, res) => {
       ? []
       : generated?.confirmationCandidates || [];
     if (!Array.isArray(suggestions) || suggestions.length === 0) {
+      // An AI/parse failure and an honestly empty result are opposite messages. Telling
+      // someone with a full CV to "add more detail" because the model returned malformed
+      // JSON sends them off to fix a profile that was never the problem.
+      const aiFailed = !Array.isArray(generated) && generated?.failed;
       return res.status(502).json({
-        message:
-          "Aria couldn't find enough supported skills yet. Add more detail to your experience or projects and try again.",
+        code: aiFailed ? "AI_FAILED" : "NO_SUPPORTED_SKILLS",
+        message: aiFailed
+          ? "Aria couldn't finish reading your profile. Nothing was charged — please try again."
+          : "Aria couldn't find enough supported skills yet. Add more detail to your experience or projects and try again.",
       });
     }
 

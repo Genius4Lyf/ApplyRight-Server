@@ -4905,8 +4905,13 @@ const generateSkillsFromContext = async (
   )
     .slice(0, 40)
     .map(
+      // The id is shown QUOTED, deliberately. Everywhere else in this prompt a bracket
+      // wraps a numeric index ([0] Field Operator at SLB) that goes into JSON as a bare
+      // number — so labelling these "[ie5]" taught the model to emit the bracketed token
+      // verbatim into the array ("interviewEvidenceIds": [ie5]), which is not valid JSON
+      // and cost the user the entire generation. These ids are STRINGS; show them as such.
       (item, i) =>
-        `    [ie${i}] (${item.type} [${item.refIndex}]) ${item.claim}${
+        `    id "ie${i}" (${item.type} [${item.refIndex}]) ${item.claim}${
           item.tools?.length ? ` — TOOLS THEY NAMED: ${item.tools.join(", ")}` : ""
         }\n      THEIR WORDS: "${item.sourceQuote}"`
     )
@@ -4918,11 +4923,14 @@ const generateSkillsFromContext = async (
   // Ask for the citation field ONLY when there is something to cite. Otherwise it is an
   // instruction referring to a block that isn't in the prompt — which invites invented ids.
   const interviewCiteDetail = interviewBlock
-    ? `       - "interviewEvidenceIds": any [ieN] ids from INTERVIEW EVIDENCE that support this skill (use [] when none). A skill the candidate NAMED in their own words is the strongest evidence there is.`
+    ? `       - "interviewEvidenceIds": a JSON array of QUOTED STRING ids from INTERVIEW EVIDENCE that support this skill, e.g. ["ie0", "ie3"] (use [] when none). These are strings, never bare tokens or numbers. A skill the candidate NAMED in their own words is the strongest evidence there is.`
     : "";
   const interviewCiteInline = interviewBlock
-    ? `, and "interviewEvidenceIds": any [ieN] ids from INTERVIEW EVIDENCE that support it ([] when none — a skill the candidate NAMED in their own words is the strongest evidence there is)`
+    ? `, and "interviewEvidenceIds": a JSON array of QUOTED STRING ids from INTERVIEW EVIDENCE that support it, e.g. ["ie0", "ie3"] ([] when none — a skill the candidate NAMED in their own words is the strongest evidence there is)`
     : "";
+  // The OUTPUT example never showed this field, so the only guidance the model had for it
+  // was prose. An example of the exact shape is worth more than any amount of instruction.
+  const interviewCiteExample = interviewBlock ? `"interviewEvidenceIds": ["ie0"]` : "";
 
   // The gaps the scan already measured. Carries the same hard clause the summary writer
   // uses: a SEARCH LIST, never a licence. The Studio fix flow used to display these to the
@@ -5002,7 +5010,7 @@ ${interviewCiteDetail}
                   "name": "Skill 1",
                   "evidence": [
                     { "type": "experience", "refIndex": 0, "snippet": "Built data pipelines processing 10M records" }
-                  ],
+                  ],${interviewCiteExample ? `\n                  ${interviewCiteExample},` : ""}
                   "talkingPoint": "At Acme I used Python to build production data pipelines processing 10M records daily..."
                 }
               ]
@@ -5061,7 +5069,7 @@ ${interviewCiteDetail}
                   "name": "Skill 1",
                   "evidence": [
                     { "type": "experience", "refIndex": 0, "snippet": "Prepared weekly reports using the named tool" }
-                  ]
+                  ]${interviewCiteExample ? `,\n                  ${interviewCiteExample}` : ""}
                 }
               ]
             }
@@ -5079,25 +5087,39 @@ ${interviewCiteDetail}
     `;
 
   try {
+    // Ask the PROVIDER to enforce valid JSON instead of trusting the model to produce it.
+    // This object is large and deeply nested, and one malformed token anywhere in it throws
+    // away the entire generation — OpenAI and Gemini can constrain the decoder so that
+    // cannot happen. Providers with no JSON mode fall through to the tolerant brace-slice
+    // below, which is also the recovery path if a reply still arrives wrapped in prose.
+    let data = null;
     let resultText = "";
     if (options.modelId) {
-      // Selected model → multi-provider dispatcher. Raw text (json:false) so the tolerant
-      // fence/brace parse below still runs identically. Sonnet 5's adaptive thinking
-      // shares max_tokens with the visible response; skills JSON is substantially larger
-      // than bullet JSON (groups + evidence + paid talking points), so keep thinking off
-      // and give the paid shape additional output headroom.
-      resultText = await callModel(options.modelId, {
-        user: prompt,
-        json: false,
-        disableThinking: true,
-        maxTokens: isPaid ? 8192 : 4096,
-        meta: { ...(options.meta || {}), operation: options.meta?.operation || "generateSkills" },
-      });
+      // Selected model → multi-provider dispatcher. Sonnet 5's adaptive thinking shares
+      // max_tokens with the visible response; skills JSON is substantially larger than
+      // bullet JSON (groups + evidence + paid talking points), so keep thinking off and
+      // give the paid shape additional output headroom.
+      try {
+        data = await callModel(options.modelId, {
+          user: prompt,
+          json: true,
+          disableThinking: true,
+          maxTokens: isPaid ? 8192 : 4096,
+          meta: { ...(options.meta || {}), operation: options.meta?.operation || "generateSkills" },
+        });
+      } catch (err) {
+        // The dispatcher's parse tolerates ```json fences but not surrounding prose. It
+        // carries the raw reply on the error, so that case stays recoverable here rather
+        // than costing the user a generation the model actually completed.
+        if (!(err instanceof AIJSONParseError)) throw err;
+        resultText = err.response;
+      }
     } else if (activeProvider === "openai") {
       // No system role on this legacy path — append the language directive to the prompt.
       const response = await openai.chat.completions.create({
         model,
         messages: [{ role: "user", content: prompt + langDirective(options.meta?.lang) }],
+        response_format: { type: "json_object" },
       });
       resultText = response.choices[0].message.content;
     } else if (activeProvider === "gemini") {
@@ -5105,17 +5127,18 @@ ${interviewCiteDetail}
       resultText = result.response.text();
     }
 
-    let jsonStr = resultText
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
-    const startIndex = jsonStr.indexOf("{");
-    const endIndex = jsonStr.lastIndexOf("}");
-    if (startIndex !== -1 && endIndex !== -1) {
-      jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+    if (!data) {
+      let jsonStr = String(resultText || "")
+        .replace(/```json/g, "")
+        .replace(/```/g, "")
+        .trim();
+      const startIndex = jsonStr.indexOf("{");
+      const endIndex = jsonStr.lastIndexOf("}");
+      if (startIndex !== -1 && endIndex !== -1) {
+        jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+      }
+      data = JSON.parse(jsonStr);
     }
-
-    const data = JSON.parse(jsonStr);
     const knownCertifications = [
       ...(Array.isArray(options.certifications) ? options.certifications : []),
       ...(Array.isArray(roleBrief?.requirements)
@@ -5247,7 +5270,10 @@ ${interviewCiteDetail}
     return { suggestions: organizedSuggestions, confirmationCandidates };
   } catch (error) {
     console.error("AI Skills Generation Failed:", error);
-    return { suggestions: [], confirmationCandidates: [] };
+    // `failed` separates "the call broke" from "the model ran and found nothing it could
+    // evidence". Both produce an empty list, but they are opposite messages to the user:
+    // one is retryable and not their fault, the other means their profile is too thin.
+    return { suggestions: [], confirmationCandidates: [], failed: true };
   }
 };
 
