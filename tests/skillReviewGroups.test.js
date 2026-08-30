@@ -118,3 +118,75 @@ describe("skillReviewGroups", () => {
     );
   });
 });
+
+// A "no" has to stick.
+//
+// skillDeclines was READ by the generator from the day it was added but written only by
+// the coach interview — nothing wrote a decline from the skills card, so answering "no"
+// was discarded and the same question came back next time. Survivable while the list was
+// capped at five plausible-from-the-CV skills. Not once the role canon can offer twenty.
+describe("a skill the user has said they never did stops being asked about", () => {
+  const candidates = [
+    {
+      name: "Soldering",
+      category: "Pipework",
+      reason: "Typical for a plumber",
+      question: "Plumbers usually solder. Did you?",
+      evidence: [],
+      typicalFor: "exp0",
+      typicalForLabel: "Plumber",
+    },
+    {
+      name: "Pressure Testing",
+      category: "Commissioning",
+      reason: "Typical for a plumber",
+      question: "Did you pressure test?",
+      evidence: [],
+      typicalFor: "exp0",
+      typicalForLabel: "Plumber",
+    },
+  ];
+
+  it("drops it from the questions with no job description", () => {
+    const groups = skillReviewGroups({
+      suggestions,
+      bestForRole: [],
+      targetJob: "",
+      ...profile,
+      confirmationCandidates: candidates,
+      declinedSkills: [{ name: "Soldering", level: "never", source: "skills_card" }],
+    });
+
+    expect(groups.mode).toBe("profile");
+    expect(groups.confirmation.map((row) => row.name)).toEqual(["Pressure Testing"]);
+  });
+
+  it("drops it with a job description too", () => {
+    const groups = skillReviewGroups({
+      suggestions,
+      bestForRole: [],
+      targetJob: "Maintenance technician: pipework, commissioning, pressure testing.",
+      ...profile,
+      confirmationCandidates: candidates,
+      declinedSkills: [{ name: "soldering", level: "encountered", source: "skills_card" }],
+    });
+
+    expect(groups.mode).toBe("job");
+    expect(groups.confirmation.map((row) => row.name)).not.toContain("Soldering");
+  });
+
+  it("carries the role a candidate is typical of through to the UI", () => {
+    // "Typical for Plumber" is the difference between a suggestion a user can place and a
+    // skill that appears out of nowhere.
+    const groups = skillReviewGroups({
+      suggestions,
+      bestForRole: [],
+      targetJob: "",
+      ...profile,
+      confirmationCandidates: candidates,
+    });
+
+    expect(groups.confirmation[0].typicalForLabel).toBe("Plumber");
+    expect(groups.confirmation[0].evidenceStatus).toBe("plausible");
+  });
+});

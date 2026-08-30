@@ -131,6 +131,14 @@ const draftCVSchema = new mongoose.Schema(
     // of re-charging the user (and re-hitting the AI). Regenerated only when the
     // underlying profile actually changes. `bestForRole` is the deterministic
     // JD-match set (names) used to drive the paid "Best for this role" picks.
+    // What people in the user's OWN roles/projects/certifications normally know — the
+    // occupational vocabulary skills generation is grounded against. Cached separately
+    // from skillsGenCache and keyed on the TITLES alone, so changing the skill count or
+    // the model re-runs the generation without re-deriving the canon.
+    skillCanonCache: {
+      hash: String,
+      roles: mongoose.Schema.Types.Mixed, // [{ id, label, source, refIndex, skills[] }]
+    },
     skillsGenCache: {
       hash: String,
       suggestions: mongoose.Schema.Types.Mixed, // [{ category, skills[], skillsDetailed? }]

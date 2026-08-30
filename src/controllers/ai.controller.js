@@ -214,6 +214,67 @@ const scanMissingSkillKeywords = (draft) => {
   return out.slice(0, 10);
 };
 
+// The occupational vocabulary for the user's own roles, projects and certifications —
+// derived once and cached on the draft.
+//
+// Keyed on the TITLES alone, deliberately: the canon answers "what does a plumber know",
+// which does not change when the user edits a bullet, picks a different model or asks for
+// a different number of skills. Only adding or renaming a role can move it.
+//
+// Server-pinned to the Standard model inside roleSkillCanon and charged nothing of its
+// own — it is folded into GENERATE_SKILLS, so a flagship generation never pays twice.
+const resolveRoleCanon = async ({ draft, experience, projects, stage, userId, req }) => {
+  const aiService = require("../services/ai.service");
+  const roles = Array.isArray(experience) ? experience : [];
+  const projectRows = Array.isArray(projects) ? projects : [];
+  const certifications = Array.isArray(draft?.certifications) ? draft.certifications : [];
+
+  const canonHash = require("crypto")
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        // Bump when the canon's shape or prompt contract changes.
+        canonSchema: 1,
+        stage: stage || "",
+        roles: roles.map((row) =>
+          String(row?.title || "")
+            .toLowerCase()
+            .trim()
+        ),
+        projects: projectRows.map((row) =>
+          `${row?.title || ""}|${row?.projectType || row?.type || ""}`.toLowerCase().trim()
+        ),
+        certifications: certifications.map((row) =>
+          String(typeof row === "string" ? row : row?.name || "")
+            .toLowerCase()
+            .trim()
+        ),
+      })
+    )
+    .digest("hex");
+
+  if (draft?.skillCanonCache?.hash === canonHash && Array.isArray(draft.skillCanonCache.roles)) {
+    return draft.skillCanonCache.roles;
+  }
+
+  const canon = await aiService.roleSkillCanon({
+    roles,
+    projects: projectRows,
+    certifications,
+    stage,
+    meta: { userId, operation: "roleSkillCanon", lang: langService.docLang(draft, req) },
+  });
+
+  // Persist even an empty result: a profile whose titles yield nothing (no roles at all, or
+  // titles the scope guard rejected) must not re-ask the model on every generation.
+  if (draft) {
+    draft.skillCanonCache = { hash: canonHash, roles: canon };
+    draft.markModified("skillCanonCache");
+    await draft.save();
+  }
+  return canon;
+};
+
 // How strongly the PROFILE backs a skill, 0-100. Pure and deterministic — no AI, no cost.
 //
 // scoreBestForRole answers "does this skill match the job?" and stays the MATCHER. It was
@@ -336,6 +397,14 @@ const skillReviewGroups = ({
     });
   });
 
+  // Defined before the profile-mode return below: a skill the user has already said they
+  // have never done must stop being asked about in EVERY mode, not just the JD one.
+  const declined = new Set(
+    (declinedSkills || [])
+      .map((row) => String(typeof row === "string" ? row : row?.name || "").toLowerCase())
+      .filter(Boolean)
+  );
+
   const hasJobDescription = Boolean(String(targetJob || "").trim() || roleBrief?.role);
   if (!hasJobDescription) {
     // No job to rank against, so evidence strength IS the ranking — "core" means most
@@ -348,17 +417,19 @@ const skillReviewGroups = ({
       mode: "profile",
       core: byStrength.slice(0, coreCount),
       additional: byStrength.slice(coreCount),
-      confirmation: (confirmationCandidates || []).map((candidate) => ({
-        ...candidate,
-        evidence: (candidate.evidence || []).map((item) => ({
-          ...item,
-          sourceLabel:
-            skillSourceLabel(sources[item.type]?.[item.refIndex], item.type, item.refIndex) ||
-            `${item.type} ${item.refIndex + 1}`,
+      confirmation: (confirmationCandidates || [])
+        .filter((candidate) => !declined.has(String(candidate?.name || "").toLowerCase()))
+        .map((candidate) => ({
+          ...candidate,
+          evidence: (candidate.evidence || []).map((item) => ({
+            ...item,
+            sourceLabel:
+              skillSourceLabel(sources[item.type]?.[item.refIndex], item.type, item.refIndex) ||
+              `${item.type} ${item.refIndex + 1}`,
+          })),
+          explicitlyConfirmed: false,
+          evidenceStatus: "plausible",
         })),
-        explicitlyConfirmed: false,
-        evidenceStatus: "plausible",
-      })),
       gaps: [],
     };
   }
@@ -394,11 +465,6 @@ const skillReviewGroups = ({
   // something to confirm — being asked again about a "no" is the fastest way to feel
   // unheard. It is NOT hidden from the gaps list: an honest gap is still worth knowing
   // about, it just isn't a question any more.
-  const declined = new Set(
-    (declinedSkills || [])
-      .map((row) => String(typeof row === "string" ? row : row?.name || "").toLowerCase())
-      .filter(Boolean)
-  );
   const typedRequirements = roleRequirements.filter(
     (item) =>
       item?.name &&
@@ -449,17 +515,19 @@ const skillReviewGroups = ({
       (token) =>
         !["with", "using", "experience", "strong", "skills", "ability", "knowledge"].includes(token)
     );
-  const confirmation = (confirmationCandidates || []).map((candidate) => ({
-    ...candidate,
-    evidence: (candidate.evidence || []).map((item) => ({
-      ...item,
-      sourceLabel:
-        skillSourceLabel(sources[item.type]?.[item.refIndex], item.type, item.refIndex) ||
-        `${item.type} ${item.refIndex + 1}`,
-    })),
-    explicitlyConfirmed: false,
-    evidenceStatus: "plausible",
-  }));
+  const confirmation = (confirmationCandidates || [])
+    .filter((candidate) => !declined.has(String(candidate?.name || "").toLowerCase()))
+    .map((candidate) => ({
+      ...candidate,
+      evidence: (candidate.evidence || []).map((item) => ({
+        ...item,
+        sourceLabel:
+          skillSourceLabel(sources[item.type]?.[item.refIndex], item.type, item.refIndex) ||
+          `${item.type} ${item.refIndex + 1}`,
+      })),
+      explicitlyConfirmed: false,
+      evidenceStatus: "plausible",
+    }));
   const gaps = [];
   typedRequirements
     .filter((requirement) => !matchedRequirements.has(requirement.id))
@@ -557,8 +625,65 @@ const skillReviewGroups = ({
   };
 };
 
+// @desc    Record skills the user says they have never done
+// @route   POST /api/ai/skill-declines
+// @access  Private
+//
+// `skillDeclines` was READ by the skills generator from the day it was added but written
+// only by the coach interview — the schema's `skills_card` source was aspirational, so
+// answering "no" on a confirmation card was thrown away and the same question came back on
+// the next generation. Survivable while only 5 candidates were ever offered. Not once the
+// role canon can offer twenty.
+const declineSkills = async (req, res) => {
+  const { draftId, declines } = req.body || {};
+  if (!draftId || draftId === "new") {
+    return res.status(400).json({ message: "draftId is required" });
+  }
+
+  try {
+    const draft = await require("../models/DraftCV").findById(draftId);
+    if (!draft || draft.userId.toString() !== req.user.id) {
+      return res.status(404).json({ message: "CV not found" });
+    }
+
+    const existing = Array.isArray(draft.skillDeclines) ? draft.skillDeclines : [];
+    const seen = new Set(existing.map((row) => String(row?.name || "").toLowerCase()));
+    const added = [];
+    (Array.isArray(declines) ? declines : []).slice(0, 40).forEach((row) => {
+      const name = String(typeof row === "string" ? row : row?.name || "").trim();
+      if (!name || name.length > 60) return;
+      const key = name.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      added.push({
+        name,
+        // "encountered" is a softer no than "never" and the interview path already
+        // distinguishes them; both stop the question, only the wording differs.
+        level: row?.level === "encountered" ? "encountered" : "never",
+        source: "skills_card",
+        at: new Date(),
+      });
+    });
+
+    if (added.length) {
+      draft.skillDeclines = [...existing, ...added];
+      // A decline changes what the next generation may ask about, so the cached result is
+      // no longer the answer to the current question.
+      draft.skillsGenCache = undefined;
+      await draft.save();
+    }
+    res.json({ declined: added.length });
+  } catch (error) {
+    console.error("Skill Decline Error:", error);
+    res.status(500).json({ message: "Failed to record declines" });
+  }
+};
+
 const generateSkills = async (req, res) => {
   const { education, experience, projects, targetJob, draftId } = req.body;
+  // A ceiling the user picked (10/15/20), clamped server-side. Never a quota — the prompt
+  // keeps its anti-padding clause, and a shortfall is reported rather than invented away.
+  const skillCount = Math.min(20, Math.max(5, Number(req.body?.count) || 15));
   // Lazily required, matching the rest of this controller (avoids a circular import).
   const aiService = require("../services/ai.service");
 
@@ -600,6 +725,30 @@ const generateSkills = async (req, res) => {
     // and then called a generator that had never heard of them.
     const missingKeywords = scanMissingSkillKeywords(draft);
 
+    // What is ALREADY on the CV. Read server-side from the draft rather than trusted from
+    // the client, like every other input here. This matters on the second pass and only
+    // there: a user who finished the skills section, added Soldering, and later comes back
+    // to add more must not be asked "This is standard for a Plumber. Did you do it?" about
+    // a skill sitting on their own CV. Harmless while the confirmation list was five
+    // model-chosen rows; not once the canon can fill it with twenty.
+    const existingSkills = (Array.isArray(draft?.skills) ? draft.skills : [])
+      .map((row) => String(typeof row === "string" ? row : row?.name || "").trim())
+      .filter(Boolean);
+
+    // What people in the user's OWN roles normally know. Every other input to this
+    // generation comes from the user's own words, which is why the section could only read
+    // those words back: "Plumber — fixed pipes" contains no soldering, so no prompt could
+    // produce soldering. Cached on the draft against the TITLES alone, so changing the
+    // count or the model re-runs the generation without paying for the canon again.
+    const roleCanon = await resolveRoleCanon({
+      draft,
+      experience,
+      projects,
+      stage: aiService.resolveCareerStage({ stage: req.body?.stage, draft }),
+      userId: req.user.id,
+      req,
+    });
+
     // Hash of everything the generation depends on (whitespace/case-insensitive
     // on the JD so trivial edits don't bust the cache).
     const inputHash = require("crypto")
@@ -614,7 +763,11 @@ const generateSkills = async (req, res) => {
           // the scan's missing keywords. WITHOUT these three in the hash, finishing an
           // interview or changing career stage would serve the old ledger-blind result
           // forever — the fix would look inert rather than wrong, which is worse.
-          skillsGenSchema: 4,
+          // 5: the role canon and the user-picked count both change the output.
+          skillsGenSchema: 5,
+          skillCount,
+          existingSkills: [...existingSkills].sort(),
+          roleCanon: roleCanon.map((row) => `${row.id}:${(row.skills || []).length}`),
           modelId,
           education: education || [],
           experience: experience || [],
@@ -684,6 +837,9 @@ const generateSkills = async (req, res) => {
         certifications: draft?.certifications || [],
         interviewEvidence,
         missingKeywords,
+        roleCanon,
+        existingSkills,
+        count: skillCount,
         stage: aiService.resolveCareerStage({ stage: req.body?.stage, draft }),
         meta: {
           userId: req.user.id,
@@ -1023,6 +1179,7 @@ module.exports = {
   getJobKeywords,
   getKeywordCoverage,
   generateSkills,
+  declineSkills,
   tightenSummary,
   // Pure classifier exported for the evidence/ranking regression tests.
   skillReviewGroups,
