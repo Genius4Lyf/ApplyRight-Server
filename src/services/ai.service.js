@@ -579,7 +579,15 @@ const callModel = async (
           : { temperature }),
         // Prompt caching on the system block (system prompt + JD + CV context) — the big
         // margin lever on flagship: repeated turns reuse the cached prefix.
-        system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+        //
+        // Omitted entirely when there is nothing to put in it. Anthropic rejects the whole
+        // request with "cache_control cannot be set for empty text blocks", and a caller
+        // that puts its entire prompt in `user` — generateSkillsFromContext is the only one
+        // — has an empty system on English, where langDirective is a no-op. There was
+        // nothing to cache in that case anyway.
+        ...(String(system || "").trim()
+          ? { system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }] }
+          : {}),
         messages: (messages || [{ role: "user", content: user }]).map((m) => ({
           role: m.role === "assistant" ? "assistant" : "user",
           content: m.content,
