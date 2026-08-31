@@ -58,8 +58,8 @@ const DEFAULT_CREDIT_COSTS = Object.freeze({
 // FLAGSHIP-tier credit costs. A model-tier can charge a DIFFERENT credit cost per action:
 // the flagship (Sonnet-class) models cost more to run, so their actions cost more credits.
 // This is a sparse DELTA map — only the actions that differ from LIGHT are listed; every
-// other action inherits the LIGHT (default) cost. So flagship chat = 10 but flagship cover
-// letter falls through to the light cost. Admin-overridable via SystemSettings.
+// other action inherits the LIGHT (default) cost — e.g. flagship GENERATE_CV falls
+// through to the light cost. Admin-overridable via SystemSettings.
 // flagshipCreditCosts, mirroring the light-tier override map. LIGHT === today's costs.
 const DEFAULT_FLAGSHIP_CREDIT_COSTS = Object.freeze({
   // Deliberately conservative pending real usage data from AICallLog — revisit once
@@ -70,6 +70,7 @@ const DEFAULT_FLAGSHIP_CREDIT_COSTS = Object.freeze({
   REWRITE_ROLE: 2, // whole-role rewrite: 1 → 2 on flagship, mirroring GENERATE_BULLET
   GENERATE_SUMMARY: 5, // summary: 3 → 5
   GENERATE_SKILLS: 15, // skills: 10 → 15
+  GENERATE_COVER_LETTER: 10, // cover letter: 5 → 10
   // NOTE: DRAFT_JD has NO flagship delta on purpose — the JD draft is server-pinned to
   // the Standard (light) model (studio.controller.draftJd), so it can never resolve to a
   // flagship price. It always charges the light DRAFT_JD cost (1).
@@ -90,4 +91,3 @@ module.exports = {
   DEFAULT_FLAGSHIP_CREDIT_COSTS,
   getDefaults,
 };
-

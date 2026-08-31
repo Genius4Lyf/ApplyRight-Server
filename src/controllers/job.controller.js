@@ -16,8 +16,17 @@ const isWeakMetadata = (title, company) => {
 
   // Company is a job board, not the actual employer
   const jobBoards = [
-    "linkedin", "indeed", "glassdoor", "jobberman", "myjobbermag",
-    "careers", "jobs", "workday", "lever", "greenhouse", "bamboohr",
+    "linkedin",
+    "indeed",
+    "glassdoor",
+    "jobberman",
+    "myjobbermag",
+    "careers",
+    "jobs",
+    "workday",
+    "lever",
+    "greenhouse",
+    "bamboohr",
   ];
   const lowerCompany = company.toLowerCase();
   if (jobBoards.some((board) => lowerCompany.includes(board))) return true;
@@ -29,7 +38,8 @@ const isWeakMetadata = (title, company) => {
 // @route   POST /api/jobs/extract
 // @access  Private
 const extractJob = async (req, res) => {
-  const { jobUrl, description } = req.body;
+  // `title` is OPTIONAL and only consulted on the text path — see below.
+  const { jobUrl, description, title: providedTitle } = req.body;
 
   if (!jobUrl && !description) {
     return res.status(400).json({ message: "Please provide a job URL or description" });
@@ -40,6 +50,11 @@ const extractJob = async (req, res) => {
     let company = "";
     let jobDescription = "";
     let finalUrl = "";
+    // Typed text is complete by definition — the user is looking at the posting. Only the
+    // URL path can come back partial, and it overwrites these.
+    let quality = "typed";
+    let source = "typed";
+    let details = {};
 
     if (jobUrl) {
       // ── URL Path: Scrape then validate ──
@@ -48,20 +63,36 @@ const extractJob = async (req, res) => {
       company = scraped.company || "";
       jobDescription = scraped.description || "";
       finalUrl = scraped.jobUrl || jobUrl;
+      quality = scraped.quality || "teaser";
+      source = scraped.source || "dom";
+      details = scraped.details || {};
 
       // If scraper returned weak metadata, use AI to extract from the scraped text
       if (isWeakMetadata(title, company) && jobDescription.length > 50) {
-        const aiMeta = await aiService.extractJobMetadata(jobDescription, { userId: req.user?.id, lang: req.lang });
+        const aiMeta = await aiService.extractJobMetadata(jobDescription, {
+          userId: req.user?.id,
+          lang: req.lang,
+        });
         if (aiMeta.title) title = aiMeta.title;
         if (aiMeta.company) company = aiMeta.company;
+        // The posting's own structured data wins — this only fills a gap it left.
+        if (!details.location && aiMeta.location) details.location = aiMeta.location;
       }
     } else {
       // ── Text Path: Use AI to extract title and company from pasted text ──
       jobDescription = description;
 
-      const aiMeta = await aiService.extractJobMetadata(description, { userId: req.user?.id, lang: req.lang });
-      title = aiMeta.title || "Untitled Job";
+      const aiMeta = await aiService.extractJobMetadata(description, {
+        userId: req.user?.id,
+        lang: req.lang,
+      });
+      // A title the user typed WINS over the inferred one. On this path they are the
+      // source of the role — Aria asked them for it — so guessing over their answer
+      // would silently rename the job they said they were applying for. The URL path
+      // above is different: there the posting itself is the source of every field.
+      title = (providedTitle || "").trim() || aiMeta.title || "Untitled Job";
       company = aiMeta.company || "Unknown Company";
+      if (aiMeta.location) details.location = aiMeta.location;
     }
 
     // Clean up title — strip page-title suffixes the scraper might have kept
@@ -84,6 +115,9 @@ const extractJob = async (req, res) => {
       jobUrl: finalUrl,
       keywords: analysis.skills.map((s) => s.name) || [],
       analysis: analysis,
+      descriptionQuality: quality,
+      descriptionSource: source,
+      details,
     };
 
     const job = await Job.create(jobToSave);

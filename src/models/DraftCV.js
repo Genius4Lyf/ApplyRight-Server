@@ -147,6 +147,13 @@ const draftCVSchema = new mongoose.Schema(
     },
     personalInfo: {
       fullName: String,
+      // The role this CV presents the candidate AS — printed under the name by every
+      // template, which reads it off the profile they are handed as `currentJobTitle`.
+      //
+      // PER-CV, seeded from User.currentJobTitle rather than read from it: a CV aimed
+      // at Plumber and one aimed at Maintenance Technician need different titles, and
+      // one account-wide value cannot serve both. Always optional.
+      currentJobTitle: String,
       email: String,
       phone: String,
       address: String,
@@ -217,6 +224,16 @@ const draftCVSchema = new mongoose.Schema(
         name: String,
         issuer: String,
         date: String,
+      },
+    ],
+    // Optional, and shaped like certifications for the same reason: no _sortId, so
+    // position is identity and every write is a whole-array replace. `level` is the
+    // proficiency ("Native", "Professional") and may be blank — a bare language name is
+    // a valid entry, it just says less.
+    languages: [
+      {
+        name: String,
+        level: String,
       },
     ],
     skills: [

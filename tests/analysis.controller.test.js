@@ -86,9 +86,18 @@ describe("analysis.controller — money correctness", () => {
       matchedSkills: ["Python"],
       missingSkills: [],
       experienceAnalysis: { candidateYears: 3, requiredYears: 2, match: true, feedback: "ok" },
-      seniorityAnalysis: { candidateLevel: "mid", requiredLevel: "mid", match: true, feedback: "ok" },
+      seniorityAnalysis: {
+        candidateLevel: "mid",
+        requiredLevel: "mid",
+        match: true,
+        feedback: "ok",
+      },
       scoreBreakdown: {
-        skillsScore: 80, experienceScore: 75, educationScore: 70, seniorityScore: 75, overallScore: 75,
+        skillsScore: 80,
+        experienceScore: 75,
+        educationScore: 70,
+        seniorityScore: 75,
+        overallScore: 75,
       },
       actionPlan: [{ action: "Highlight Python experience" }],
     };
@@ -101,7 +110,10 @@ describe("analysis.controller — money correctness", () => {
         description: "Backend role needing Python.",
         save: jest.fn().mockResolvedValue(true),
       });
-      Resume.findById.mockResolvedValue({ _id: resumeId, rawText: "Resume text with Python experience." });
+      Resume.findById.mockResolvedValue({
+        _id: resumeId,
+        rawText: "Resume text with Python experience.",
+      });
       Application.findOne.mockResolvedValue({
         _id: appId,
         userId: mockUserId,
@@ -162,7 +174,10 @@ describe("analysis.controller — money correctness", () => {
 
   describe("POST /api/analysis/analyze — without jobId (CREATE_FROM_UPLOAD rate)", () => {
     beforeEach(() => {
-      Resume.findById.mockResolvedValue({ _id: resumeId, rawText: "Resume text with Python experience." });
+      Resume.findById.mockResolvedValue({
+        _id: resumeId,
+        rawText: "Resume text with Python experience.",
+      });
       aiService.extractResumeProfile.mockResolvedValue({
         summary: "Backend engineer.",
         experience: [],
@@ -246,7 +261,10 @@ describe("analysis.controller — money correctness", () => {
       }));
       Application.updateOne.mockResolvedValue({});
 
-      Resume.findById.mockResolvedValue({ _id: resumeId, rawText: "Resume text with Python experience." });
+      Resume.findById.mockResolvedValue({
+        _id: resumeId,
+        rawText: "Resume text with Python experience.",
+      });
       Job.findById.mockResolvedValue({
         _id: jobId,
         title: "Backend Engineer",
@@ -369,6 +387,137 @@ describe("analysis.controller — money correctness", () => {
       // post-charge `finalApp` fetch (which only runs after a successful charge)
       // never fires — proof no artifacts were committed for the failed attempt.
       expect(Application.findById).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ─── The Standard | Pro choice on the cover letter ───
+  //
+  // The rule this protects: a flagship model is NEVER free. The daily letter is a
+  // STANDARD letter, so spending it on a Pro one would hand out the metered tier for
+  // nothing — and a Standard letter must keep the exact pricing it has always had.
+  describe("POST /api/analysis/:id/generate-cover-letter — model tiers", () => {
+    const FLAGSHIP_COSTS = require("../src/config/creditCosts").DEFAULT_FLAGSHIP_CREDIT_COSTS;
+    const PRO_MODEL = "claude-sonnet-5"; // the exposed flagship in config/catalog
+
+    beforeEach(() => {
+      Application.findOne.mockResolvedValue({
+        _id: appId,
+        userId: mockUserId,
+        jobId,
+        resumeId,
+        save: jest.fn().mockResolvedValue(true),
+      });
+      Resume.findById.mockResolvedValue({ _id: resumeId, rawText: "Resume text." });
+      Job.findById.mockResolvedValue({
+        _id: jobId,
+        title: "Backend Engineer",
+        company: "Acme",
+        description: "Backend role needing Python.",
+      });
+      aiService.generateCoverLetter.mockResolvedValue("Dear hiring manager...");
+      aiService.factCheckCoverLetter.mockResolvedValue([]);
+    });
+
+    // The free daily letter needs a saveable user; setUserCredits' mock has no save().
+    const setFreeTierUser = (credits, coverLetterFree) => {
+      const mockUser = {
+        _id: mockUserId,
+        id: mockUserId,
+        credits,
+        coverLetterFree,
+        save: jest.fn().mockResolvedValue(true),
+      };
+      User.findById.mockReturnValue({
+        select: jest.fn().mockResolvedValue(mockUser),
+        then: (resolve) => resolve(mockUser),
+      });
+      return mockUser;
+    };
+
+    const post = (body = {}) =>
+      request(app)
+        .post(`/api/analysis/${appId}/generate-cover-letter`)
+        .set("Authorization", "Bearer token")
+        .send(body);
+
+    it("keeps the Standard letter exactly as it was: free once a day, on the default model", async () => {
+      setFreeTierUser(50);
+
+      const res = await post();
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.coverLetterWasFree).toBe(true);
+      expect(User.updateOne).not.toHaveBeenCalled();
+      // Not the picked model — the model this endpoint has always resolved for itself.
+      expect(aiService.generateCoverLetter.mock.calls[0][2].model).toBe("gpt-4o-mini");
+    });
+
+    it("charges the Standard letter once the day's free one is spent", async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      setFreeTierUser(50, { date: today, count: 1 });
+
+      const res = await post();
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.coverLetterWasFree).toBe(false);
+      const [, update] = User.updateOne.mock.calls[0];
+      expect(update.$inc.credits).toBe(-COSTS.GENERATE_COVER_LETTER);
+    });
+
+    it("routes a Pro pick to the chosen model and charges the FLAGSHIP price", async () => {
+      setFreeTierUser(50, { date: new Date().toISOString().slice(0, 10), count: 1 });
+
+      const res = await post({ model: PRO_MODEL });
+
+      expect(res.statusCode).toBe(200);
+      expect(aiService.generateCoverLetter.mock.calls[0][2].model).toBe(PRO_MODEL);
+      const [, update] = User.updateOne.mock.calls[0];
+      expect(update.$inc.credits).toBe(-FLAGSHIP_COSTS.GENERATE_COVER_LETTER);
+      expect(FLAGSHIP_COSTS.GENERATE_COVER_LETTER).toBeGreaterThan(COSTS.GENERATE_COVER_LETTER);
+    });
+
+    it("never spends the free daily letter on a Pro one", async () => {
+      // This user HAS their free letter available — a Standard request would cost nothing.
+      const user = setFreeTierUser(50);
+
+      const res = await post({ model: PRO_MODEL });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.coverLetterWasFree).toBe(false);
+      expect(user.save).not.toHaveBeenCalled(); // the day's letter is untouched
+      expect(User.updateOne).toHaveBeenCalledTimes(1);
+    });
+
+    it("writes its own ledger type so a Pro letter is distinguishable from generic usage", async () => {
+      setFreeTierUser(50);
+
+      await post({ model: PRO_MODEL });
+
+      expect(Transaction.create).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "generate_cover_letter" })
+      );
+    });
+
+    it("falls back to the default model rather than failing on a stale/hidden pick", async () => {
+      setFreeTierUser(50);
+
+      const res = await post({ model: "some-retired-model" });
+
+      expect(res.statusCode).toBe(200);
+      // Priced as Standard, and free — an unexposed id must not be treated as flagship.
+      expect(res.body.coverLetterWasFree).toBe(true);
+      expect(User.updateOne).not.toHaveBeenCalled();
+    });
+
+    it("refuses a Pro letter the user cannot pay for, before calling the AI", async () => {
+      setFreeTierUser(2); // below the flagship cost
+
+      const res = await post({ model: PRO_MODEL });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.body.code).toBe("INSUFFICIENT_CREDITS");
+      expect(aiService.generateCoverLetter).not.toHaveBeenCalled();
+      expect(User.updateOne).not.toHaveBeenCalled();
     });
   });
 });

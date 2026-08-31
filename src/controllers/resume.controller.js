@@ -54,7 +54,10 @@ const uploadResume = async (req, res) => {
     }
 
     // Analyze using AI
-    const parsedData = await aiService.extractResumeProfile(rawText, { userId: req.user?._id, lang: req.lang });
+    const parsedData = await aiService.extractResumeProfile(rawText, {
+      userId: req.user?._id,
+      lang: req.lang,
+    });
 
     // Save to DB
     // Assuming req.user is populated by auth middleware
@@ -150,7 +153,10 @@ const uploadAndCreateDraft = async (req, res) => {
     }
 
     // 3. AI extraction (single call — no duplication)
-    const extractedData = await aiService.extractResumeProfile(rawText, { userId: req.user?._id, lang: req.lang });
+    const extractedData = await aiService.extractResumeProfile(rawText, {
+      userId: req.user?._id,
+      lang: req.lang,
+    });
 
     // 4. Generate structured skills
     const structuredSkills = await aiService.generateStructuredSkills(
@@ -192,6 +198,8 @@ const uploadAndCreateDraft = async (req, res) => {
         linkedin: cvContact.linkedin || user.linkedinUrl || "",
         website: cvContact.website || user.portfolioUrl || "",
         address: cvContact.address || user.location || "",
+        // No title is extracted from an uploaded CV, so the account's is the only source.
+        currentJobTitle: user.currentJobTitle || "",
       },
       professionalSummary: extractedData.summary || "",
       experience:

@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const mongoose = require("mongoose");
 const DraftCV = require("../models/DraftCV");
+const Application = require("../models/Application");
 const User = require("../models/User");
 const aiService = require("../services/ai.service");
 const subscription = require("../services/subscription.service");
@@ -45,6 +46,7 @@ const CLONED_CONTENT_FIELDS = [
   "education",
   "certifications",
   "skills",
+  "languages",
 ];
 
 // @desc    Build Aria's Role Brief from raw JD text, with NO draft attached — so the
@@ -271,9 +273,9 @@ const draftJd = async (req, res) => {
           .json({ message: "AI is not configured right now. Please try again later." });
       }
       console.error("Studio draft-jd AI error:", genErr.message);
-      return res
-        .status(502)
-          .json({ message: "Couldn't generate a role profile for that job title. Please try again." });
+      return res.status(502).json({
+        message: "Couldn't generate a role profile for that job title. Please try again.",
+      });
     }
 
     const jobDescription = (result || "").trim();
@@ -699,6 +701,9 @@ const personalInfoFromUser = (user = {}) => {
   if (user.phone) info.phone = user.phone;
   if (user.linkedinUrl) info.linkedin = user.linkedinUrl;
   if (user.portfolioUrl) info.website = user.portfolioUrl;
+  // Seeded, not read: from here on the DRAFT owns the title, so tailoring one CV to a
+  // different role never touches the account or any other CV.
+  if (user.currentJobTitle) info.currentJobTitle = user.currentJobTitle;
   return info;
 };
 
@@ -810,7 +815,10 @@ const dropTempFile = (filePath, context = "") => {
   try {
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   } catch (err) {
-    console.warn(`Studio upload-import: failed to delete temp file${context ? ` ${context}` : ""}:`, err.message);
+    console.warn(
+      `Studio upload-import: failed to delete temp file${context ? ` ${context}` : ""}:`,
+      err.message
+    );
   }
 };
 
@@ -898,8 +906,7 @@ const uploadImport = async (req, res) => {
       dropTempFile(filePath);
       return res.status(422).json({
         code: "NO_TEXT",
-        message:
-          "Could not read any text from that file. Please upload a text-based PDF or DOCX.",
+        message: "Could not read any text from that file. Please upload a text-based PDF or DOCX.",
       });
     }
 
@@ -970,6 +977,10 @@ const uploadImport = async (req, res) => {
       linkedin: contact.linkedin || existing.linkedin || "",
       website: contact.website || existing.website || "",
       address: contact.address || existing.address || "",
+      // Carried, not extracted: an uploaded CV's header text is not parsed for a title, so
+      // the only copy is the one already on the draft. Leaving it out of this list would
+      // silently erase a title the user had set before importing.
+      currentJobTitle: existing.currentJobTitle || "",
     };
     draft.professionalSummary = (extracted?.summary || "").trim();
     draft.experience = experience.map((e) => ({
@@ -1028,8 +1039,7 @@ const uploadImport = async (req, res) => {
     if (error.code === "EMPTY_RESUME_TEXT") {
       return res.status(422).json({
         code: "NO_TEXT",
-        message:
-          "Could not read any text from that file. Please upload a text-based PDF or DOCX.",
+        message: "Could not read any text from that file. Please upload a text-based PDF or DOCX.",
       });
     }
     if (error instanceof aiService.AIUnavailableError) {
@@ -1047,34 +1057,54 @@ const uploadImport = async (req, res) => {
 // response regardless of how many CVs a heavy user accumulates.
 const SESSION_LIMIT = 50;
 
-// @desc    The current user's Aria Studio sessions, newest-updated first. A session IS a
-//          DraftCV — there is no separate conversation model — so this is a LEAN
-//          projection of the few fields the rail renders. Whole drafts (with their
-//          transcripts, scans and CV content) are never returned here; the rail would
-//          otherwise ship megabytes to draw a list of titles.
+// @desc    The current user's Aria Studio sessions, newest-updated first.
+//
+//          TWO kinds of work share this one list, because they are two kinds of the same
+//          thing to the user: a CV session (a DraftCV — there is no separate conversation
+//          model) and a job analysis (an Application). Merged HERE rather than in the rail
+//          so the list is sorted and capped as ONE list; two client-side lists would each
+//          honour the limit separately and interleave a full page of one kind with a
+//          stale page of the other.
+//
+//          Both projections are LEAN. Whole drafts (with their transcripts, scans and CV
+//          content) are never returned here; the rail would otherwise ship megabytes to
+//          draw a list of titles.
 // @route   GET /api/studio/sessions
 // @access  Private
 const sessions = async (req, res) => {
   try {
-    const rows = await DraftCV.find(
-      { userId: req.user.id, studioKind: { $ne: null } },
-      // Projection — nothing here is expensive, and nothing sensitive leaks.
-      {
-        studioKind: 1,
-        title: 1,
-        "tailoredForJob.title": 1,
-        "targetJob.brief.company": 1,
-        tailoredFromTitle: 1,
-        "studioScan.fitScore": 1,
-        updatedAt: 1,
-      }
-    )
-      .sort({ updatedAt: -1 })
-      .limit(SESSION_LIMIT)
-      .lean();
+    const [drafts, applications] = await Promise.all([
+      DraftCV.find(
+        { userId: req.user.id, studioKind: { $ne: null } },
+        // Projection — nothing here is expensive, and nothing sensitive leaks.
+        {
+          studioKind: 1,
+          title: 1,
+          "tailoredForJob.title": 1,
+          "targetJob.brief.company": 1,
+          tailoredFromTitle: 1,
+          "studioScan.fitScore": 1,
+          updatedAt: 1,
+        }
+      )
+        .sort({ updatedAt: -1 })
+        .limit(SESSION_LIMIT)
+        .lean(),
+      // The role/company are denormalized onto the Application, but the populated Job is
+      // the fresher copy (a re-extract updates it), so the Job wins and the flat fields
+      // are the fallback for older rows.
+      Application.find(
+        { userId: req.user.id },
+        { jobId: 1, jobTitle: 1, jobCompany: 1, fitScore: 1, optimizedFitScore: 1, updatedAt: 1 }
+      )
+        .populate("jobId", "title company")
+        .sort({ updatedAt: -1 })
+        .limit(SESSION_LIMIT)
+        .lean(),
+    ]);
 
-    return res.json({
-      sessions: (rows || []).map((r) => ({
+    const rows = [
+      ...(drafts || []).map((r) => ({
         _id: r._id,
         kind: r.studioKind,
         title: r.title,
@@ -1084,7 +1114,26 @@ const sessions = async (req, res) => {
         fitScore: r.studioScan?.fitScore ?? null,
         updatedAt: r.updatedAt,
       })),
-    });
+      ...(applications || []).map((a) => ({
+        _id: a._id,
+        kind: "application",
+        // An analysis has no name of its own — it IS the job it was run against.
+        title: a.jobId?.title || a.jobTitle || "",
+        jobTitle: a.jobId?.title || a.jobTitle || "",
+        company: a.jobId?.company || a.jobCompany || "",
+        sourceTitle: "",
+        // The optimized score once a CV has been generated against it, else the original —
+        // the same precedence the applications list has always shown.
+        fitScore: a.optimizedFitScore ?? a.fitScore ?? null,
+        updatedAt: a.updatedAt,
+      })),
+    ]
+      .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))
+      // Re-applied AFTER the merge: each query returned up to SESSION_LIMIT of its own
+      // kind, so the combined list can be twice as long as the rail should ever show.
+      .slice(0, SESSION_LIMIT);
+
+    return res.json({ sessions: rows });
   } catch (error) {
     console.error("Studio Sessions Error:", error);
     return res.status(500).json({ message: "Couldn't load your sessions." });

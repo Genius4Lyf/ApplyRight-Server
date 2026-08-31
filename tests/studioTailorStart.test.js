@@ -2,6 +2,7 @@ const request = require("supertest");
 const app = require("../src/app");
 const User = require("../src/models/User");
 const DraftCV = require("../src/models/DraftCV");
+const Application = require("../src/models/Application");
 const SystemSettings = require("../src/models/SystemSettings");
 const aiService = require("../src/services/ai.service");
 const modelSelection = require("../src/services/modelSelection.service");
@@ -13,6 +14,7 @@ const jwt = require("jsonwebtoken");
 jest.mock("express-rate-limit", () => jest.fn(() => (req, res, next) => next()));
 jest.mock("../src/models/User");
 jest.mock("../src/models/DraftCV");
+jest.mock("../src/models/Application");
 jest.mock("../src/models/SystemSettings");
 jest.mock("../src/services/ai.service");
 jest.mock("jsonwebtoken");
@@ -35,7 +37,9 @@ const buildSource = (over = {}) => ({
   title: "Ernest Akibor CV",
   personalInfo: { fullName: "Ernest Akibor", email: "e@example.com" },
   professionalSummary: "Field operator with 4 years offshore.",
-  experience: [{ _sortId: "sort-1", title: "Operator", company: "Baker", description: "• Did things" }],
+  experience: [
+    { _sortId: "sort-1", title: "Operator", company: "Baker", description: "• Did things" },
+  ],
   projects: [{ _sortId: "proj-1", title: "Rig telemetry", description: "• Built a thing" }],
   education: [{ degree: "BSc", school: "UNIBEN" }],
   certifications: [{ name: "H2S", issuer: "OPITO" }],
@@ -171,9 +175,7 @@ describe("POST /api/studio/tailor-start", () => {
   });
 
   it("rejects a source CV owned by someone else", async () => {
-    DraftCV.findById.mockResolvedValue(
-      buildSource({ userId: { toString: () => otherUserId } })
-    );
+    DraftCV.findById.mockResolvedValue(buildSource({ userId: { toString: () => otherUserId } }));
 
     const res = await post();
 
@@ -328,7 +330,12 @@ describe("POST /api/studio/build-start", () => {
   });
 
   it("omits fields the profile doesn't have rather than writing empty strings", async () => {
-    setUser({ otherName: undefined, phone: undefined, linkedinUrl: undefined, portfolioUrl: undefined });
+    setUser({
+      otherName: undefined,
+      phone: undefined,
+      linkedinUrl: undefined,
+      portfolioUrl: undefined,
+    });
 
     await start();
 
@@ -405,6 +412,7 @@ describe("POST /api/studio/build-start", () => {
 
 describe("GET /api/studio/sessions", () => {
   let chain;
+  let appChain;
 
   const rows = [
     {
@@ -425,6 +433,18 @@ describe("GET /api/studio/sessions", () => {
     },
   ];
 
+  // Analyses live in a different collection but the SAME list — the rail shows CV
+  // sessions and job analyses as two kinds of the same thing.
+  const appRows = [
+    {
+      _id: "a1",
+      jobId: { title: "Rig Electrician", company: "Seadrill" },
+      fitScore: 58,
+      optimizedFitScore: 81,
+      updatedAt: new Date("2026-07-21"),
+    },
+  ];
+
   beforeEach(() => {
     jest.clearAllMocks();
     jwt.verify.mockReturnValue({ id: mockUserId });
@@ -439,10 +459,17 @@ describe("GET /api/studio/sessions", () => {
       lean: jest.fn().mockResolvedValue(rows),
     };
     DraftCV.find.mockReturnValue(chain);
+
+    appChain = {
+      populate: jest.fn().mockReturnThis(),
+      sort: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    };
+    Application.find.mockReturnValue(appChain);
   });
 
-  const list = () =>
-    request(app).get("/api/studio/sessions").set("Authorization", "Bearer token");
+  const list = () => request(app).get("/api/studio/sessions").set("Authorization", "Bearer token");
 
   it("returns only THIS user's Studio drafts, newest-updated first", async () => {
     const res = await list();
@@ -471,8 +498,8 @@ describe("GET /api/studio/sessions", () => {
     });
     // …and must never ship these. Transcripts and CV bodies are the whole reason
     // this is a projection and not a find().
-    ["coachChats", "experience", "skills", "personalInfo", "studioScan.evidence"].forEach(
-      (heavy) => expect(projection[heavy]).toBeUndefined()
+    ["coachChats", "experience", "skills", "personalInfo", "studioScan.evidence"].forEach((heavy) =>
+      expect(projection[heavy]).toBeUndefined()
     );
     expect(chain.lean).toHaveBeenCalled();
   });
@@ -509,6 +536,72 @@ describe("GET /api/studio/sessions", () => {
     const res = await list();
     expect(res.statusCode).toBe(200);
     expect(res.body.sessions).toEqual([]);
+  });
+
+  it("returns job analyses alongside CV sessions, as one merged list", async () => {
+    appChain.lean.mockResolvedValue(appRows);
+    const res = await list();
+
+    expect(res.body.sessions).toHaveLength(3);
+    const analysis = res.body.sessions.find((r) => r.kind === "application");
+    expect(analysis).toMatchObject({
+      _id: "a1",
+      kind: "application",
+      jobTitle: "Rig Electrician",
+      company: "Seadrill",
+      // The optimized score wins once a CV has been generated against the analysis —
+      // the same precedence the applications list always showed.
+      fitScore: 81,
+    });
+    // Scoped to the caller, exactly like the drafts query.
+    expect(Application.find.mock.calls[0][0]).toEqual({ userId: mockUserId });
+  });
+
+  it("sorts the merged list by recency, newest first, across BOTH kinds", async () => {
+    appChain.lean.mockResolvedValue(appRows);
+    const res = await list();
+
+    // a1 (07-21) · s1 (07-20) · s2 (07-19) — interleaved, not one kind then the other.
+    expect(res.body.sessions.map((r) => r._id)).toEqual(["a1", "s1", "s2"]);
+  });
+
+  it("caps the MERGED list at the limit, not each kind separately", async () => {
+    // Each query already returned a full page of its own kind; without a re-slice after
+    // the merge the rail would receive twice what it asked for.
+    chain.lean.mockResolvedValue(
+      Array.from({ length: 50 }, (_, i) => ({
+        _id: `d${i}`,
+        studioKind: "build",
+        updatedAt: new Date("2026-07-19"),
+      }))
+    );
+    appChain.lean.mockResolvedValue(
+      Array.from({ length: 50 }, (_, i) => ({
+        _id: `a${i}`,
+        jobId: { title: "Role", company: "Co" },
+        fitScore: 60,
+        updatedAt: new Date("2026-07-21"),
+      }))
+    );
+
+    const res = await list();
+    expect(res.body.sessions).toHaveLength(50);
+  });
+
+  it("falls back to the denormalized job fields when the Job is gone", async () => {
+    appChain.lean.mockResolvedValue([
+      {
+        _id: "a2",
+        jobId: null,
+        jobTitle: "Welder",
+        jobCompany: "Nigerdock",
+        fitScore: 44,
+        updatedAt: new Date("2026-07-22"),
+      },
+    ]);
+    const res = await list();
+    const analysis = res.body.sessions.find((r) => r.kind === "application");
+    expect(analysis).toMatchObject({ jobTitle: "Welder", company: "Nigerdock", fitScore: 44 });
   });
 
   it("requires auth", async () => {

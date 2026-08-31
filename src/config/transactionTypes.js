@@ -33,6 +33,10 @@ const TRANSACTION_TYPES = Object.freeze({
   GENERATE_SUMMARY: "generate_summary",
   GENERATE_SKILLS: "generate_skills",
   ARIA_CHAT: "aria_chat",
+  // Only the PRO (flagship) cover letter writes this. A Standard letter still writes the
+  // generic "usage" it always has — retyping that would silently reclassify every
+  // historical row in the admin charts.
+  GENERATE_COVER_LETTER: "generate_cover_letter",
   DRAFT_JD: "draft_jd",
   STUDIO_SCAN: "studio_scan",
   PROJECT_IDEAS: "project_ideas",

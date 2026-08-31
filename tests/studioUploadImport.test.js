@@ -172,6 +172,26 @@ describe("POST /api/studio/upload-import", () => {
     expect(draft.source).toBe("upload");
   });
 
+  it("keeps a job title the draft already had — an import must not erase it", async () => {
+    // This handler REBUILDS personalInfo from an explicit field list, so anything not
+    // named there is silently dropped. No title is extracted from an uploaded CV, which
+    // means the only copy is the one already on the draft.
+    DraftCV.findById.mockResolvedValue(
+      (draft = buildDraft({
+        personalInfo: {
+          fullName: "Ernest A",
+          email: "profile@example.com",
+          phone: "0800",
+          currentJobTitle: "Field Operator",
+        },
+      }))
+    );
+
+    await post();
+
+    expect(draft.personalInfo.currentJobTitle).toBe("Field Operator");
+  });
+
   it("reports what actually landed", async () => {
     const res = await post();
 

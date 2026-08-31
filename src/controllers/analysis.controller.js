@@ -11,6 +11,8 @@ const metricCapture = require("../services/metricCapture.service");
 const subscription = require("../services/subscription.service");
 const settingsService = require("../services/settings.service");
 const langService = require("../services/language.service");
+const modelSelection = require("../services/modelSelection.service");
+const { TRANSACTION_TYPES } = require("../config/transactionTypes");
 
 // Credit costs are the single source of truth in config/creditCosts.js, resolved
 // (with any admin overrides) via settingsService.getCreditCosts(). Each handler
@@ -280,9 +282,7 @@ const analyzeFit = async (req, res) => {
       // A saved CV is already a structured draft, so "create from upload" only
       // applies to an uploaded resume.
       if (!resume) {
-        return res
-          .status(400)
-          .json({ message: "Add a job description to analyze a saved CV." });
+        return res.status(400).json({ message: "Add a job description to analyze a saved CV." });
       }
       checkCredits(user, COSTS.CREATE_FROM_UPLOAD);
 
@@ -576,10 +576,7 @@ const runCVGenerationPipeline = async ({
     for (const s of aiEnhanced.skills || []) {
       allSkillNames.add(typeof s === "string" ? s : s.name);
     }
-    const {
-      compareSkills,
-      mentionsRequirement,
-    } = require("../services/skillNormalizer.service");
+    const { compareSkills, mentionsRequirement } = require("../services/skillNormalizer.service");
     const candidateSkillStrings = (candidateData.skills || []).map((s) =>
       typeof s === "string" ? s : s.name
     );
@@ -781,11 +778,17 @@ const generateApplicationCV = async (req, res) => {
 
     // Fire-and-forget: pipeline runs after the response is sent. Errors are
     // caught inside runCVGenerationPipeline and persisted to generationStatus.
-    runCVGenerationPipeline({ application, resume, job, user, templateId, providedMetrics, lang: cvLang }).catch(
-      (e) => {
-        console.error("[CV Pipeline] Unhandled top-level error:", e);
-      }
-    );
+    runCVGenerationPipeline({
+      application,
+      resume,
+      job,
+      user,
+      templateId,
+      providedMetrics,
+      lang: cvLang,
+    }).catch((e) => {
+      console.error("[CV Pipeline] Unhandled top-level error:", e);
+    });
   } catch (error) {
     if (handleAIError(res, error)) return;
     console.error("CV Generation Error:", error.message, error.stack);
@@ -887,7 +890,13 @@ const buildMarkdownFromDraft = (draft) => {
 /**
  * POST /analysis/:id/generate-cover-letter
  *
- * Generate a cover letter for an existing application (5 credits)
+ * Generate a cover letter for an existing application.
+ *
+ * Takes an optional `model` — the Standard | Pro choice offered on the generation card.
+ * Only an explicit PRO pick changes anything here: it is priced at the flagship tier and
+ * ALWAYS meters, per the locked billing rule (a flagship model is never free, even on a
+ * paid plan). A Standard letter keeps the exact path it has always had, free daily
+ * allowance included, so nobody's existing pricing moves.
  */
 const generateApplicationCoverLetter = async (req, res) => {
   try {
@@ -923,17 +932,33 @@ const generateApplicationCoverLetter = async (req, res) => {
       return res.status(404).json({ message: "Resume or Job not found" });
     }
 
+    // Resolve the requested model to a tier and a price. A stale or un-exposed pick
+    // falls back to DEFAULT_MODEL rather than failing the request — same policy as every
+    // other model-selectable action.
+    const { modelId, tier, cost } = await modelSelection.resolveForAction({
+      action: "GENERATE_COVER_LETTER",
+      sessionModelId: req.body?.model,
+      user,
+    });
+    const isPro = tier === "flagship";
+
     // Free-tier users get one free letter per calendar day; past that (and for
     // paid users) it's the normal credit charge. Checked BEFORE the AI call so a
     // user short on credits is never sent through a generation they can't pay for.
+    //
+    // The daily letter is a STANDARD letter. Spending it on a Pro one would quietly
+    // hand out the metered tier for nothing, which is the one thing the billing rule
+    // forbids — so a Pro pick always pays.
     const COSTS = await settingsService.getCreditCosts();
-    const clPre = coverLetterAllowance(user);
-    if (!clPre.isFree) checkCredits(user, COSTS.GENERATE_COVER_LETTER);
+    const clPre = isPro ? { isFree: false, used: 0 } : coverLetterAllowance(user);
+    if (!clPre.isFree) checkCredits(user, cost);
 
     const coverLetter = await aiService.generateCoverLetter(resumeText, jobData.description, {
       userId,
       applicationId: application._id,
-      model: aiService.resolveTextModel(user),
+      // Standard stays on the user's resolved text model — the same model this endpoint
+      // has always used. Only a Pro pick routes to the chosen model.
+      model: isPro ? modelId : aiService.resolveTextModel(user),
       lang: docLang,
     });
 
@@ -942,6 +967,22 @@ const generateApplicationCoverLetter = async (req, res) => {
     if (clPre.isFree) {
       await commitFreeCoverLetter(user, clPre);
       remainingCredits = subscription.availableCredits(user);
+    } else if (isPro) {
+      // Flagship meters through the shared tier charger, and writes its own ledger type
+      // so a Pro letter is distinguishable in the admin charts.
+      const charge = await modelSelection.chargeForModel(user, cost, tier, {
+        type: TRANSACTION_TYPES.GENERATE_COVER_LETTER,
+        description: "Pro cover letter",
+      });
+      if (charge.insufficient) {
+        return res.status(402).json({
+          code: "INSUFFICIENT_CREDITS",
+          message: "Insufficient credits",
+          required: cost,
+          current: charge.remainingCredits,
+        });
+      }
+      remainingCredits = charge.remainingCredits;
     } else {
       remainingCredits = await deductCredits(user, COSTS.GENERATE_COVER_LETTER);
     }
@@ -1111,9 +1152,7 @@ const startDirectInterview = async (req, res) => {
       return res.status(404).json({ message: "Job not found." });
     }
     if (!job.description || !job.description.trim()) {
-      return res
-        .status(400)
-        .json({ message: "This job has no description to interview against." });
+      return res.status(400).json({ message: "This job has no description to interview against." });
     }
 
     // Verify CV ownership before linking it.
@@ -1166,11 +1205,11 @@ const startDirectInterview = async (req, res) => {
     }
 
     // Generate the question spine so the live interviewer has real material.
-    const aiResult = await aiService.generateInterviewQuestions(
-      job.description,
-      candidateContext,
-      { userId, applicationId: application._id, lang: req.lang }
-    );
+    const aiResult = await aiService.generateInterviewQuestions(job.description, candidateContext, {
+      userId,
+      applicationId: application._id,
+      lang: req.lang,
+    });
 
     const fabricationWarnings = await aiService.factCheckInterviewQuestions(
       candidateContext,
@@ -1254,7 +1293,12 @@ const generateMoreApplicationInterview = async (req, res) => {
     const aiResult = await aiService.generateInterviewQuestions(
       jobData.description,
       candidateContext,
-      { userId, applicationId: application._id, operation: "generateMoreInterviewQuestions", lang: req.lang },
+      {
+        userId,
+        applicationId: application._id,
+        operation: "generateMoreInterviewQuestions",
+        lang: req.lang,
+      },
       { existingQuestions: existingTexts }
     );
 
@@ -1369,11 +1413,15 @@ const generateApplicationStories = async (req, res) => {
       });
     }
 
-    const aiResult = await aiService.generateInterviewStories(jobData.description, candidateContext, {
-      userId,
-      applicationId: application._id,
-      lang: req.lang,
-    });
+    const aiResult = await aiService.generateInterviewStories(
+      jobData.description,
+      candidateContext,
+      {
+        userId,
+        applicationId: application._id,
+        lang: req.lang,
+      }
+    );
 
     const remainingCredits = await deductCredits(user, COSTS.GENERATE_STORIES);
 
@@ -1755,9 +1803,7 @@ const generateApplicationBundle = async (req, res) => {
             finalApp.interviewPrep.questionsToAsk = questionsToAsk;
             finalApp.interviewPrep.fabricationWarnings = interviewWarnings;
           } else {
-            const warnings = Array.isArray(finalApp.bundleWarnings)
-              ? finalApp.bundleWarnings
-              : [];
+            const warnings = Array.isArray(finalApp.bundleWarnings) ? finalApp.bundleWarnings : [];
             if (!warnings.includes("interview_skipped_no_cv")) {
               finalApp.bundleWarnings = [...warnings, "interview_skipped_no_cv"];
             }
@@ -1896,7 +1942,10 @@ const editApplication = async (req, res) => {
     }
 
     // Extract structured data from the optimized CV markdown
-    const extractedData = await aiService.extractResumeProfile(cvText, { userId: req.user._id, lang: req.lang });
+    const extractedData = await aiService.extractResumeProfile(cvText, {
+      userId: req.user._id,
+      lang: req.lang,
+    });
 
     // Use stored skills if available, otherwise regenerate
     let structuredSkills = [];
