@@ -59,9 +59,7 @@ const saveDraft = async (req, res) => {
     const draft = await DraftCV.create({
       userId: req.user.id,
       source: "scratch",
-      outputLang: OUTPUT_LANGS.includes(req.user.interfaceLang)
-        ? req.user.interfaceLang
-        : req.lang,
+      outputLang: OUTPUT_LANGS.includes(req.user.interfaceLang) ? req.user.interfaceLang : req.lang,
       ...data,
     });
 
@@ -82,6 +80,56 @@ const getMyDrafts = async (req, res) => {
   } catch (error) {
     console.error("Get Drafts Error:", error);
     res.status(500).json({ message: "Failed to fetch drafts" });
+  }
+};
+
+// @desc    The user's CVs as SIDEBAR ROWS — lean, and scoped to the surface asking.
+//
+//          getMyDrafts returns whole drafts: transcripts, scans, every bullet. That was
+//          fine for a page you opened now and then, but the sidebar is reachable from
+//          every CV route, so it would ship megabytes to draw a list of titles. This
+//          projects only what a row draws.
+//
+//          The section arrays are projected to their _ids ALONE — the client's
+//          getCompletionStatus only ever asks whether each one is non-empty, so an array
+//          of bare ids answers it exactly while carrying none of the content. Keeping
+//          that judgement on the client is deliberate: lib/cvCompleteness.js is the one
+//          definition of "complete" the dashboard and the sidebar both read, and a second
+//          copy here could drift from it.
+//
+//          scope=builder — CVs NOT born in Aria (studioKind unset). The wizard's own
+//                          sidebar shows these: they are the ones it can open.
+//          scope=all     — every CV, whoever built it. The CV Studio shows these.
+// @route   GET /api/cv/list?scope=builder|all
+// @access  Private
+const listDrafts = async (req, res) => {
+  try {
+    const query = { userId: req.user.id };
+    // Anything but an explicit "all" is treated as the narrower scope: a typo should show
+    // too little rather than silently widening the list past what the caller asked for.
+    if (req.query.scope !== "all") {
+      // Matches both null and MISSING, so drafts predating studioKind are included.
+      query.studioKind = null;
+    }
+
+    const drafts = await DraftCV.find(query, {
+      title: 1,
+      studioKind: 1,
+      updatedAt: 1,
+      "personalInfo.fullName": 1,
+      professionalSummary: 1,
+      "experience._id": 1,
+      "education._id": 1,
+      "skills._id": 1,
+      "projects._id": 1,
+    })
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    return res.json({ cvs: drafts });
+  } catch (error) {
+    console.error("List Drafts Error:", error);
+    return res.status(500).json({ message: "Failed to fetch your CVs" });
   }
 };
 
@@ -133,6 +181,7 @@ const deleteDraft = async (req, res) => {
 module.exports = {
   saveDraft,
   getMyDrafts,
+  listDrafts,
   getDraftById,
   deleteDraft,
 };
