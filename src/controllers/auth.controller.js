@@ -3,9 +3,11 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
+const EmailVerification = require("../models/EmailVerification");
+const { TRANSACTION_TYPES } = require("../config/transactionTypes");
 const SettingsService = require("../services/settings.service");
 const subscription = require("../services/subscription.service");
-const { sendPasswordResetOTP } = require("../utils/email.service");
+const { sendPasswordResetOTP, sendVerificationCode } = require("../utils/email.service");
 const { validateRegistrationEmail } = require("../utils/emailValidation");
 const { clientIp, countryFromIp, currencyForCountry } = require("../utils/geo");
 
@@ -21,6 +23,139 @@ const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
     expiresIn: "7d",
   });
+};
+
+// How long a freshly issued code is good for, and how long a VERIFIED record then
+// survives so the person has time to finish the rest of the form. Without the second
+// window the record could be swept by the TTL between entering the code and pressing
+// "create account", failing someone who did everything right.
+const CODE_TTL_MS = 10 * 60 * 1000;
+const VERIFIED_TTL_MS = 30 * 60 * 1000;
+// A six-digit code is one-in-a-million per guess, which is only strong if guessing is
+// expensive. This is what makes it expensive.
+const MAX_CODE_ATTEMPTS = 5;
+
+const sixDigitCode = () => Math.floor(100000 + Math.random() * 900000).toString();
+
+// @desc    Send a signup verification code to an email address.
+// @route   POST /api/auth/request-verification
+// @access  Public
+const requestEmailVerification = async (req, res) => {
+  try {
+    const email = String(req.body.email || "")
+      .toLowerCase()
+      .trim();
+
+    // Same gate register uses, applied one step earlier — no point mailing a code to an
+    // address that register would reject anyway.
+    const emailCheck = validateRegistrationEmail(email);
+    if (!emailCheck.ok) {
+      return res.status(400).json({ message: emailCheck.message });
+    }
+
+    // Deliberately explicit rather than a vague success. Signup has to tell you the
+    // address is taken or you cannot proceed, and /register already answers the same
+    // question — hiding it here would buy no privacy while making the form unusable.
+    const existing = await User.findOne({ email }).select("_id");
+    if (existing) {
+      return res.status(400).json({
+        message: "That email already has an account. Try signing in instead.",
+        code: "EMAIL_TAKEN",
+      });
+    }
+
+    const code = sixDigitCode();
+    const salt = await bcrypt.genSalt(10);
+    const codeHash = await bcrypt.hash(code, salt);
+
+    // Upsert: asking for a new code invalidates the old one instead of leaving
+    // several live at once, and resets the attempt counter for the new code.
+    await EmailVerification.findOneAndUpdate(
+      { email },
+      {
+        email,
+        codeHash,
+        expiresAt: new Date(Date.now() + CODE_TTL_MS),
+        attempts: 0,
+        verifiedAt: null,
+        consumedAt: null,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    try {
+      await sendVerificationCode(email, code);
+    } catch (err) {
+      // Drop the record rather than leaving a code nobody can ever receive.
+      await EmailVerification.deleteOne({ email });
+      console.error("[requestEmailVerification] send failed:", err.message);
+      return res.status(503).json({
+        message: "We could not send the code right now. Please try again shortly.",
+        code: "EMAIL_UNAVAILABLE",
+      });
+    }
+
+    return res.status(200).json({ success: true, message: "Verification code sent." });
+  } catch (err) {
+    console.error("[requestEmailVerification]", err);
+    return res.status(500).json({ message: "Server Error" });
+  }
+};
+
+// @desc    Check a signup verification code.
+// @route   POST /api/auth/verify-code
+// @access  Public
+const verifyEmailCode = async (req, res) => {
+  try {
+    const email = String(req.body.email || "")
+      .toLowerCase()
+      .trim();
+    const code = String(req.body.code || "").trim();
+    if (!email || !code) {
+      return res.status(400).json({ message: "Email and code are required" });
+    }
+
+    const record = await EmailVerification.findOne({ email, consumedAt: null });
+    // Covers "never requested", "already used" and "expired but not yet swept" with
+    // one message — distinguishing them would only help someone probing.
+    if (!record || record.expiresAt.getTime() < Date.now()) {
+      return res
+        .status(400)
+        .json({ message: "That code has expired. Request a new one.", code: "CODE_EXPIRED" });
+    }
+
+    if (record.attempts >= MAX_CODE_ATTEMPTS) {
+      return res.status(429).json({
+        message: "Too many incorrect attempts. Request a new code.",
+        code: "TOO_MANY_ATTEMPTS",
+      });
+    }
+
+    const match = await bcrypt.compare(code, record.codeHash);
+    if (!match) {
+      await EmailVerification.updateOne({ _id: record._id }, { $inc: { attempts: 1 } });
+      const left = MAX_CODE_ATTEMPTS - (record.attempts + 1);
+      return res.status(400).json({
+        message:
+          left > 0
+            ? `That code is not right. ${left} attempt(s) left.`
+            : "Too many incorrect attempts. Request a new code.",
+        code: "CODE_INVALID",
+      });
+    }
+
+    // Verified. Extend the window so the rest of the form can be completed at a
+    // human pace without the TTL sweeping the proof out from under them.
+    await EmailVerification.updateOne(
+      { _id: record._id },
+      { $set: { verifiedAt: new Date(), expiresAt: new Date(Date.now() + VERIFIED_TTL_MS) } }
+    );
+
+    return res.status(200).json({ success: true, message: "Email verified." });
+  } catch (err) {
+    console.error("[verifyEmailCode]", err);
+    return res.status(500).json({ message: "Server Error" });
+  }
 };
 
 // @desc    Register a new user
@@ -77,11 +212,32 @@ const registerUser = async (req, res, next) => {
       codeExists = await User.findOne({ referralCode: newReferralCode });
     }
 
+    // The account cannot exist until the mailbox has been proved. This is the whole
+    // anti-bot measure: a script can POST here all day and get nowhere without having
+    // received a code at that address first.
+    const verification = await EmailVerification.findOne({
+      email: String(email).toLowerCase().trim(),
+      consumedAt: null,
+      verifiedAt: { $ne: null },
+    });
+    if (!verification || verification.expiresAt.getTime() < Date.now()) {
+      return res.status(400).json({
+        message: "Please verify your email address first.",
+        code: "EMAIL_NOT_VERIFIED",
+      });
+    }
+
     // Handle Referral Logic
     // Handle Referral Logic
     let referrer = null;
     const settings = await SettingsService.getSettings();
-    const initialCredits = settings.credits.signupBonus;
+    // While the pre-launch campaign runs, an early signup is worth more. This REPLACES
+    // the usual signup bonus rather than stacking on it, so a pre-launch account lands
+    // on exactly launch.bonusCredits.
+    const launchOn = settings.launch?.enabled === true;
+    const initialCredits = launchOn
+      ? (settings.launch.bonusCredits ?? 50)
+      : settings.credits.signupBonus;
     const REFERRAL_BONUS = settings.credits.referralBonus;
 
     if (referralCode) {
@@ -112,9 +268,39 @@ const registerUser = async (req, res, next) => {
       interfaceLang: lang,
       signupCountry,
       lastSeenCountry: signupCountry,
+      // Stamped HERE, at signup, precisely so the admin backfill skips this account —
+      // they already received the launch allocation as their signup credits.
+      launchBonusGrantedAt: launchOn ? new Date() : null,
+      emailVerifiedAt: verification.verifiedAt,
     });
 
+    // Single use. Burn the proof so the same verified code cannot be replayed to
+    // register a second account.
+    await EmailVerification.updateOne(
+      { _id: verification._id },
+      { $set: { consumedAt: new Date() } }
+    );
+
     if (user) {
+      // Unlike the plain signup bonus (which writes no ledger row at all), the launch
+      // grant is auditable — it is real value handed out during a campaign. Best-effort:
+      // a ledger failure must never cost someone their account.
+      if (launchOn) {
+        try {
+          await Transaction.create({
+            userId: user._id,
+            amount: initialCredits,
+            type: TRANSACTION_TYPES.LAUNCH_BONUS,
+            description: "Early-bird launch bonus (signup)",
+            status: "completed",
+            // NOTE: externalTxId is deliberately ABSENT, never null — the index is
+            // unique+sparse, and an explicit null IS indexed, so nulls collide.
+          });
+        } catch (err) {
+          console.error("Launch bonus ledger write failed:", err.message);
+        }
+      }
+
       // Only award credits to the REFERRER, not the new user
       if (referrer) {
         // Award Referrer
@@ -238,12 +424,25 @@ const loginUser = async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
-    // Check Maintenance Mode
+    // Check Maintenance Mode.
+    //
+    // This used to allow ONLY `role === "admin"`, which broke two things: an account
+    // granted User.maintenanceAccess could never sign in (the grant only ever worked for
+    // requests that already carried a token), and a pre-launch registrant who closed the
+    // tab could never get back to their countdown. The rule below mirrors exactly what
+    // maintenance.middleware.js and GET /system/status already enforce, plus the
+    // pre-launch case — so all three agree on who gets in.
     const settings = await SettingsService.getSettings();
     if (settings.features.maintenanceMode) {
-      // Allow only admin login
-      const user = await User.findOne({ email });
-      if (!user || user.role !== "admin") {
+      const candidate = await User.findOne({ email }).select("role maintenanceAccess");
+      const privileged =
+        !!candidate && (candidate.role === "admin" || candidate.maintenanceAccess === true);
+      // During the pre-launch campaign anyone with an account may sign in — they land on
+      // the countdown page, not the app, and the whole point is that they can come back
+      // to it. The API itself stays gated by maintenance.middleware.js.
+      const preLaunchGuest = settings.launch?.enabled === true && !!candidate;
+
+      if (!privileged && !preLaunchGuest) {
         return res.status(503).json({
           message: "System is currently under maintenance. Please try again later.",
         });
@@ -416,9 +615,10 @@ const forgotPassword = async (req, res) => {
     // Don't reveal whether the email exists — always respond with success.
     // This prevents account enumeration via the reset endpoint.
     if (!user) {
-      return res
-        .status(200)
-        .json({ success: true, data: "If an account exists for that email, a reset code has been sent." });
+      return res.status(200).json({
+        success: true,
+        data: "If an account exists for that email, a reset code has been sent.",
+      });
     }
 
     // Generate OTP
@@ -527,13 +727,32 @@ const getConfig = async (req, res) => {
     // pricing follows the person, not their signup/last-seen history.
     const geoCountry = countryFromIp(clientIp(req));
 
+    // Mongoose subdocument → plain object, so the spread below actually copies the keys.
+    const credits = settings.credits?.toObject?.() ?? { ...settings.credits };
+    const effectiveSignupBonus =
+      settings.launch?.enabled === true
+        ? (settings.launch.bonusCredits ?? 50)
+        : credits.signupBonus;
+
     res.status(200).json({
       features: {
         maintenanceMode: settings.features.maintenanceMode,
         aiAvailable: activeProvider !== "mock" || !!process.env.ANTHROPIC_API_KEY,
         admobEnabled: settings.features.admobEnabled === true,
       },
-      credits: settings.credits,
+      // The EFFECTIVE signup bonus, not the raw setting. lib/credits.js hydrates
+      // SIGNUP_CREDITS from this and Register.jsx renders it, so returning the raw 20
+      // during the campaign would have the register page advertise 20 free credits on
+      // the very page that grants 50. The admin settings screen reads the raw document,
+      // so the true signupBonus is still editable there.
+      credits: { ...credits, signupBonus: effectiveSignupBonus },
+      // So the client can send a fresh signup straight to /pre-launch instead of showing
+      // the countdown under an /onboarding URL. App.jsx already fetches this on mount.
+      launch: {
+        enabled: settings.launch?.enabled === true,
+        date: settings.launch?.date || null,
+        bonusCredits: settings.launch?.bonusCredits ?? 50,
+      },
       creditCosts,
       // Model selection (Aria chat/tailoring): the two-tier cost tables + exposed models.
       aiModels: { models, defaultModel: DEFAULT_MODEL, flagshipCreditCosts },
@@ -555,4 +774,6 @@ module.exports = {
   resetPassword,
   registerAdmin,
   getConfig,
+  requestEmailVerification,
+  verifyEmailCode,
 };

@@ -319,4 +319,149 @@ const purchaseReceiptText = (p) => {
   return lines.join("\n");
 };
 
-module.exports = { sendPasswordResetOTP, sendPurchaseReceipt };
+// ── Launch announcement ────────────────────────────────────────────────────────
+//
+// The one-time "we're live" mail to everyone who registered during the pre-launch
+// campaign. English-only by design for v1: of 215 accounts, one has interfaceLang
+// set to French, so a second translated template is not worth the surface area yet.
+const launchAnnouncementTemplate = (p) => {
+  const greeting = p.firstName ? `Hi ${p.firstName},` : "Hi,";
+  const appUrl = process.env.FRONTEND_URL || "https://applyright.com.ng";
+  return renderShell(
+    `
+    <tr><td style="padding:0 0 6px 0;font:700 22px/1.3 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.ink};">
+      We're live.
+    </td></tr>
+    <tr><td style="padding:0 0 18px 0;font:400 15px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.muted};">
+      ${greeting}<br /><br />
+      ApplyRight is open. Thanks for signing up early &mdash; your account is ready and
+      your bonus credits are already on it.
+    </td></tr>
+    <tr><td style="padding:0 0 20px 0;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${BRAND.accentSoft};border-radius:10px;">
+        <tr><td style="padding:14px 16px;font:600 15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.accentInk};">
+          ${p.credits} credits are waiting in your account
+        </td></tr>
+      </table>
+    </td></tr>
+    <tr><td style="padding:0 0 24px 0;">
+      <a href="${appUrl}/login" style="display:inline-block;background:${BRAND.ink};color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:10px;font:600 15px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+        Start building your CV
+      </a>
+    </td></tr>
+    <tr><td style="padding:0;font:400 14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.faint};">
+      Build a CV around the job you're going for, score your fit before you apply, and
+      practise the interview out loud. Questions? Just reply to this email.
+    </td></tr>`,
+    "ApplyRight is live — your bonus credits are ready."
+  );
+};
+
+const launchAnnouncementText = (p) =>
+  [
+    p.firstName ? `Hi ${p.firstName},` : "Hi,",
+    "",
+    "ApplyRight is live.",
+    "",
+    `Thanks for signing up early - your account is ready and ${p.credits} bonus credits are already on it.`,
+    "",
+    `Sign in: ${process.env.FRONTEND_URL || "https://applyright.com.ng"}/login`,
+    "",
+    "Questions? Just reply to this email.",
+    "- ApplyRight",
+  ].join("\n");
+
+/**
+ * Send the launch announcement to a BATCH of recipients in one Resend call.
+ *
+ * Resend's batch endpoint takes up to 100 messages per request, which is what makes a
+ * 215-person send three calls instead of 215 — the default plan allows roughly 2
+ * requests/second, so the naive loop would spend two minutes getting rate-limited.
+ *
+ * Returns { sent, error }. Never throws: the caller is mid-way through a bulk send and
+ * has to be able to record which batches landed.
+ *
+ * @param {Array<{email:string, firstName?:string, credits:number}>} recipients max 100
+ */
+const sendLaunchAnnouncementBatch = async (recipients) => {
+  if (!resend) return { sent: 0, error: "RESEND_API_KEY is not set" };
+  if (!recipients || recipients.length === 0) return { sent: 0, error: null };
+
+  try {
+    const { error } = await resend.batch.send(
+      recipients.map((r) => ({
+        from: fromAddress,
+        to: r.email,
+        subject: "ApplyRight is live",
+        html: launchAnnouncementTemplate(r),
+        text: launchAnnouncementText(r),
+      }))
+    );
+    if (error) return { sent: 0, error: error.message || String(error) };
+    return { sent: recipients.length, error: null };
+  } catch (err) {
+    return { sent: 0, error: err.message };
+  }
+};
+
+// Signup verification code. Same shell and same shape as the password-reset OTP —
+// this is the identical interaction (six digits, ten minutes) and it should look
+// identical in the inbox.
+const verificationCodeTemplate = (code) =>
+  renderShell(
+    `
+    <tr><td style="padding:0 0 6px 0;font:700 22px/1.3 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.ink};">
+      Confirm your email
+    </td></tr>
+    <tr><td style="padding:0 0 18px 0;font:400 15px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.muted};">
+      Enter this code to finish creating your ApplyRight account.
+    </td></tr>
+    <tr><td style="padding:0 0 18px 0;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+        <tr><td style="background:${BRAND.canvas};border:1px solid ${BRAND.border};border-radius:10px;padding:14px 22px;font:700 30px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.22em;color:${BRAND.ink};">
+          ${code}
+        </td></tr>
+      </table>
+    </td></tr>
+    <tr><td style="padding:0;font:400 14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.faint};">
+      The code expires in 10 minutes. If you did not try to sign up, you can ignore
+      this email &mdash; no account has been created.
+    </td></tr>`,
+    `${code} is your ApplyRight verification code`
+  );
+
+/**
+ * Send a signup verification code. THROWS when email is unconfigured, unlike the
+ * best-effort receipt: a code that never arrives leaves someone unable to sign up at
+ * all, so the caller has to know and say so rather than showing a code entry box for a
+ * mail that is never coming.
+ */
+const sendVerificationCode = async (email, code) => {
+  if (!resend) throw new Error("EMAIL_UNAVAILABLE: RESEND_API_KEY is not set");
+  const { error } = await resend.emails.send({
+    from: fromAddress,
+    to: email,
+    subject: `${code} is your ApplyRight verification code`,
+    html: verificationCodeTemplate(code),
+    text: `Your ApplyRight verification code is ${code}. It expires in 10 minutes.`,
+  });
+  if (error) throw new Error(error.message || String(error));
+  return true;
+};
+
+// Whether mail can actually leave the building. Exposed so a bulk send can HARD-FAIL
+// up front instead of silently no-opping its way through the whole user table (the
+// client is null when RESEND_API_KEY is unset, and every send quietly returns null).
+const isEmailConfigured = () => !!resend;
+
+// The configured sender, so a caller can refuse to bulk-send from resend.dev.
+const getFromAddress = () => fromAddress;
+
+module.exports = {
+  sendPasswordResetOTP,
+  sendPurchaseReceipt,
+  sendLaunchAnnouncementBatch,
+  sendVerificationCode,
+  isEmailConfigured,
+  getFromAddress,
+};

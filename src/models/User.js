@@ -202,6 +202,25 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Pre-launch campaign markers. TIMESTAMPS, not booleans, and stored rather than
+    // derived: "did this account get the bonus?" cannot be inferred from
+    // createdAt < launch.date, because moving the launch date would silently re-grant
+    // credits on the next run. Storing the moment also makes both operations RESUMABLE
+    // — a crash halfway leaves the finished half marked and a re-run picks up the rest.
+    // When this account proved it owned its email address. A TIMESTAMP rather than a
+    // boolean, because null has to mean "predates the requirement" and not
+    // "unverified" — every account created since verification shipped proved it
+    // BEFORE the account existed, so there is no such thing as an unverified account
+    // and nothing gates on this. That is what keeps the existing accounts logged in.
+    emailVerifiedAt: { type: Date, default: null },
+    launchBonusGrantedAt: { type: Date, default: null },
+    // Two fields, not one, and that is the point. `ClaimedAt` is set BEFORE the send
+    // (filtered on null, which is what makes a double-send impossible); `SentAt` is set
+    // AFTER Resend accepts. The pair {claimed, not sent} is exactly the crash window and
+    // is precisely requeueable. Collapse them into one field and you must choose between
+    // "may double-send" and "may never send".
+    launchEmailClaimedAt: { type: Date, default: null },
+    launchEmailSentAt: { type: Date, default: null },
     unlockedTemplates: [String],
     referralCode: {
       type: String,

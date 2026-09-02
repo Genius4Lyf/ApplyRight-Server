@@ -17,6 +17,10 @@ const TRANSACTION_TYPES = Object.freeze({
   STREAK_BONUS: "streak_bonus",
   DAILY_LOGIN: "daily_login",
   REFERRAL_BONUS: "referral_bonus",
+  // One-time early-bird grant for accounts that existed before launch. Unlike the
+  // signup bonus (written straight onto User.credits with no ledger row at all),
+  // this DOES write a Transaction — it is the only audit trail for a bulk grant.
+  LAUNCH_BONUS: "launch_bonus",
 
   // --- Credits out: generic ---
   // Catch-all spend. Prefer a specific type below for anything new so the

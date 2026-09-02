@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const launchController = require("../controllers/launch.controller");
 const {
   getDashboardStats,
   getRevenueStats,
@@ -39,6 +40,11 @@ router.put("/users/:id/tier", admin, updateUserTier);
 router.put("/users/:id/plan", admin, updateUserPlan);
 router.put("/users/:id/interview-unlock", admin, updateUserInterviewUnlock);
 router.put("/users/:id/maintenance-access", admin, updateUserMaintenanceAccess);
+
+// Pre-launch campaign. Read-only status, then the two irreversible bulk actions.
+router.get("/launch/status", admin, launchController.getLaunchStatus);
+router.post("/launch/backfill", admin, launchController.backfillLaunchBonus);
+router.post("/launch/announce", admin, launchController.sendLaunchAnnouncement);
 router.delete("/users/:id", admin, deleteUser);
 
 // Job Searches

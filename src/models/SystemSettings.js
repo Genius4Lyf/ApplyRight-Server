@@ -52,6 +52,18 @@ const systemSettingsSchema = new mongoose.Schema(
       enableJobSearch: { type: Boolean, default: true },
       admobEnabled: { type: Boolean, default: false },
     },
+    // Pre-launch campaign. Deliberately SEPARATE from features.maintenanceMode: the
+    // plain "Under Maintenance" page has to stay available for a genuine unplanned
+    // outage, where a launch countdown would be a lie. Both on = pre-launch page;
+    // maintenance alone = the old maintenance page, unchanged.
+    launch: {
+      enabled: { type: Boolean, default: false },
+      // Countdown target. Null = no timer rendered (the page falls back to plain copy
+      // rather than counting down to NaN).
+      date: { type: Date, default: null },
+      // What a signup receives while the campaign runs, INSTEAD of credits.signupBonus.
+      bonusCredits: { type: Number, default: 50 },
+    },
     announcement: {
       enabled: { type: Boolean, default: false },
       message: { type: String, default: "" },

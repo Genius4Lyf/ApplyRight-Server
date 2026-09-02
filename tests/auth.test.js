@@ -1,12 +1,18 @@
 const request = require("supertest");
 const app = require("../src/app");
 const User = require("../src/models/User");
+const EmailVerification = require("../src/models/EmailVerification");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 // Mock Dependencies
 jest.mock("express-rate-limit", () => jest.fn(() => (req, res, next) => next()));
 jest.mock("../src/models/User");
+// Registration now requires a proved mailbox before it will create anything. These
+// tests are about what registration DOES (role defaults, interfaceLang, referrals),
+// not about the proof itself — that lives in tests/emailVerification.test.js — so the
+// precondition is satisfied here rather than re-asserted.
+jest.mock("../src/models/EmailVerification");
 jest.mock("bcryptjs");
 jest.mock("jsonwebtoken");
 jest.mock("../src/services/settings.service", () => ({
@@ -42,6 +48,16 @@ const mockUser = {
 describe("Auth API (Mocked DB)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+
+    // A verified, unconsumed, unexpired record for whatever address is being
+    // registered — the state a real signup reaches after entering its code.
+    EmailVerification.findOne.mockResolvedValue({
+      _id: "verification-1",
+      verifiedAt: new Date(),
+      consumedAt: null,
+      expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+    });
+    EmailVerification.updateOne.mockResolvedValue({ modifiedCount: 1 });
 
     // Default Mock Implementations
     // bcrypt

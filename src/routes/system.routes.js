@@ -14,6 +14,11 @@ const User = require("../models/User");
 // @access  Public
 router.get("/status", async (req, res) => {
   try {
+    // NEVER cacheable: the response carries a per-caller `bypass` flag on a public
+    // GET, so a proxy or CDN that cached one admin's `bypass: true` would hand the
+    // whole internet a way past maintenance mode.
+    res.set("Cache-Control", "no-store");
+
     const settings = await SettingsService.getSettings();
     const maintenance = settings?.features?.maintenanceMode || false;
 
@@ -29,10 +34,20 @@ router.get("/status", async (req, res) => {
       }
     }
 
+    // The launch block rides along on THIS response rather than a second endpoint:
+    // MaintenanceGuard already calls /system/status on mount, so it can pick which page
+    // to show AND render the countdown from one round trip.
+    const launch = settings?.launch || {};
+
     res.status(200).json({
       success: true,
       maintenance,
       bypass,
+      launch: {
+        enabled: launch.enabled === true,
+        date: launch.date || null,
+        bonusCredits: launch.bonusCredits ?? 50,
+      },
       message: maintenance ? "System is under maintenance" : "System is operational",
     });
   } catch (error) {

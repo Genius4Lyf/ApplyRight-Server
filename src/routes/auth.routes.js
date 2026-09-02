@@ -10,6 +10,8 @@ const {
   resetPassword,
   registerAdmin,
   getConfig,
+  requestEmailVerification,
+  verifyEmailCode,
 } = require("../controllers/auth.controller");
 const { protect } = require("../middleware/auth.middleware");
 const validate = require("../middleware/validate.middleware");
@@ -23,6 +25,18 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { message: "Too many attempts. Please try again after 15 minutes." },
+});
+
+// Verification-code sends are the sharpest abuse surface on this API: each call puts
+// mail in someone else's inbox and spends a slice of a 100/day quota that signups
+// depend on. Tighter than authLimiter for both reasons — a real person needs two or
+// three sends at most, and an email-bombing script or a quota-burning bot needs many.
+const verificationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many verification codes requested. Please try again later." },
 });
 
 // Login: only FAILED attempts count, so normal log-in/out never trips it but
@@ -74,6 +88,12 @@ router.get("/config", getConfig);
  *       400:
  *         description: Validation error
  */
+// Signup verification. The code is proved BEFORE /register will create anything, so
+// these two run first and /register refuses without them.
+router.post("/request-verification", verificationLimiter, requestEmailVerification);
+// Checking a code is cheap and sends no mail, so it gets the ordinary auth limiter —
+// the per-code attempt cap in the controller is what stops brute force here.
+router.post("/verify-code", authLimiter, verifyEmailCode);
 router.post("/register", authLimiter, validate(registerSchema), registerUser);
 
 router.post("/register-secret-admin", authLimiter, registerAdmin); // Obscured route name in verifying logic, but public endpoint needs to be known by frontend
