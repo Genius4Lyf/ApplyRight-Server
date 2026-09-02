@@ -631,6 +631,38 @@ exports.updateUserInterviewUnlock = async (req, res) => {
   }
 };
 
+// @desc    Toggle maintenance-mode bypass for a user (awareness-campaign / early
+//          access grant). See User.maintenanceAccess and maintenance.middleware.js.
+// @route   PUT /api/v1/admin/users/:id/maintenance-access
+// @access  Private/Admin
+exports.updateUserMaintenanceAccess = async (req, res) => {
+  try {
+    const { access } = req.body;
+    if (typeof access !== "boolean") {
+      return res.status(400).json({ success: false, message: "`access` must be true or false" });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    user.maintenanceAccess = access;
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      data: { _id: user._id, email: user.email, maintenanceAccess: user.maintenanceAccess },
+      message: access
+        ? "This user can now access the app during maintenance"
+        : "Maintenance-mode access removed for this user",
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
 // @desc    Delete user
 // @route   DELETE /api/v1/admin/users/:id
 // @access  Private/Admin

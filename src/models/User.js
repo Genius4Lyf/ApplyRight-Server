@@ -193,6 +193,15 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Support-grantable override: when true, this user passes straight through
+    // maintenance mode instead of getting the 503 (see maintenance.middleware.js).
+    // For running an app-wide maintenance window while still letting a hand-picked
+    // list of people in — e.g. an awareness-campaign cohort invited in ahead of a
+    // public launch. Admin-set only; a user cannot grant this to themselves.
+    maintenanceAccess: {
+      type: Boolean,
+      default: false,
+    },
     unlockedTemplates: [String],
     referralCode: {
       type: String,

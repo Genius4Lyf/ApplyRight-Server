@@ -1,3 +1,4 @@
+const jwt = require("jsonwebtoken");
 const SettingsService = require("../services/settings.service");
 const User = require("../models/User");
 
@@ -6,44 +7,40 @@ const checkMaintenanceMode = async (req, res, next) => {
     const settings = await SettingsService.getSettings();
 
     if (settings && settings.features && settings.features.maintenanceMode) {
-      // Maintenance is ON
-      // Check if user is admin (if authenticated)
-      // Note: This middleware runs AFTER auth middleware usually, or independently.
-      // If it runs BEFORE auth, we can't know if they are admin unless we decode token here or skip for login routes.
-
-      // Strategy:
-      // 1. Allow login/auth routes always (so admins can log in)
-      // 2. Allow admin routes always
-      // 3. Block everything else
-
-      // Bypass for Auth routes
+      // Bypass for Auth routes (so people can still log in / register — see below)
+      // and Admin routes (so the toggle can be flipped back off).
       if (req.path.startsWith("/api/auth") || req.path.startsWith("/api/v1/auth")) {
         return next();
       }
-
-      // Bypass for Admin routes (API)
       if (req.path.startsWith("/api/admin") || req.path.startsWith("/api/v1/admin")) {
         return next();
       }
-
-      // Bypass for System Status (Public)
       if (req.path.startsWith("/api/system") || req.path.startsWith("/api/v1/system")) {
         return next();
       }
 
-      // For other routes, STRICTLY check if user is admin
-      // If req.user is already populated by 'protect' middleware, use it.
-      if (req.user && req.user.role === "admin") {
-        return next();
+      // This runs BEFORE any route's own `protect` middleware — checkMaintenanceMode
+      // is mounted globally in app.js ahead of every route mount, and `protect` is
+      // only ever applied per-route inside route files. So `req.user` does not exist
+      // yet here; the admin bypass below used to test for it and could never pass.
+      // Decoding the token independently is what makes an admin (or an
+      // admin-granted account, see User.maintenanceAccess) actually get through.
+      let user = null;
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith("Bearer")) {
+        try {
+          const decoded = jwt.verify(authHeader.split(" ")[1], process.env.JWT_SECRET);
+          user = await User.findById(decoded.id).select("role maintenanceAccess");
+        } catch {
+          // Expired/invalid token: fall through as a guest, same as `protect` would
+          // 401 on a real request — but this middleware's job is only to decide
+          // bypass-or-block, not to authenticate, so it degrades quietly.
+        }
       }
 
-      // If not authenticated yet but might be admin, we have a problem.
-      // But typically, non-auth routes (public) should be blocked too.
-      // And auth routes (dashboard data) should be blocked for non-admins.
-
-      // So:
-      // - If user IS logged in (req.user exists) and is NOT admin -> BLOCK
-      // - If user is NOT logged in (guest) -> BLOCK (unless it's the login endpoint, handled above)
+      if (user && (user.role === "admin" || user.maintenanceAccess === true)) {
+        return next();
+      }
 
       return res.status(503).json({
         success: false,
