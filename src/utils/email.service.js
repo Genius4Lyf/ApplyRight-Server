@@ -79,8 +79,7 @@ const sendPurchaseReceipt = async (p) => {
 
 // Brand tokens mirrored from the app (src/index.css)
 const BRAND = {
-  primary: "#4f46e5", // Indigo 600
-  primaryDark: "#4338ca", // Indigo 700 (gradient depth)
+  primary: "#0f172a", // Slate 900 (ink) — kept equal to `ink` by intent, not coupling
   ink: "#0f172a", // Slate 900
   darkPanel: "#070c17", // Current app dark canvas / navigation ground
   accent: "#f59e0b", // Amber 500
