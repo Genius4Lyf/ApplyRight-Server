@@ -93,3 +93,83 @@ describe("Maintenance mode gate", () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+// The single write that stays open behind the pre-launch gate. A campaign signup has to
+// be able to hand over their details before the countdown, so the onboarding save is
+// exempt — but only while the campaign is running, only for an account that has not
+// finished, and only on that exact request. These tests exist to keep it that narrow:
+// widened by accident it becomes a general write channel through a closed app.
+describe("Maintenance gate — the onboarding exemption", () => {
+  const campaignOn = (over = {}) =>
+    SettingsService.getSettings.mockResolvedValue({
+      features: { maintenanceMode: true },
+      launch: { enabled: true },
+      ...over,
+    });
+
+  const asUser = (over = {}) => {
+    jwt.verify.mockReturnValue({ id: mockUserId });
+    const record = { _id: mockUserId, role: "user", maintenanceAccess: false, ...over };
+    User.findById.mockReturnValue({ select: jest.fn().mockResolvedValue(record) });
+    User.findByIdAndUpdate.mockReturnValue({ select: jest.fn().mockResolvedValue(record) });
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    campaignOn();
+  });
+
+  const save = () =>
+    request(app)
+      .put("/api/users/profile")
+      .set("Authorization", "Bearer token")
+      .send({ firstName: "Ada", lastName: "Lovelace", onboardingCompleted: true });
+
+  // Asserted as "not 503" rather than 200: the gate is what is under test, and whatever
+  // the controller does next is a different suite's business.
+  it("lets an unfinished registrant save their onboarding", async () => {
+    asUser({ onboardingCompleted: false });
+    const res = await save();
+    expect(res.statusCode).not.toBe(503);
+  });
+
+  it("closes again once they have finished", async () => {
+    asUser({ onboardingCompleted: true });
+    const res = await save();
+    expect(res.statusCode).toBe(503);
+  });
+
+  it("does not open during an ORDINARY outage", async () => {
+    // Maintenance without the campaign means the app is genuinely down. Letting someone
+    // fill in a form here would only waste their time.
+    campaignOn({ launch: { enabled: false } });
+    asUser({ onboardingCompleted: false });
+    const res = await save();
+    expect(res.statusCode).toBe(503);
+  });
+
+  it("does not open the rest of the user API", async () => {
+    asUser({ onboardingCompleted: false });
+    const res = await request(app)
+      .get("/api/users/profile")
+      .set("Authorization", "Bearer token");
+    expect(res.statusCode).toBe(503);
+  });
+
+  it("does not open the account DELETE on the same path", async () => {
+    // Same URL, different verb — the exemption is keyed on both.
+    asUser({ onboardingCompleted: false });
+    const res = await request(app)
+      .delete("/api/users/profile")
+      .set("Authorization", "Bearer token");
+    expect(res.statusCode).toBe(503);
+  });
+
+  it("does not open for a guest with no token", async () => {
+    jwt.verify.mockImplementation(() => {
+      throw new Error("no token");
+    });
+    const res = await request(app).put("/api/users/profile").send({ firstName: "Ada" });
+    expect(res.statusCode).toBe(503);
+  });
+});

@@ -30,7 +30,7 @@ const checkMaintenanceMode = async (req, res, next) => {
       if (authHeader && authHeader.startsWith("Bearer")) {
         try {
           const decoded = jwt.verify(authHeader.split(" ")[1], process.env.JWT_SECRET);
-          user = await User.findById(decoded.id).select("role maintenanceAccess");
+          user = await User.findById(decoded.id).select("role maintenanceAccess onboardingCompleted");
         } catch {
           // Expired/invalid token: fall through as a guest, same as `protect` would
           // 401 on a real request — but this middleware's job is only to decide
@@ -39,6 +39,27 @@ const checkMaintenanceMode = async (req, res, next) => {
       }
 
       if (user && (user.role === "admin" || user.maintenanceAccess === true)) {
+        return next();
+      }
+
+      // A pre-launch registrant still has to finish onboarding — it is the one thing
+      // the campaign asks of them between signing up and the countdown, and its save
+      // would otherwise 503 like everything else.
+      //
+      // Scoped as narrowly as it can be: ONLY while the launch campaign is running
+      // (a genuine outage keeps its ordinary meaning, where nothing is writable),
+      // only the onboarding save itself, only for an authenticated account, and only
+      // while that account has not already completed it. The hole closes the moment
+      // they finish, so it cannot become a general write channel through the gate.
+      const isOnboardingSave =
+        req.method === "PUT" &&
+        (req.path === "/api/users/profile" || req.path === "/api/v1/users/profile");
+      if (
+        settings.launch?.enabled === true &&
+        user &&
+        user.onboardingCompleted !== true &&
+        isOnboardingSave
+      ) {
         return next();
       }
 

@@ -273,7 +273,10 @@ describe("POST /admin/launch/announce", () => {
     expect(release.$set.launchEmailSentAt).toBeUndefined();
   });
 
-  it("a test send goes only to the admin and marks nobody", async () => {
+  it("a test send goes to the pre-flight inbox and marks nobody", async () => {
+    // The pre-flight goes to ONE fixed address, not to whichever admin clicked it —
+    // the whole value of a test send is reading the mail on a real client first, so it
+    // has to land somewhere someone actually opens.
     emailService.sendLaunchAnnouncementBatch.mockResolvedValue({ sent: 1, error: null });
 
     const res = await asAdmin(
@@ -282,9 +285,13 @@ describe("POST /admin/launch/announce", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body.data.test).toBe(true);
-    expect(emailService.sendLaunchAnnouncementBatch.mock.calls[0][0]).toEqual([
-      { email: "admin@applyright.com", firstName: "Ada", credits: 50 },
-    ]);
+
+    const [recipients] = emailService.sendLaunchAnnouncementBatch.mock.calls[0];
+    expect(recipients).toHaveLength(1);
+    expect(recipients[0].email).toBe(process.env.LAUNCH_TEST_EMAIL || "udofiadaniel07@gmail.com");
+    expect(recipients[0].credits).toBe(50);
+
+    // Nobody is stamped: the test must not consume anyone's one announcement.
     expect(User.updateMany).not.toHaveBeenCalled();
   });
 

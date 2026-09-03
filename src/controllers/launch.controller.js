@@ -188,6 +188,12 @@ exports.backfillLaunchBonus = async (req, res) => {
   }
 };
 
+// Where the pre-flight test lands. Deliberately a fixed inbox rather than the signed-in
+// admin's own address: the point of the test is to read the mail on a real client before
+// 200 strangers do, and that has to be an inbox someone actually opens, whichever admin
+// account happens to be logged in. Override per-environment with LAUNCH_TEST_EMAIL.
+const TEST_RECIPIENT = process.env.LAUNCH_TEST_EMAIL || "udofiadaniel07@gmail.com";
+
 // @desc    The one-click "we're live" email. `mode: "test"` sends only to the caller.
 // @route   POST /api/admin/launch/announce
 // @access  Private/Admin
@@ -223,7 +229,7 @@ exports.sendLaunchAnnouncement = async (req, res) => {
     if (mode === "test") {
       const result = await sendLaunchAnnouncementBatch([
         {
-          email: req.user.email,
+          email: TEST_RECIPIENT,
           firstName: req.user.firstName,
           credits: bonusCredits,
         },
@@ -234,7 +240,7 @@ exports.sendLaunchAnnouncement = async (req, res) => {
       return res.status(200).json({
         success: true,
         data: { sent: 1, test: true },
-        message: `Test sent to ${req.user.email}.`,
+        message: `Test sent to ${TEST_RECIPIENT}.`,
       });
     }
 
