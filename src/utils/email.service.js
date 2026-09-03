@@ -328,30 +328,50 @@ const launchAnnouncementTemplate = (p) => {
   const appUrl = process.env.FRONTEND_URL || "https://applyright.com.ng";
   return renderShell(
     `
-    <tr><td style="padding:0 0 6px 0;font:700 22px/1.3 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.ink};">
-      We're live.
-    </td></tr>
-    <tr><td style="padding:0 0 18px 0;font:400 15px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.muted};">
-      ${greeting}<br /><br />
-      ApplyRight is open. Thanks for signing up early &mdash; your account is ready and
-      your bonus credits are already on it.
-    </td></tr>
-    <tr><td style="padding:0 0 20px 0;">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${BRAND.accentSoft};border-radius:10px;">
-        <tr><td style="padding:14px 16px;font:600 15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.accentInk};">
-          ${p.credits} credits are waiting in your account
-        </td></tr>
-      </table>
-    </td></tr>
-    <tr><td style="padding:0 0 24px 0;">
-      <a href="${appUrl}/login" style="display:inline-block;background:${BRAND.ink};color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:10px;font:600 15px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-        Start building your CV
-      </a>
-    </td></tr>
-    <tr><td style="padding:0;font:400 14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.faint};">
-      Build a CV around the job you're going for, score your fit before you apply, and
-      practise the interview out loud. Questions? Just reply to this email.
-    </td></tr>`,
+          <!-- Heading -->
+          <tr>
+            <td style="padding:24px 40px 0; font-family:Georgia,'Times New Roman',serif; font-size:22px; font-weight:700; letter-spacing:-0.3px; color:${BRAND.ink};">
+              We're live.
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:12px 40px 0; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:15px; line-height:1.65; color:${BRAND.muted};">
+              ${greeting}<br /><br />
+              ApplyRight is open. Thanks for signing up early — your account is ready and your bonus credits are already on it.
+            </td>
+          </tr>
+
+          <!-- Credits callout -->
+          <tr>
+            <td style="padding:24px 40px 0;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:${BRAND.accentSoft}; border-radius:10px;">
+                <tr>
+                  <td style="padding:14px 16px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:15px; font-weight:600; line-height:1.5; color:${BRAND.accentInk};">
+                    ${p.credits} credits are waiting in your account
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- CTA -->
+          <tr>
+            <td style="padding:24px 40px 0;">
+              <a href="${appUrl}/login" style="display:inline-block; background-color:${BRAND.ink}; color:#ffffff; text-decoration:none; padding:12px 24px; border-radius:10px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:15px; font-weight:600;">
+                Start building your CV
+              </a>
+            </td>
+          </tr>
+
+          <!-- Note -->
+          <tr>
+            <td style="padding:24px 40px 32px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:13px; line-height:1.6; color:${BRAND.faint};">
+              Build a CV around the job you're going for, score your fit before you apply, and practise the interview out loud. Questions? Just reply to this email.
+            </td>
+          </tr>
+`,
     "ApplyRight is live — your bonus credits are ready."
   );
 };
@@ -409,23 +429,47 @@ const sendLaunchAnnouncementBatch = async (recipients) => {
 const verificationCodeTemplate = (code) =>
   renderShell(
     `
-    <tr><td style="padding:0 0 6px 0;font:700 22px/1.3 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.ink};">
-      Confirm your email
-    </td></tr>
-    <tr><td style="padding:0 0 18px 0;font:400 15px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.muted};">
-      Enter this code to finish creating your ApplyRight account.
-    </td></tr>
-    <tr><td style="padding:0 0 18px 0;">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0">
-        <tr><td style="background:${BRAND.canvas};border:1px solid ${BRAND.border};border-radius:10px;padding:14px 22px;font:700 30px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.22em;color:${BRAND.ink};">
-          ${code}
-        </td></tr>
-      </table>
-    </td></tr>
-    <tr><td style="padding:0;font:400 14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${BRAND.faint};">
-      The code expires in 10 minutes. If you did not try to sign up, you can ignore
-      this email &mdash; no account has been created.
-    </td></tr>`,
+          <!-- Heading -->
+          <tr>
+            <td style="padding:24px 40px 0; font-family:Georgia,'Times New Roman',serif; font-size:22px; font-weight:700; letter-spacing:-0.3px; color:${BRAND.ink};">
+              Confirm your email
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:12px 40px 0; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:15px; line-height:1.65; color:${BRAND.muted};">
+              Enter this code to finish creating your ApplyRight account. It expires in 10 minutes.
+            </td>
+          </tr>
+
+          <!-- Code label -->
+          <tr>
+            <td style="padding:28px 40px 8px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:11px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; color:${BRAND.faint};">
+              Your verification code
+            </td>
+          </tr>
+
+          <!-- OTP chip -->
+          <tr>
+            <td style="padding:0 40px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="background-color:${BRAND.canvas}; border:1px solid ${BRAND.border}; border-radius:12px; padding:22px 16px; font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace; font-size:34px; font-weight:700; letter-spacing:12px; text-indent:12px; color:${BRAND.ink};">
+                    ${code}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Security note -->
+          <tr>
+            <td style="padding:24px 40px 32px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:13px; line-height:1.6; color:${BRAND.faint};">
+              Keep this code private — ApplyRight will never ask you for it. If you didn't try to sign up, you can safely ignore this email — no account has been created.
+            </td>
+          </tr>
+`,
     `${code} is your ApplyRight verification code`
   );
 
