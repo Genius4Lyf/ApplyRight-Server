@@ -3,6 +3,7 @@ const router = express.Router();
 const jwt = require("jsonwebtoken");
 const SettingsService = require("../services/settings.service");
 const User = require("../models/User");
+const { bypassesMaintenance, BYPASS_FIELDS } = require("../utils/maintenanceBypass");
 
 // @desc    Get system status (maintenance mode), and — if a token is attached —
 //          whether THIS caller specifically bypasses it. Public: no `protect`,
@@ -27,8 +28,8 @@ router.get("/status", async (req, res) => {
     if (maintenance && authHeader && authHeader.startsWith("Bearer")) {
       try {
         const decoded = jwt.verify(authHeader.split(" ")[1], process.env.JWT_SECRET);
-        const user = await User.findById(decoded.id).select("role maintenanceAccess");
-        bypass = !!user && (user.role === "admin" || user.maintenanceAccess === true);
+        const user = await User.findById(decoded.id).select(BYPASS_FIELDS);
+        bypass = bypassesMaintenance(user);
       } catch {
         // Expired/invalid token — same as a guest for this purpose.
       }

@@ -8,7 +8,7 @@ const flutterwave = require("../services/flutterwave.service");
 const subscription = require("../services/subscription.service");
 const settingsService = require("../services/settings.service");
 const { getItem, FREE_TASTE_SEC, MIN_REVIEW_SEC } = require("../config/catalog");
-const { isFreeTemplate } = require("../config/templates");
+const { isFreeTemplate, isTemplatePromoActive } = require("../config/templates");
 const env = require("../config/env");
 const logger = require("../utils/logger");
 const { clientIp, countryFromIp } = require("../utils/geo");
@@ -207,6 +207,19 @@ exports.unlockTemplate = async (req, res) => {
       return res.json({
         success: true,
         message: "Included with your plan",
+        credits: user.credits,
+        unlockedTemplates: user.unlockedTemplates || [],
+      });
+    }
+
+    // The launch promo makes every template free while it runs. Checked HERE, on the
+    // server, and not only in the UI that hides the padlock: the unlock endpoint is
+    // reachable directly, and a client-side-only promo would still take 30 credits
+    // from anyone whose page was open when it started.
+    if (isTemplatePromoActive(await settingsService.getSettings())) {
+      return res.json({
+        success: true,
+        message: "Free during launch",
         credits: user.credits,
         unlockedTemplates: user.unlockedTemplates || [],
       });

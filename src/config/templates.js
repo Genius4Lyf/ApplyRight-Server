@@ -14,4 +14,22 @@ const TEMPLATE_UNLOCK_COST = 30;
 
 const isFreeTemplate = (templateId) => FREE_TEMPLATE_IDS.includes(templateId);
 
-module.exports = { FREE_TEMPLATE_IDS, TEMPLATE_UNLOCK_COST, isFreeTemplate };
+// Is the "everything free" promo running right now?
+//
+// Takes the settings object rather than fetching, so it stays a pure function that
+// the callers already holding settings can use — and so a test can move time without
+// touching the database.
+const isTemplatePromoActive = (settings) => {
+  const until = settings?.templates?.freeUntil;
+  if (!until) return false;
+  const at = new Date(until).getTime();
+  // An unparseable date must not read as "free forever".
+  return Number.isFinite(at) && at > Date.now();
+};
+
+module.exports = {
+  FREE_TEMPLATE_IDS,
+  TEMPLATE_UNLOCK_COST,
+  isFreeTemplate,
+  isTemplatePromoActive,
+};

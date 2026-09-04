@@ -72,6 +72,15 @@ const systemSettingsSchema = new mongoose.Schema(
     templates: {
       featuredTemplateId: { type: String, default: "ats-clean" },
       disabledTemplateIds: [{ type: String }],
+      // Launch promo: every premium template is free while this instant is in the
+      // future. Null = off, and the promo ends by ITSELF.
+      //
+      // A date rather than a boolean on purpose. A boolean has to be switched back,
+      // and the failure mode of forgetting is giving the paid feature away for good —
+      // silently, since nobody complains about being charged nothing. Expiry is read
+      // lazily wherever it matters (there is no cron in this app), the same way
+      // subscription.expiresAt already works.
+      freeUntil: { type: Date, default: null },
     },
     // Interview Mode AI-interviewer voice. The provider toggle is admin-switchable;
     // the API keys live in env (secrets). "off" disables premium voice so the

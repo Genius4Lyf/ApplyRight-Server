@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const EmailVerification = require("../models/EmailVerification");
+const { bypassesMaintenance } = require("../utils/maintenanceBypass");
 const { TRANSACTION_TYPES } = require("../config/transactionTypes");
 const SettingsService = require("../services/settings.service");
 const subscription = require("../services/subscription.service");
@@ -510,6 +511,10 @@ const loginUser = async (req, res, next) => {
         // App language — the client seeds localStorage.lang from this so a
         // returning user gets their saved language on any device.
         interfaceLang: user.interfaceLang,
+        // Whether the pre-launch gate applies to THIS caller. Sent as a decided boolean
+        // rather than the raw flag so the rule stays server-side — the client only needs
+        // to know where to send them, not who qualifies.
+        bypassesMaintenance: bypassesMaintenance(user),
         token: generateToken(user.id),
       });
     } else {
@@ -753,6 +758,10 @@ const getConfig = async (req, res) => {
         date: settings.launch?.date || null,
         bonusCredits: settings.launch?.bonusCredits ?? 50,
       },
+      // The launch promo on premium templates. The DATE is sent, not a boolean, so the
+      // client expires it on its own clock rather than holding a verdict that went stale
+      // the moment the promo ended mid-session.
+      templates: { freeUntil: settings.templates?.freeUntil || null },
       creditCosts,
       // Model selection (Aria chat/tailoring): the two-tier cost tables + exposed models.
       aiModels: { models, defaultModel: DEFAULT_MODEL, flagshipCreditCosts },

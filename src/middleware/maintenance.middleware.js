@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
 const SettingsService = require("../services/settings.service");
 const User = require("../models/User");
+const { bypassesMaintenance, BYPASS_FIELDS } = require("../utils/maintenanceBypass");
 
 const checkMaintenanceMode = async (req, res, next) => {
   try {
@@ -30,7 +31,7 @@ const checkMaintenanceMode = async (req, res, next) => {
       if (authHeader && authHeader.startsWith("Bearer")) {
         try {
           const decoded = jwt.verify(authHeader.split(" ")[1], process.env.JWT_SECRET);
-          user = await User.findById(decoded.id).select("role maintenanceAccess onboardingCompleted");
+          user = await User.findById(decoded.id).select(`${BYPASS_FIELDS} onboardingCompleted`);
         } catch {
           // Expired/invalid token: fall through as a guest, same as `protect` would
           // 401 on a real request — but this middleware's job is only to decide
@@ -38,7 +39,7 @@ const checkMaintenanceMode = async (req, res, next) => {
         }
       }
 
-      if (user && (user.role === "admin" || user.maintenanceAccess === true)) {
+      if (bypassesMaintenance(user)) {
         return next();
       }
 
