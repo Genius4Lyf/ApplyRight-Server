@@ -482,12 +482,12 @@ describe("GET /api/studio/sessions", () => {
     expect(chain.limit).toHaveBeenCalledWith(50);
   });
 
-  it("projects ONLY the fields the rail renders — never whole drafts", async () => {
+  it("reads only what the rail renders plus what it takes to judge completeness", async () => {
     await list();
     const [, projection] = DraftCV.find.mock.calls[0];
 
-    // The rail needs these…
     expect(projection).toEqual({
+      // What the rail draws.
       studioKind: 1,
       title: 1,
       "tailoredForJob.title": 1,
@@ -495,13 +495,43 @@ describe("GET /api/studio/sessions", () => {
       tailoredFromTitle: 1,
       "studioScan.fitScore": 1,
       updatedAt: 1,
+      // What it takes to answer "is this CV finished?" — the one question the row
+      // cannot answer for itself, and the gate on the Duplicate action. Read here,
+      // ANSWERED here: only the verdict goes over the wire (see the payload test
+      // below). Measured at roughly a kilobyte per row against real data.
+      //
+      // The entry titles/companies are not decoration: isCvComplete has to tell a real
+      // row from the placeholder the Studio writes before the coach fills it, and a
+      // count of _ids cannot. Descriptions are here for the same reason — an entry
+      // identified by nothing else still counts as content.
+      "personalInfo.fullName": 1,
+      professionalSummary: 1,
+      "experience.title": 1,
+      "experience.company": 1,
+      "experience.description": 1,
+      "education.degree": 1,
+      "education.school": 1,
+      "education.description": 1,
+      "skills._id": 1,
     });
-    // …and must never ship these. Transcripts and CV bodies are the whole reason
-    // this is a projection and not a find().
-    ["coachChats", "experience", "skills", "personalInfo", "studioScan.evidence"].forEach((heavy) =>
+    // Whole transcripts and scan bodies stay out of the query entirely.
+    ["coachChats", "coachEvidence", "studioScan.evidence", "interviewPrep"].forEach((heavy) =>
       expect(projection[heavy]).toBeUndefined()
     );
     expect(chain.lean).toHaveBeenCalled();
+  });
+
+  it("still never SHIPS the CV body, only the verdict about it", async () => {
+    // The guarantee that actually matters to the client, now that the query reads more
+    // than the rail draws: the rail must not become a way to download every CV.
+    const res = await list();
+
+    res.body.sessions.forEach((row) => {
+      ["experience", "education", "skills", "personalInfo", "professionalSummary"].forEach(
+        (heavy) => expect(row[heavy]).toBeUndefined()
+      );
+      expect(typeof row.canDuplicate === "boolean" || row.canDuplicate === undefined).toBe(true);
+    });
   });
 
   it("shapes rows for the rail, distinguishing tailor from build", async () => {

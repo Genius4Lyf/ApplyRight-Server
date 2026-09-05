@@ -49,6 +49,10 @@ const TRANSACTION_TYPES = Object.freeze({
   // writes the generic "usage" type — retyping it would silently reclassify every
   // historical row in the admin charts.
   CREATE_FROM_UPLOAD: "create_from_upload",
+  // Forking a finished Studio session into a separate copy. Its own type rather than
+  // the generic "usage" so the admin charts can see how often people pay to protect
+  // their work — the whole question this feature was built to answer.
+  DUPLICATE_CV: "duplicate_cv",
 });
 
 // The array form Mongoose's `enum` validator wants.

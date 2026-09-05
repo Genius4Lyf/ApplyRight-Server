@@ -4,6 +4,7 @@ const multer = require("multer");
 const router = express.Router();
 const {
   tailorStart,
+  duplicateSession,
   buildStart,
   uploadImport,
   briefPreview,
@@ -56,6 +57,10 @@ router.post("/draft-jd", protect, aiLimiter, draftJd);
 // is what costs.
 router.post("/tailor-start", protect, tailorStart);
 
+// Fork a finished session — CV, conversation and all — into a separate copy. Charged,
+// but deliberately NOT behind aiLimiter: no model runs, so it is document CRUD and must
+// not eat the AI budget (see the note on that limiter above).
+router.post("/duplicate", protect, duplicateSession);
 // Aria Studio — start a BUILD session: an empty CV prefilled with the user's contact
 // details, optionally aimed at a job. Same create gate as tailor-start.
 router.post("/build-start", protect, buildStart);

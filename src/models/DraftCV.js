@@ -494,6 +494,19 @@ const draftCVSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "DraftCV",
     },
+    // The session this one was DUPLICATED from. Distinct from tailoredFrom, which
+    // records what a tailoring was cut from and is COPIED onto a duplicate unchanged
+    // (the answer to "what was this tailored from" survives being copied).
+    //
+    // Doubles as the idempotency key for POST /studio/duplicate: a second request
+    // seconds after the first finds the copy already here and returns it rather than
+    // creating — and charging for — a second one.
+    duplicatedFrom: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DraftCV",
+      default: null,
+      index: true,
+    },
     tailoredForJob: {
       title: String,
       company: String,

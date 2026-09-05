@@ -15,6 +15,7 @@ const scoringEngine = require("../services/scoringEngine.service");
 const { scanSections, SCAN_RULES_VERSION } = require("../services/sectionScan.service");
 const { isPaidActive } = require("../services/subscription.service");
 const { TRANSACTION_TYPES } = require("../config/transactionTypes");
+const { isCvComplete } = require("../utils/cvCompleteness");
 
 const { resolveDraftBrief, buildBriefForJd, briefHashFor } = require("./coach.controller");
 const { buildMarkdownFromDraft, checkCredits } = require("./analysis.controller");
@@ -478,6 +479,235 @@ const loadOwnedDraft = async (req, res, draftId) => {
     return null;
   }
   return draft;
+};
+
+// Everything a duplicate INHERITS. An allow-list, not a blocklist, and that direction is
+// the point: a field added to DraftCV next year is not copied until someone decides it
+// should be. A blocklist would silently start cloning the next cache or entitlement.
+//
+// Wider than tailorStart's CLONED_CONTENT_FIELDS because the two are different acts. A
+// tailoring RETARGETS a CV at a new job, so it starts a clean conversation against a new
+// JD. A duplicate is a FORK: it is the same document, aimed at the same job, and it keeps
+// the conversation because in this app the conversation IS the session.
+const DUPLICATED_FIELDS = [
+  // The CV itself. _sortIds ride along on purpose — same reason tailorStart gives: the
+  // fork's entries stay addressable by the ids Aria's per-entry writers already use.
+  "personalInfo",
+  "professionalSummary",
+  "experience",
+  "projects",
+  "education",
+  "certifications",
+  "skills",
+  "languages",
+  // The job, whole — including brief/briefHash and aiKeywords/aiKeywordsHash. Those are
+  // hashes OF THE JD TEXT, so they stay valid on a copy of the same JD and the user is
+  // not re-charged for a Role Brief or a keyword pull they already bought.
+  "targetJob",
+  // The conversation, and the ledger of what Aria has already been told. These travel
+  // TOGETHER or not at all: keeping the transcript while dropping the ledger would leave
+  // a fork whose chat shows Aria being told "no" while she has forgotten and asks again.
+  // requirementProbes.evidenceId points into coachEvidence and both are keyed by entry
+  // _sortId, which we preserve — so the links stay intact.
+  "coachChats",
+  "coachEvidence",
+  "requirementProbes",
+  "skillDeclines",
+  // Caches of work ALREADY PAID FOR, hash-keyed so they only ever serve identical input.
+  // (Contrast genState below, which is reset: a cache of a past purchase can be copied,
+  // an entitlement to future free work cannot.)
+  "skillCanonCache",
+  "skillsGenCache",
+  // The scan, INCLUDING its write-once baseline. The fork inherits the document's
+  // history because up to this moment it is the same document. Dropping it would blank
+  // the score and quietly make a 5-credit duplicate cost 15, since a re-scan is 10.
+  "studioScan",
+  // Presentation and settings the user chose, which a copy of their CV should keep.
+  "source",
+  "templateId",
+  "careerStage",
+  "dismissedSections",
+  "outputLang",
+  "studioKind",
+  "studioModelId",
+  // Where the SOURCE was tailored from. Unchanged by copying — "what was this tailored
+  // from" has the same answer afterwards — so these are inherited, not repointed.
+  "tailoredFrom",
+  "tailoredFromTitle",
+  "tailoredForJob",
+];
+
+// Deliberately NOT copied, and each one is a bug if it is:
+//
+//   userId              set from the request; never trusted off the source document
+//   sourceApplicationId analysis.controller.editApplication finds drafts by
+//                       { userId, sourceApplicationId, createdAt within 10 min } and
+//                       returns the newest as "your existing draft" — a copy carrying
+//                       this would hijack Edit on the original analysis
+//   genState            per-entry freeRerollAvailable: an entitlement to FUTURE free
+//                       generations, which copying would sell for the duplicate price
+//   studioPending       an in-flight paid generation belonging to the source session
+//   interviewPrep       the source's saved skills, stories, assessments and notes
+//   exportCount         history
+//   isComplete          wizard state, and inert here — the CV wizard is the only thing
+//   currentStep         that writes it, and a Studio session never reaches that step
+
+// How long after a duplicate a repeat request is treated as the SAME request.
+//
+// Seconds, not the ten minutes analysis.controller uses for its equivalent guard. That
+// one absorbs a proxy dropping a fifteen-second AI call; this is a fast document write,
+// so the only thing to absorb is a double-click or a retry. A deliberate second copy a
+// minute later is a real request and must go through.
+const DUPLICATE_IDEMPOTENCY_MS = 10 * 1000;
+
+// "Untitled CV" → "Untitled CV (copy)" → "Untitled CV (copy 2)" → …
+//
+// Counting rather than stacking, so duplicating a duplicate does not read
+// "My CV (copy) (copy)". Named in the language the CV is WRITTEN in, not the one the
+// browser is set to — the suffix ends up inside the document's own title.
+const COPY_WORD = { en: "copy", fr: "copie" };
+
+const copyTitle = (title, lang) => {
+  const word = COPY_WORD[lang] || COPY_WORD.en;
+  const base = (title || "Untitled CV").trim() || "Untitled CV";
+  // Match a suffix in EITHER language, so a French copy of an English-named CV still
+  // counts up instead of starting a second series.
+  const words = Object.values(COPY_WORD).join("|");
+  const suffix = new RegExp(`\\s*\\((?:${words})(?:\\s+(\\d+))?\\)$`, "i");
+  const found = base.match(suffix);
+  if (!found) return `${base} (${word})`;
+  const next = (parseInt(found[1], 10) || 1) + 1;
+  return `${base.replace(suffix, "")} (${word} ${next})`;
+};
+
+// @desc    Fork a finished Studio session — CV, conversation and all — into a separate
+//          copy, so the original can be left alone.
+//
+//          Charged. Nothing here calls a model, so the price is not cost recovery; it is
+//          the brake that keeps this from being spammed.
+// @route   POST /api/studio/duplicate
+// @access  Private
+const duplicateSession = async (req, res) => {
+  try {
+    const { draftId } = req.body || {};
+    const source = await loadOwnedDraft(req, res, draftId);
+    if (!source) return undefined; // already responded
+
+    // CV agents must hold an active plan to CREATE CVs — the same gate the other two
+    // create paths carry, because this is a create.
+    if (req.user.role === "agent" && !isPaidActive(req.user)) {
+      return res.status(402).json({
+        message: "An active agent plan is required to create CVs.",
+        code: "NEED_AGENT_SUB",
+      });
+    }
+
+    // Studio sessions only. A builder CV is not a session, has no rail row to duplicate
+    // from, and would land in a list it does not belong to.
+    if (!source.studioKind) {
+      return res.status(409).json({
+        message: "Only an Aria Studio session can be duplicated.",
+        code: "NOT_A_SESSION",
+      });
+    }
+
+    // Finished only. The gate reads the FULL document here, which is what lets it use the
+    // same rule the Studio shows the user (utils/cvCompleteness — placeholder rows
+    // stripped), rather than the looser one the lean list projections can support.
+    if (!isCvComplete(source.toObject())) {
+      return res.status(409).json({
+        message: "Finish this CV before duplicating it.",
+        code: "CV_NOT_COMPLETE",
+      });
+    }
+
+    // A repeat of the request we just served — a double-click, or a client retry. Hand
+    // back the copy that already exists instead of making (and charging for) a second.
+    const recent = await DraftCV.findOne({
+      userId: req.user.id,
+      duplicatedFrom: source._id,
+      createdAt: { $gte: new Date(Date.now() - DUPLICATE_IDEMPOTENCY_MS) },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+    if (recent) {
+      return res.status(200).json({
+        draftId: recent._id,
+        title: recent.title,
+        cached: true,
+        charged: false,
+        remainingCredits: subscription.availableCredits(req.user),
+      });
+    }
+
+    const cost = (await settingsService.getCreditCosts()).DUPLICATE_CV;
+    // availableCredits/spendCredits read the plan allowance as well as the wallet, so the
+    // user has to be loaded with those fields (see subscription.service).
+    const user = await User.findById(req.user.id).select("role plan tier subscription credits");
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    // Checked BEFORE the write, so someone who cannot afford it never gets a document
+    // created and rolled back underneath them.
+    if (subscription.availableCredits(user) < cost) {
+      return res.status(403).json({
+        message: "Insufficient credits",
+        code: "INSUFFICIENT_CREDITS",
+        required: cost,
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    const src = source.toObject();
+    const inherited = {};
+    DUPLICATED_FIELDS.forEach((field) => {
+      if (src[field] !== undefined) inherited[field] = src[field];
+    });
+
+    const copy = await DraftCV.create({
+      ...inherited,
+      userId: req.user.id,
+      title: copyTitle(src.title, langService.docLang(source, req)),
+      duplicatedFrom: source._id,
+    });
+
+    // Charged only now that the copy exists. The standing rule in this codebase is that
+    // nobody pays for output that is not there.
+    const charge = await subscription.spendCredits(user, cost, {
+      type: TRANSACTION_TYPES.DUPLICATE_CV,
+      description: "Duplicate an Aria Studio CV",
+    });
+
+    if (charge.insufficient) {
+      // The balance moved between the check above and the charge — another tab spent it.
+      // Undo the create rather than hand out a free copy. Nothing references it yet, so
+      // deleting is clean; refunding instead would leave a charge and a refund in a
+      // ledger the user reads.
+      await DraftCV.deleteOne({ _id: copy._id });
+      return res.status(403).json({
+        message: "Insufficient credits",
+        code: "INSUFFICIENT_CREDITS",
+        required: cost,
+        remainingCredits: subscription.availableCredits(user),
+      });
+    }
+
+    return res.status(201).json({
+      draftId: copy._id,
+      title: copy.title,
+      cached: false,
+      charged: !!charge.charged,
+      cost,
+      // The balance the CHARGE computed, not a re-read of the user. spendCredits mirrors
+      // the deduction onto the in-memory doc, so both agree today — but the client writes
+      // this straight into its wallet pill, and it should not depend on that side effect
+      // still happening.
+      remainingCredits: charge.remainingCredits,
+    });
+  } catch (error) {
+    console.error("Studio Duplicate Error:", error);
+    return res.status(500).json({ message: "Couldn't duplicate this CV. Please try again." });
+  }
 };
 
 // The job context both scan and recompute measure against — the confirmed Role Brief
@@ -1085,6 +1315,23 @@ const sessions = async (req, res) => {
           tailoredFromTitle: 1,
           "studioScan.fitScore": 1,
           updatedAt: 1,
+          // Enough to answer "is this CV finished?" and nothing more. The rail needs it
+          // to know whether Duplicate is offered, and the row itself cannot work it out:
+          // completeness is a question about the CV BODY, which this list never ships.
+          //
+          // Read here, answered here, and only the verdict goes over the wire (see
+          // canDuplicate below) — so the "whole drafts are never returned" contract above
+          // still holds. isCvComplete inspects entry titles/companies to tell a real row
+          // from a placeholder, so _id-only section projections would not be enough.
+          "personalInfo.fullName": 1,
+          professionalSummary: 1,
+          "experience.title": 1,
+          "experience.company": 1,
+          "experience.description": 1,
+          "education.degree": 1,
+          "education.school": 1,
+          "education.description": 1,
+          "skills._id": 1,
         }
       )
         .sort({ updatedAt: -1 })
@@ -1113,6 +1360,10 @@ const sessions = async (req, res) => {
         sourceTitle: r.tailoredFromTitle || "",
         fitScore: r.studioScan?.fitScore ?? null,
         updatedAt: r.updatedAt,
+        // The server's answer to the only question the rail asks of a row. Computed from
+        // the SAME rule the duplicate endpoint gates on (utils/cvCompleteness), so the
+        // menu cannot offer an action the endpoint would refuse, or hide one it allows.
+        canDuplicate: isCvComplete(r),
       })),
       ...(applications || []).map((a) => ({
         _id: a._id,
@@ -1496,4 +1747,5 @@ module.exports = {
   rewriteRole,
   projectIdeas,
   sessions,
+  duplicateSession,
 };

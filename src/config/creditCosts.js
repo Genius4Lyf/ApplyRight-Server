@@ -53,6 +53,17 @@ const DEFAULT_CREDIT_COSTS = Object.freeze({
   INTERVIEW_MODE: 5,
   // Uniform premium CV-template unlock price (paid tiers unlock all for free).
   TEMPLATE_UNLOCK: 30,
+  // Fork a finished Aria Studio session — CV, conversation and all — so the original
+  // can be left alone. No AI runs, so this price is not cost recovery.
+  //
+  // Priced deliberately ABOVE the cheapest way to get a full CV any other way
+  // (GENERATE_CV, 10cr — one AI-written CV from an upload + JD), so duplicating a
+  // finished session is never a cheaper shortcut to a second full CV than generating
+  // one outright. It still undercuts an actual from-scratch Aria Studio build, which
+  // measured against real sessions runs roughly 23cr (light) to 40cr (flagship) —
+  // GENERATE_BULLET × bullets-per-role, GENERATE_SUMMARY, GENERATE_SKILLS, summed —
+  // so "still cheaper than starting over" stays true without being a giveaway.
+  DUPLICATE_CV: 20,
 });
 
 // FLAGSHIP-tier credit costs. A model-tier can charge a DIFFERENT credit cost per action:
@@ -80,6 +91,10 @@ const DEFAULT_FLAGSHIP_CREDIT_COSTS = Object.freeze({
   // (studio.controller.projectIdeas), so it can never resolve to a flagship price. It
   // always charges the light PROJECT_IDEAS cost (1). Its omission from this sparse map
   // is deliberate, not an oversight.
+  //
+  // NOTE: DUPLICATE_CV has NO flagship delta because it runs NO model at all — it is a
+  // document copy. There is no tier for it to resolve to and no token cost to price
+  // against, so the one light price is the only price.
 });
 
 // Return a shallow copy of the defaults (never hand out the frozen original for
