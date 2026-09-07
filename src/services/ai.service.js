@@ -3823,6 +3823,20 @@ ON SCREEN RIGHT NOW: a card titled "${noQuotes(screen.title)}"${screen.body ? ` 
 // unbroken paragraph, and any **bold** the model reached for showed its asterisks
 // literally because the bubble printed the raw string. Scoped to `reply` on purpose:
 // `description` is assembled into CV bullets and must stay plain prose.
+// Some answers have a shape, and flattening that shape into a paragraph is what makes a
+// reply read as a wall of text however well the markdown renders. Two are worth a card:
+// the choices on the card in front of the user, and a straight X-vs-Y comparison.
+//
+// `reply` still has to stand alone. It is rendered ABOVE the card, and it is the whole
+// answer whenever the blocks fail validation — which is the designed outcome for any
+// layout that names something the user cannot see (see utils/answerLayout).
+const ANSWER_SHAPE = `
+
+ANSWER SHAPE: default to layout:'prose' with blocks:[] — most answers are prose and should stay prose. Two exceptions:
+- They are asking about the CHOICES ON THE CARD in front of them ("explain the options", "what is the difference between these", "which one am I") → layout:'options', with ONE block per choice. Copy each \`label\` EXACTLY from the options listed in ON SCREEN RIGHT NOW — never invent, merge, rename or add one — and make \`detail\` a single line on who that choice fits.
+- They are weighing TWO OR THREE named alternatives against each other ("should I put X or Y", "is A better than B") → layout:'compare', one block per alternative, \`label\` the thing itself and \`detail\` a single line on when it wins.
+Whenever you use a layout, \`reply\` must be ONE OR TWO sentences that answer them on their own, and must NOT restate the blocks — the card says that part. Use 2-4 blocks; if there is only one thing to say, it is prose.`;
+
 const ARIA_FORMATTING = `FORMATTING: write \`reply\` as clean markdown. Break it into short paragraphs with a blank line between them — never one dense block. When you list options or steps, put each on its own "- " bullet line. Use **bold** sparingly, for the words that carry the answer. No headings, no tables, no emoji.`;
 
 // Aria's free-form coach chat answer. Deliberately CHEAP (forced base MODEL, never
@@ -4266,13 +4280,14 @@ ${projectTypeLine}
     // would quietly change bullet generation. This only adds coaching posture to a chat.
     const generalStage = CAREER_STAGES.includes(stage) ? STAGE_GUIDANCE[stage] : null;
     if (generalStage) system += `\n\nCV-WIDE CAREER CONTEXT: ${generalStage}`;
+    system += ANSWER_SHAPE;
   }
 
   system += `
 
 ${ARIA_FORMATTING}
 
-Keep \`reply\` to ~${!focus && screen ? 130 : 90} words max. Always return STRICT valid JSON with ALL keys: { "reply": string, "intent": "answer" | "building" | "ready", "description": string, "suggestions": string[], "exampleAnswer": string, "suggestionsLabel": string, "evidence": [{ "claim": string, "sourceQuote": string, "skills": string[], "tools": string[], "outcomes": string[], "metrics": string[], "requirementIds": string[] }], "requirementChecks": [{ "requirementId": string, "status": "confirmed"|"demonstrated"|"related"|"not_demonstrated"|"not_applicable", "evidenceIndex": number|null, "note": string }]${probe?.name ? ', "probeResult": { "requirementId": string, "level": "regular"|"basic"|"coursework"|"encountered"|"never", "contextSortId": string|null, "contextKind": string|null, "evidenceIndex": number|null } | null' : ""} }. Use "" for \`description\` unless intent is 'ready'; [] / "" for \`suggestions\` / \`exampleAnswer\` / \`suggestionsLabel\` unless intent is 'building'; use [] for evidence and requirementChecks unless intent is 'ready'.${probe?.name ? " Use null for `probeResult` until they have actually answered." : ""}
+Keep \`reply\` to ~${!focus && screen ? 130 : 90} words max. Always return STRICT valid JSON with ALL keys: { "reply": string, "intent": "answer" | "building" | "ready", "description": string, "suggestions": string[], "exampleAnswer": string, "suggestionsLabel": string, "layout": "prose" | "options" | "compare", "blocks": [{ "label": string, "detail": string }], "evidence": [{ "claim": string, "sourceQuote": string, "skills": string[], "tools": string[], "outcomes": string[], "metrics": string[], "requirementIds": string[] }], "requirementChecks": [{ "requirementId": string, "status": "confirmed"|"demonstrated"|"related"|"not_demonstrated"|"not_applicable", "evidenceIndex": number|null, "note": string }]${probe?.name ? ', "probeResult": { "requirementId": string, "level": "regular"|"basic"|"coursework"|"encountered"|"never", "contextSortId": string|null, "contextKind": string|null, "evidenceIndex": number|null } | null' : ""} }. Use "" for \`description\` unless intent is 'ready'; [] / "" for \`suggestions\` / \`exampleAnswer\` / \`suggestionsLabel\` unless intent is 'building'; use [] for evidence and requirementChecks unless intent is 'ready'. Use "prose" and [] for \`layout\`/\`blocks\` unless the ANSWER SHAPE rules below say otherwise.${probe?.name ? " Use null for `probeResult` until they have actually answered." : ""}
 
 CV SO FAR: ${cvSummary}. ${briefLine}`;
 

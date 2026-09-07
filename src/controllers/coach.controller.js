@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const env = require("../config/env");
 const logger = require("../utils/logger");
 const { sanitizeScreen } = require("../utils/screenContext");
+const { sanitizeAnswerLayout } = require("../utils/answerLayout");
 const User = require("../models/User");
 const DraftCV = require("../models/DraftCV");
 const subscription = require("../services/subscription.service");
@@ -1424,6 +1425,10 @@ const chat = async (req, res) => {
     }
 
     const stepLabel = STEP_LABELS[currentStepId] || "your CV";
+    // Bounded once and named, because it is needed twice: the prompt is told what is on
+    // screen, and the answer that comes back is checked against it — an options card may
+    // only ever name a choice the user can actually see.
+    const screenContext = sanitizeScreen(screen);
     // Studio can unpack several activities across ten user turns, so retain the opening
     // activity list for that whole interview. Other coach surfaces keep the smaller window.
     const window = turns.slice(-(studioInterview === true ? 22 : 12));
@@ -1497,7 +1502,7 @@ const chat = async (req, res) => {
         // stepLabel says which SECTION they are on; this says which CARD is in front of
         // them, which is what a question like "explain the three options" is actually
         // about. Bounded first: it is request-body free text headed for a system prompt.
-        screen: sanitizeScreen(screen),
+        screen: screenContext,
         cvSummary,
         brief,
         noJd,
@@ -1710,6 +1715,20 @@ const chat = async (req, res) => {
       // Requirements this entry could not prove that are worth looking for elsewhere in
       // the CV. Empty except on the turn an entry interview closes.
       huntOffers,
+      // The designed shape of this answer, when it earned one. Null on a build-with
+      // turn, on ordinary prose, and — deliberately — whenever the model named a choice
+      // that is not on the card: a labelled row is a stronger claim than a sentence, so a
+      // layout that does not check out is dropped rather than half-drawn.
+      ...(intent === "answer"
+        ? (() => {
+            const shaped = sanitizeAnswerLayout({
+              layout: result.layout,
+              blocks: result.blocks,
+              screenOptions: screenContext?.options || [],
+            });
+            return { layout: shaped?.layout || "prose", blocks: shaped?.blocks || [] };
+          })()
+        : { layout: "prose", blocks: [] }),
       // Answer scaffolds — only while building (Aria just asked a follow-up).
       suggestions: intent === "building" ? result.suggestions || [] : [],
       exampleAnswer: intent === "building" ? result.exampleAnswer || "" : "",

@@ -63,4 +63,4 @@ const sanitizeScreen = (raw) => {
   return { id, title, body: clean(raw.body, MAX_BODY), options };
 };
 
-module.exports = { sanitizeScreen, MAX_TITLE, MAX_BODY, MAX_OPTION, MAX_OPTIONS };
+module.exports = { sanitizeScreen, cleanText: clean, MAX_TITLE, MAX_BODY, MAX_OPTION, MAX_OPTIONS };
