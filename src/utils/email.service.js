@@ -323,57 +323,121 @@ const purchaseReceiptText = (p) => {
 // The one-time "we're live" mail to everyone who registered during the pre-launch
 // campaign. English-only by design for v1: of 215 accounts, one has interfaceLang
 // set to French, so a second translated template is not worth the surface area yet.
+// This one does NOT go through renderShell. Every other template in this file is a
+// quiet transactional notice (an OTP, a receipt) that should look exactly like every
+// other transactional notice in the inbox — that sameness is the point, it reads as
+// routine and trustworthy. A "we launched" email is the opposite: it happens once, ever,
+// and dressing it in the same thin brand strip + small logo lockup as a password reset
+// read as another admin notice, not an event. So this one gets its own hero — same
+// BRAND tokens, same logo, same footer, but the dark panel now CARRIES the announcement
+// instead of just holding a logo, and the credit reward is the visual centerpiece rather
+// than a line of body text with a tint behind it.
 const launchAnnouncementTemplate = (p) => {
   const greeting = p.firstName ? `Hi ${p.firstName},` : "Hi,";
   const appUrl = process.env.FRONTEND_URL || "https://applyright.com.ng";
-  return renderShell(
-    `
-          <!-- Heading -->
-          <tr>
-            <td style="padding:24px 40px 0; font-family:Georgia,'Times New Roman',serif; font-size:22px; font-weight:700; letter-spacing:-0.3px; color:${BRAND.ink};">
-              We're live.
-            </td>
-          </tr>
+  const credits = p.credits;
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light only" />
+  <title>ApplyRight</title>
+</head>
+<body style="margin:0; padding:0; background-color:${BRAND.canvas}; -webkit-font-smoothing:antialiased;">
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">
+    ApplyRight is live — your ${credits} credits are already on your account.
+  </div>
 
-          <!-- Body -->
-          <tr>
-            <td style="padding:12px 40px 0; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:15px; line-height:1.65; color:${BRAND.muted};">
-              ${greeting}<br /><br />
-              ApplyRight is open. Thanks for signing up early — your account is ready and your bonus credits are already on it.
-            </td>
-          </tr>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:${BRAND.canvas};">
+    <tr>
+      <td align="center" style="padding:40px 16px;">
 
-          <!-- Credits callout -->
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="width:480px; max-width:480px; background-color:${BRAND.surface}; border:1px solid ${BRAND.border}; border-radius:14px; box-shadow:0 1px 3px rgba(15,23,42,0.06); overflow:hidden;">
+
+          <!-- HERO — the dark panel every other template uses for a small logo strip
+               instead carries the whole announcement: an eyebrow, a real headline, a line
+               of welcome. This is the "it happened" moment, stated as one. -->
           <tr>
-            <td style="padding:24px 40px 0;">
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:${BRAND.accentSoft}; border-radius:10px;">
+            <td style="padding:32px 40px 36px; background-color:${BRAND.darkPanel};">
+              <table role="presentation" cellpadding="0" cellspacing="0">
                 <tr>
-                  <td style="padding:14px 16px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:15px; font-weight:600; line-height:1.5; color:${BRAND.accentInk};">
-                    ${p.credits} credits are waiting in your account
+                  <td style="vertical-align:middle;">
+                    <img src="${LOGO_URL}" width="26" height="26" alt="ApplyRight" style="display:block; width:26px; height:26px; border:0; outline:none; text-decoration:none;" />
+                  </td>
+                  <td style="padding-left:8px; vertical-align:middle; font-family:Georgia,'Times New Roman',serif; font-size:16px; font-weight:700; letter-spacing:-0.3px; color:#ffffff;">ApplyRight</td>
+                </tr>
+              </table>
+
+              <div style="margin-top:26px; font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace; font-size:11px; font-weight:700; letter-spacing:2px; text-transform:uppercase; color:${BRAND.accent};">
+                Launch day
+              </div>
+              <div style="margin-top:8px; font-family:Georgia,'Times New Roman',serif; font-size:32px; font-weight:700; letter-spacing:-0.5px; line-height:1.15; color:#ffffff;">
+                We're live.
+              </div>
+              <div style="margin-top:10px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:14px; line-height:1.6; color:#cbd5e1;">
+                ${greeting} ApplyRight is open — thanks for signing up early.
+              </div>
+            </td>
+          </tr>
+
+          <!-- Credits — the one number this whole email exists to deliver. Big serif
+               numerals rather than a sentence, so it reads before it's read. -->
+          <tr>
+            <td style="padding:32px 40px 0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:${BRAND.accentSoft}; border:1px solid #fde68a; border-radius:12px;">
+                <tr>
+                  <td align="center" style="padding:22px 16px;">
+                    <div style="font-family:Georgia,'Times New Roman',serif; font-size:44px; font-weight:700; line-height:1; letter-spacing:-1px; color:${BRAND.accentInk};">${credits}</div>
+                    <div style="margin-top:4px; font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace; font-size:11px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; color:${BRAND.accentInk};">Credits waiting in your account</div>
                   </td>
                 </tr>
               </table>
             </td>
           </tr>
 
-          <!-- CTA -->
+          <!-- CTA — a bulletproof table-cell button (background on the TD, not the
+               anchor) so Outlook renders it filled and full-width instead of shrinking
+               it to its text, which is what the old inline-block pill did there. -->
           <tr>
             <td style="padding:24px 40px 0;">
-              <a href="${appUrl}/login" style="display:inline-block; background-color:${BRAND.ink}; color:#ffffff; text-decoration:none; padding:12px 24px; border-radius:10px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:15px; font-weight:600;">
-                Start building your CV
-              </a>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="border-radius:10px; background-color:${BRAND.ink};">
+                    <a href="${appUrl}/login" style="display:block; padding:15px 24px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:15px; font-weight:700; color:#ffffff; text-decoration:none; text-align:center;">
+                      Start building your CV →
+                    </a>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
 
           <!-- Note -->
           <tr>
-            <td style="padding:24px 40px 32px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:13px; line-height:1.6; color:${BRAND.faint};">
+            <td style="padding:20px 40px 32px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:13px; line-height:1.6; color:${BRAND.faint}; text-align:center;">
               Build a CV around the job you're going for, score your fit before you apply, and practise the interview out loud. Questions? Just reply to this email.
             </td>
           </tr>
-`,
-    "ApplyRight is live — your bonus credits are ready."
-  );
+
+          <!-- Footer — copied verbatim from renderShell, so the brand sign-off matches
+               every other email even though this one built its own envelope above it. -->
+          <tr>
+            <td style="padding:22px 40px; border-top:1px solid ${BRAND.border}; background-color:${BRAND.canvas}; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; text-align:center;">
+              <div style="font-size:12px; color:${BRAND.muted}; margin-bottom:4px;">Land the job. Apply right.</div>
+              <div style="font-size:11px; color:${BRAND.faint};">&copy; ${new Date().getFullYear()} ApplyRight. All rights reserved.</div>
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
 };
 
 const launchAnnouncementText = (p) =>
