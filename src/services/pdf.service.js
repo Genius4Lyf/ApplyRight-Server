@@ -3,9 +3,26 @@ const { puppeteer, getLaunchOptions, isProduction } = require("./browser");
 class PdfService {
   constructor() {
     this.browser = null;
+    // The in-flight launch, so concurrent callers await ONE browser instead of each
+    // starting their own. `init()` only checked `this.browser`, which is still null
+    // while a launch is in progress — so two downloads at the same moment both saw null
+    // and both called puppeteer.launch(). The second assignment won and the first
+    // Chromium was orphaned: never closed, never reachable, holding its memory until the
+    // process died. On a small Render instance a handful of simultaneous downloads is
+    // enough to OOM the backend, which takes out every request, not just the PDFs.
+    this.launching = null;
   }
 
   async init() {
+    if (this.browser) return;
+    if (this.launching) return this.launching;
+    this.launching = this._launch().finally(() => {
+      this.launching = null;
+    });
+    return this.launching;
+  }
+
+  async _launch() {
     if (!this.browser) {
       const launchOptions = await getLaunchOptions();
 

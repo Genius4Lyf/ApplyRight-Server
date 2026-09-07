@@ -7,6 +7,112 @@ const fromAddress = process.env.RESEND_FROM_EMAIL || "ApplyRight <onboarding@res
 // not at import time (keeps the rest of auth working in dev without Resend configured).
 const resend = apiKey ? new Resend(apiKey) : null;
 
+// ─── THE SEND GATE ──────────────────────────────────────────────────────────────
+//
+// Resend allows roughly 2 requests/second on the default plan. Every send in this file
+// used to call the API directly, so two people reaching the signup form in the same
+// second raced each other and the loser got a 429 — surfaced to them as "We could not
+// send the code right now." A verification code is the one email in the product that a
+// user is actively waiting on, and it was the only one with no protection at all.
+//
+// Two mechanisms, deliberately separate:
+//
+//   PACING stops us from breaking the limit. Every call queues behind the last one and
+//   waits until at least SEND_SPACING_MS have passed since it. A burst of ten signups
+//   becomes ten sends a beat apart instead of ten simultaneous rejections.
+//
+//   RETRY handles the limit being broken anyway — another process, a dashboard
+//   broadcast, a burst that outran the spacing. Backs off and tries again.
+//
+// Retry ONLY on 429 and 5xx. A rejected recipient, an unverified domain or a suppressed
+// address fails identically three times in a row: retrying those just makes the user
+// wait three seconds longer for the same error.
+//
+// SINGLE-INSTANCE, like the settings cache in settings.service: the pacer is in-process,
+// so N instances can still emit N sends at once. It removes self-inflicted collisions,
+// which is what this bug was; the retry is what covers the rest.
+
+// 600ms ≈ 1.6 sends/second, comfortably under the ~2/s allowance with room for clock
+// drift and for whatever else on the account is sending at the same time.
+const SEND_SPACING_MS = 600;
+const SEND_MAX_ATTEMPTS = 3;
+const SEND_BASE_BACKOFF_MS = 700;
+
+let sendChain = Promise.resolve();
+let lastSentAt = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Resend's SDK reports failures as a returned `error` object rather than a throw, and
+// network faults as a throw. Both have to be classified the same way.
+const isRetryableSendError = (err) => {
+  if (!err) return false;
+  const status = err.statusCode || err.status;
+  if (status === 429) return true;
+  if (typeof status === 'number' && status >= 500) return true;
+  const name = String(err.name || '');
+  if (name === 'rate_limit_exceeded' || name === 'application_error') return true;
+  const message = String(err.message || err);
+  // No status on a transport fault — match the text instead.
+  return /rate.?limit|too many requests|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(
+    message
+  );
+};
+
+/**
+ * Run one Resend call, paced against every other call in this process and retried on a
+ * rate limit. `task` must resolve to the SDK's { data, error } shape or throw.
+ *
+ * @param {() => Promise<{data?: any, error?: any}>} task
+ * @param {string} label for the log line when a retry happens
+ * @returns {Promise<{data?: any, error?: any}>}
+ */
+const pacedSend = (task, label = 'email') => {
+  const run = async () => {
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= SEND_MAX_ATTEMPTS; attempt += 1) {
+      const wait = lastSentAt + SEND_SPACING_MS - Date.now();
+      if (wait > 0) await sleep(wait);
+      lastSentAt = Date.now();
+
+      let result;
+      try {
+        result = await task();
+      } catch (thrown) {
+        result = { error: thrown };
+      }
+
+      if (!result?.error) return result;
+      lastError = result.error;
+
+      if (!isRetryableSendError(lastError) || attempt === SEND_MAX_ATTEMPTS) {
+        return { error: lastError };
+      }
+
+      // Exponential, with jitter so two racing senders don't retry in lockstep and
+      // collide again on exactly the same beat.
+      const backoff = SEND_BASE_BACKOFF_MS * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
+      console.warn(
+        `[email] ${label} rate-limited (attempt ${attempt}/${SEND_MAX_ATTEMPTS}), retrying in ${backoff}ms`
+      );
+      await sleep(backoff);
+    }
+
+    return { error: lastError };
+  };
+
+  // Chain rather than run free, so concurrent callers queue instead of all reading the
+  // same `lastSentAt` and deciding together that it is their turn.
+  const queued = sendChain.then(run, run);
+  // Keep the chain alive whatever happens to this send.
+  sendChain = queued.then(
+    () => undefined,
+    () => undefined
+  );
+  return queued;
+};
+
 /**
  * Send a password-reset OTP code to the user's email.
  * Throws if Resend is not configured or the send fails, so the caller can
@@ -17,13 +123,17 @@ const sendPasswordResetOTP = async (email, otp) => {
     throw new Error("EMAIL_UNAVAILABLE: RESEND_API_KEY is not set");
   }
 
-  const { data, error } = await resend.emails.send({
-    from: fromAddress,
-    to: email,
-    subject: "Your ApplyRight password reset code",
+  const { data, error } = await pacedSend(
+    () =>
+      resend.emails.send({
+        from: fromAddress,
+        to: email,
+        subject: "Your ApplyRight password reset code",
     html: passwordResetTemplate(otp),
-    text: `Your ApplyRight password reset code is ${otp}. It expires in 10 minutes. If you didn't request this, you can safely ignore this email.`,
-  });
+        text: `Your ApplyRight password reset code is ${otp}. It expires in 10 minutes. If you didn't request this, you can safely ignore this email.`,
+      }),
+    "password reset"
+  );
 
   if (error) {
     throw new Error(`Resend send failed: ${error.message || JSON.stringify(error)}`);
@@ -62,13 +172,17 @@ const formatDate = (date) =>
 const sendPurchaseReceipt = async (p) => {
   if (!resend) return null; // email not configured — silently skip (best-effort)
 
-  const { data, error } = await resend.emails.send({
-    from: fromAddress,
-    to: p.email,
-    subject: `Your ApplyRight receipt — ${p.itemLabel}`,
-    html: purchaseReceiptTemplate(p),
-    text: purchaseReceiptText(p),
-  });
+  const { data, error } = await pacedSend(
+    () =>
+      resend.emails.send({
+        from: fromAddress,
+        to: p.email,
+        subject: `Your ApplyRight receipt — ${p.itemLabel}`,
+        html: purchaseReceiptTemplate(p),
+        text: purchaseReceiptText(p),
+      }),
+    "purchase receipt"
+  );
 
   if (error) {
     throw new Error(`Resend send failed: ${error.message || JSON.stringify(error)}`);
@@ -472,14 +586,18 @@ const sendLaunchAnnouncementBatch = async (recipients) => {
   if (!recipients || recipients.length === 0) return { sent: 0, error: null };
 
   try {
-    const { error } = await resend.batch.send(
-      recipients.map((r) => ({
-        from: fromAddress,
-        to: r.email,
-        subject: "ApplyRight is live",
-        html: launchAnnouncementTemplate(r),
-        text: launchAnnouncementText(r),
-      }))
+    const { error } = await pacedSend(
+      () =>
+        resend.batch.send(
+          recipients.map((r) => ({
+            from: fromAddress,
+            to: r.email,
+            subject: "ApplyRight is live",
+            html: launchAnnouncementTemplate(r),
+            text: launchAnnouncementText(r),
+          }))
+        ),
+      "launch batch"
     );
     if (error) return { sent: 0, error: error.message || String(error) };
     return { sent: recipients.length, error: null };
@@ -546,13 +664,17 @@ const verificationCodeTemplate = (code) =>
  */
 const sendVerificationCode = async (email, code) => {
   if (!resend) throw new Error("EMAIL_UNAVAILABLE: RESEND_API_KEY is not set");
-  const { error } = await resend.emails.send({
-    from: fromAddress,
-    to: email,
-    subject: `${code} is your ApplyRight verification code`,
-    html: verificationCodeTemplate(code),
-    text: `Your ApplyRight verification code is ${code}. It expires in 10 minutes.`,
-  });
+  const { error } = await pacedSend(
+    () =>
+      resend.emails.send({
+        from: fromAddress,
+        to: email,
+        subject: `${code} is your ApplyRight verification code`,
+        html: verificationCodeTemplate(code),
+        text: `Your ApplyRight verification code is ${code}. It expires in 10 minutes.`,
+      }),
+    "verification code"
+  );
   if (error) throw new Error(error.message || String(error));
   return true;
 };
@@ -566,6 +688,9 @@ const isEmailConfigured = () => !!resend;
 const getFromAddress = () => fromAddress;
 
 module.exports = {
+  // Exported for tests: the pacing/retry gate every send goes through.
+  pacedSend,
+  isRetryableSendError,
   sendPasswordResetOTP,
   sendPurchaseReceipt,
   sendLaunchAnnouncementBatch,

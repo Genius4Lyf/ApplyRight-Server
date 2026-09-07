@@ -304,13 +304,18 @@ const registerUser = async (req, res, next) => {
 
       // Only award credits to the REFERRER, not the new user
       if (referrer) {
-        // Award Referrer
+        // $inc, not read-add-write. This used to read referrer.credits into memory, add
+        // the bonus and write the ABSOLUTE total back — so two people signing up with the
+        // same code in the same moment both read the old balance and both wrote the same
+        // new one. The referrer was paid once for two referrals, and referralCount lost a
+        // signup with it. A referral code shared in a group chat is exactly the situation
+        // that produces simultaneous signups, so this was likeliest when it mattered most.
+        await referrer.updateOne({
+          $inc: { credits: REFERRAL_BONUS, referralCount: 1 },
+        });
+        // Keep the in-memory copy consistent for anything below that reads it.
         referrer.credits += REFERRAL_BONUS;
         referrer.referralCount += 1;
-        await referrer.updateOne({
-          credits: referrer.credits,
-          referralCount: referrer.referralCount,
-        });
 
         await Transaction.create({
           userId: referrer.id,
