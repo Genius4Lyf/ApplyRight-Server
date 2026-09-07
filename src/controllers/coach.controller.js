@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const crypto = require("crypto");
 const env = require("../config/env");
 const logger = require("../utils/logger");
+const { sanitizeScreen } = require("../utils/screenContext");
 const User = require("../models/User");
 const DraftCV = require("../models/DraftCV");
 const subscription = require("../services/subscription.service");
@@ -1187,7 +1188,7 @@ const buildAllowance = (user) => {
 // @route   POST /api/coach/ask
 // @access  Private (job-seekers only — not CV-agent client CVs)
 const askAria = async (req, res) => {
-  const { draftId, currentStepId, question, model } = req.body || {};
+  const { draftId, currentStepId, question, model, screen } = req.body || {};
   if (typeof question !== "string" || !question.trim()) {
     return res.status(400).json({ message: "question is required" });
   }
@@ -1262,6 +1263,10 @@ const askAria = async (req, res) => {
         cvSummary,
         brief,
         careerStage,
+        // What the user is looking at. Client-supplied free text bound for a SYSTEM
+        // prompt, so it goes through the bounding pass; a malformed one becomes null and
+        // the prompt reads exactly as it did before this existed.
+        screen: sanitizeScreen(screen),
         meta,
       });
     } catch (aiErr) {
@@ -1313,6 +1318,8 @@ const chat = async (req, res) => {
     buildTurns,
     stage,
     studioInterview,
+    // The card on screen: { id, title, body, options }. Bounded before use — see below.
+    screen,
     // { requirementId } — runs the cross-history hunt instead of the entry interview.
     probe: probeRequest,
   } = req.body || {};
@@ -1487,6 +1494,10 @@ const chat = async (req, res) => {
         // inferred from the draft (real job → experienced, else entry-level 'grad').
         stage: aiService.resolveCareerStage({ stage, draft }),
         stepLabel,
+        // stepLabel says which SECTION they are on; this says which CARD is in front of
+        // them, which is what a question like "explain the three options" is actually
+        // about. Bounded first: it is request-body free text headed for a system prompt.
+        screen: sanitizeScreen(screen),
         cvSummary,
         brief,
         noJd,
