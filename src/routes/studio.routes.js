@@ -18,14 +18,22 @@ const {
 } = require("../controllers/studio.controller");
 
 const { protect } = require("../middleware/auth.middleware");
+const { keyOf, isAccountScoped } = require("../middleware/rateLimit.middleware");
 
-// AI-specific limiter, scoped to the two routes that actually call a model
-// (brief-preview, draft-jd, scan, rewrite-role). Mirrors app.js's aiLimiter (20 req/hour/IP) — build-start,
-// tailor-start, sessions and recompute are document CRUD/free reads and must not
-// share this budget with a user's own AI calls elsewhere in the app.
+// AI-specific limiter, scoped to the routes that actually call a model (brief-preview,
+// target-job, draft-jd, scan, rewrite-role). build-start, tailor-start, sessions and
+// recompute are document CRUD / free reads and must not share this budget with a
+// user's own AI calls elsewhere in the app.
+//
+// Keyed per ACCOUNT, mirroring app.js. At 20/hour/IP this was unusable twice over: a
+// user with five roles who re-rolls a couple of them, re-scans and updates the target
+// job can spend twenty in one sitting on their own — and behind a carrier NAT they
+// were spending it alongside everyone else on the network. Spend is metered by
+// credits; this is only here to stop a loop.
 const aiLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 20,
+  keyGenerator: keyOf,
+  limit: (req) => (isAccountScoped(req) ? 60 : 120),
   standardHeaders: true,
   legacyHeaders: false,
   message: {

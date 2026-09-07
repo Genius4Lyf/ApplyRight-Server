@@ -7,6 +7,7 @@ const swaggerUi = require("swagger-ui-express");
 const rateLimit = require("express-rate-limit");
 const logger = require("./utils/logger");
 const swaggerDocs = require("./config/swagger");
+const { attachRateKey, keyOf, isAccountScoped } = require("./middleware/rateLimit.middleware");
 
 require("./config/env"); // This will validate env vars on startup
 
@@ -42,10 +43,39 @@ app.use(cors(corsOptions));
 app.use(helmet());
 app.use(compression());
 
-// Global Rate Limiting
+// Resolve WHO each request belongs to before any limiter counts it. See
+// middleware/rateLimit.middleware for why: on a mobile-first, carrier-NAT audience an
+// IP address is a crowd, not a person, and the limiters below were charging strangers
+// for each other's usage.
+app.use(attachRateKey);
+
+// Global Rate Limiting.
+//
+// This is the blunt DoS backstop, not a product limit — the real controls are the
+// per-route limiters (auth, verification, checkout, conversation, AI) and, for spend,
+// the credit system. It should sit far above anything a human can produce and still
+// stop a loop instantly.
+//
+// It did neither. 100 requests per 15 minutes, counted per IP, was BOTH too low and
+// shared by strangers:
+//
+//   * Too low for one person. Aria is chatty by design — coach.controller's own
+//     buildAllowance comment puts a real CV build at ~40 turns, and each turn is a
+//     chat POST plus a debounced draft save. A focused quarter-hour in the builder
+//     lands in the same order of magnitude as the cap.
+//   * Shared by strangers. Behind a carrier NAT one address is thousands of people,
+//     so the budget was drained by whoever got there first.
+//
+// Now it counts per ACCOUNT where a token identifies one, and keeps a separate, wider
+// ceiling for the anonymous traffic that genuinely does share an address.
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  keyGenerator: keyOf,
+  // 600/15min for one signed-in account is ~40 requests a minute sustained: several
+  // times the busiest real session, and still instant death for a runaway client.
+  // The anonymous bucket is deliberately wider because it is shared: it covers the
+  // landing page, login and signup for every person behind one address.
+  limit: (req) => (isAccountScoped(req) ? 600 : 1200),
   standardHeaders: true,
   legacyHeaders: false,
   // AdMob SSV callbacks come from Google and can burst. Skip them; the
@@ -54,15 +84,26 @@ const globalLimiter = rateLimit({
   skip: (req) =>
     req.path === "/api/billing/admob-ssv" || req.path === "/api/billing/flutterwave-webhook",
   message: {
-    message: "Too many requests from this IP, please try again after 15 minutes",
+    message: "Too many requests, please try again after 15 minutes",
   },
 });
 app.use(globalLimiter);
 
-// AI-Specific Rate Limiting (more restrictive due to costs)
+// AI-Specific Rate Limiting.
+//
+// Same two corrections as the global limiter, for the same reason. This one guarded
+// /api/ai — generate-skills, job-keywords, keyword-coverage, tighten-summary — at 20
+// per hour PER IP, which on a shared carrier address was 20 AI actions per hour for
+// everyone on that network between them.
+//
+// THIS IS NOT THE SPEND CONTROL, exactly as the conversation limiter says of itself:
+// cost is metered per user, per action, by credits. This exists so a looping client
+// can't hammer the model, so it belongs well above a human's pace and keyed to the
+// account doing it.
 const aiLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 20, // Limit each IP to 20 AI requests per hour
+  keyGenerator: keyOf,
+  limit: (req) => (isAccountScoped(req) ? 120 : 240),
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -70,12 +111,18 @@ const aiLimiter = rateLimit({
   },
 });
 
-// Checkout-Specific Rate Limiting. Each call mints a pending Payment row +
-// hits Flutterwave; cap per IP so the endpoint can't be spammed to flood the
-// Payment collection or the provider. A real buyer needs only a handful.
+// Checkout-Specific Rate Limiting. Each call mints a pending Payment row + hits
+// Flutterwave; cap it so the endpoint can't be spammed to flood the Payment collection
+// or the provider. A real buyer needs only a handful.
+//
+// Per ACCOUNT, not per IP. /checkout is behind `protect`, so a token is always
+// present and always resolves — and this is the revenue path, the last place that
+// should tell a paying customer to come back later because a stranger on the same
+// carrier bought something first.
 const checkoutLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20,
+  keyGenerator: keyOf,
+  limit: (req) => (isAccountScoped(req) ? 20 : 200),
   standardHeaders: true,
   legacyHeaders: false,
   message: {

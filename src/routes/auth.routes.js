@@ -16,20 +16,38 @@ const {
 const { protect } = require("../middleware/auth.middleware");
 const validate = require("../middleware/validate.middleware");
 const { registerSchema, loginSchema } = require("../validations/auth.validation");
+const { emailKeyOf, ipKeyOf } = require("../middleware/rateLimit.middleware");
 
-// The library's own IPv6 normaliser (subnet, not address, so the last hextet cannot be
-// rotated to reset a counter). Guarded because the suites mock express-rate-limit as a
-// bare jest.fn with no named exports — under that mock the limiter is a pass-through and
-// keyGenerator never runs.
-const ipKeyOf = require("express-rate-limit").ipKeyGenerator || ((req) => req.ip);
-
-// Stricter than the global 100/15min limiter: blunts registration spam,
-// password-reset abuse, and brute-forcing the admin secret. Per IP.
+// Blunts registration spam, password-reset abuse, and brute-forcing the admin secret.
+//
+// PER EMAIL, not per IP — the same correction already made for verification codes
+// below, and for the same reason. Twenty registration or reset attempts in a quarter
+// of an hour is absurd for one person and was the right number; counting them per IP
+// meant twenty for an entire mobile carrier, on the signup form, which is the one
+// page where a blocked stranger simply leaves and never comes back.
+//
+// Every route this guards carries the address it is acting on. /resetpassword is the
+// exception (it carries a token instead), and emailKeyOf falls back to the IP there —
+// which is the old behaviour, and fine: that route's real protection is the secret in
+// the token, not a counter.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: emailKeyOf("auth"),
+  message: { message: "Too many attempts. Please try again after 15 minutes." },
+});
+
+// The backstop an email key gives up: a script that invents a new address every time
+// gets a fresh 20 for each one. So a per-IP ceiling stays — set where a carrier full
+// of genuine signups will not reach it, but a loop will, in seconds.
+const authIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKeyOf,
   message: { message: "Too many attempts. Please try again after 15 minutes." },
 });
 
@@ -54,12 +72,7 @@ const verificationLimiter = rateLimit({
   legacyHeaders: false,
   // Normalised the same way requestEmailVerification normalises it, or the same person
   // gets separate budgets for "A@x.com" and "a@x.com ".
-  keyGenerator: (req, res) => {
-    const email = String(req.body?.email || "")
-      .toLowerCase()
-      .trim();
-    return email ? `verify:${email}` : ipKeyOf(req, res);
-  },
+  keyGenerator: emailKeyOf("verify"),
   message: { message: "Too many verification codes requested. Please try again later." },
 });
 
@@ -67,27 +80,51 @@ const verificationLimiter = rateLimit({
 // 5/hour budget for every one it invents, and each attempt spends a slice of the 100/day
 // Resend quota that real signups depend on.
 //
-// So a per-IP ceiling stays — set where a carrier NAT full of genuine signups will never
-// reach it, but an address-rotating bot will. Sixty an hour is roughly one signup a
-// minute from a single public address: implausible for real users sharing a carrier,
-// cheap to hit for a loop.
+// So a per-IP ceiling stays — but set where a carrier NAT full of genuine signups will
+// never reach it, which 60/hour was not. On a launch day one carrier address can carry
+// far more than a signup a minute, and this limiter would then have been the new
+// version of the bug it was added to fix.
+//
+// 300/hour is a bot ceiling, not a user ceiling: a rotating-address script hits it in
+// under a minute. It is also no longer the thing that breaks first — the Resend daily
+// quota is, and that is a plan decision rather than a code one.
 const verificationIpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 60,
+  max: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req, res) => ipKeyOf(req, res),
+  keyGenerator: ipKeyOf,
   message: { message: "Too many verification codes requested. Please try again later." },
 });
 
 // Login: only FAILED attempts count, so normal log-in/out never trips it but
 // credential stuffing / password guessing does.
+//
+// PER EMAIL. Ten wrong passwords is the right budget for one account — and it is the
+// account that is under attack, so that is what should be locked. Per IP it was ten
+// wrong passwords for a whole carrier: a handful of people fat-fingering their own
+// password could shut everyone else out of the login page for fifteen minutes, and an
+// attacker on a different network was unaffected by any of it.
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: emailKeyOf("login"),
+  message: { message: "Too many login attempts. Please try again after 15 minutes." },
+});
+
+// And the backstop, again: stuffing a list of addresses gets 10 tries per address.
+// This counts only failures, so a carrier full of people typing their own passwords
+// correctly never touches it.
+const loginIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKeyOf,
   message: { message: "Too many login attempts. Please try again after 15 minutes." },
 });
 
@@ -139,10 +176,10 @@ router.post(
 );
 // Checking a code is cheap and sends no mail, so it gets the ordinary auth limiter —
 // the per-code attempt cap in the controller is what stops brute force here.
-router.post("/verify-code", authLimiter, verifyEmailCode);
-router.post("/register", authLimiter, validate(registerSchema), registerUser);
+router.post("/verify-code", authIpLimiter, authLimiter, verifyEmailCode);
+router.post("/register", authIpLimiter, authLimiter, validate(registerSchema), registerUser);
 
-router.post("/register-secret-admin", authLimiter, registerAdmin); // Obscured route name in verifying logic, but public endpoint needs to be known by frontend
+router.post("/register-secret-admin", authIpLimiter, authLimiter, registerAdmin); // Obscured route name in verifying logic, but public endpoint needs to be known by frontend
 
 /**
  * @swagger
@@ -170,10 +207,10 @@ router.post("/register-secret-admin", authLimiter, registerAdmin); // Obscured r
  *       401:
  *         description: Invalid credentials
  */
-router.post("/login", loginLimiter, validate(loginSchema), loginUser);
+router.post("/login", loginIpLimiter, loginLimiter, validate(loginSchema), loginUser);
 
-router.post("/forgotpassword", authLimiter, forgotPassword);
-router.post("/resetpassword", authLimiter, resetPassword);
+router.post("/forgotpassword", authIpLimiter, authLimiter, forgotPassword);
+router.post("/resetpassword", authIpLimiter, authLimiter, resetPassword);
 router.get("/me", protect, getMe);
 router.put("/profile", protect, updateProfile);
 

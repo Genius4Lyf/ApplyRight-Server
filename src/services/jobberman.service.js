@@ -3,8 +3,22 @@ const cheerio = require("cheerio");
 const crypto = require("crypto");
 
 const JOBBERMAN_BASE_URL = "https://www.jobberman.com";
-const REQUEST_DELAY_MS = 5000; // Rate limit: 1 request per 5 seconds
+// Spacing between outbound requests. Overridable so the throttle can be tuned against
+// how Jobberman actually behaves without a deploy — and so the suite can exercise the
+// queue in milliseconds instead of sitting through real five-second gaps.
+const REQUEST_DELAY_MS = Number(process.env.JOBBERMAN_DELAY_MS) || 5000;
 let lastRequestTime = 0;
+
+// One shared queue for every caller, and a hard cap on how deep it may get.
+//
+// This scraper talks to somebody else's site on borrowed goodwill, so the 5s spacing
+// is the whole reason we are tolerated. Four slots is ~20s of waiting at the back of
+// the queue, which is already at the edge of what a user will sit through; past that
+// it is kinder to fail fast and let jobSearch.service use its other sources than to
+// hold an HTTP request open for a minute.
+const MAX_QUEUED = 4;
+let fetchChain = Promise.resolve();
+let queueDepth = 0;
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -15,25 +29,58 @@ const USER_AGENTS = [
 const getRandomUA = () => USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 
 /**
- * Rate-limited fetch to avoid being blocked
+ * Rate-limited fetch to avoid being blocked.
+ *
+ * This used to read `lastRequestTime`, await the remainder of the interval, and only
+ * then write it back. With one caller that works. With two it throttles NOTHING: both
+ * read the same timestamp, both compute the same wait, both sleep, and both fire in
+ * the same millisecond — precisely the burst the delay exists to prevent, and exactly
+ * the traffic pattern that gets a scraper blocked. It only ever looked correct because
+ * nothing was calling it concurrently yet.
+ *
+ * Requests are now serialised through a promise chain, so N callers wait N intervals
+ * instead of none. The chain is the same shape as the send gate in utils/email.service,
+ * which had the identical defect for the identical reason.
  */
-const throttledFetch = async (url) => {
-  const now = Date.now();
-  const elapsed = now - lastRequestTime;
-  if (elapsed < REQUEST_DELAY_MS) {
-    await new Promise((resolve) => setTimeout(resolve, REQUEST_DELAY_MS - elapsed));
+const throttledFetch = (url) => {
+  if (queueDepth >= MAX_QUEUED) {
+    // searchJobs turns this into an empty result set and getJobDetails into an empty
+    // description, both of which the callers already handle.
+    return Promise.reject(new Error("Jobberman is busy; too many queued requests"));
   }
-  lastRequestTime = Date.now();
+  queueDepth += 1;
 
-  return axios.get(url, {
-    headers: {
-      "User-Agent": getRandomUA(),
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-    timeout: 15000,
-    maxRedirects: 5,
+  const run = async () => {
+    const elapsed = Date.now() - lastRequestTime;
+    if (elapsed < REQUEST_DELAY_MS) {
+      await new Promise((resolve) => setTimeout(resolve, REQUEST_DELAY_MS - elapsed));
+    }
+    lastRequestTime = Date.now();
+
+    return axios.get(url, {
+      headers: {
+        "User-Agent": getRandomUA(),
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      timeout: 15000,
+      maxRedirects: 5,
+    });
+  };
+
+  // `then(run, run)` so one failed fetch does not stall every request behind it.
+  const result = fetchChain.then(run, run).finally(() => {
+    queueDepth -= 1;
   });
+
+  // The chain only needs the timing, and must never carry a rejection nobody handles —
+  // the caller owns `result` and its error.
+  fetchChain = result.then(
+    () => {},
+    () => {}
+  );
+
+  return result;
 };
 
 /**
