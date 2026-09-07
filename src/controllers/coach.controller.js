@@ -4,6 +4,7 @@ const env = require("../config/env");
 const logger = require("../utils/logger");
 const { sanitizeScreen } = require("../utils/screenContext");
 const { sanitizeAnswerLayout } = require("../utils/answerLayout");
+const { detectRedFlags } = require("../services/atsCoach.service");
 const User = require("../models/User");
 const DraftCV = require("../models/DraftCV");
 const subscription = require("../services/subscription.service");
@@ -234,6 +235,23 @@ const evidenceIdFor = (sourceQuote, claim) =>
     .update(`${normalizedEvidenceText(sourceQuote)}|${normalizedEvidenceText(claim)}`)
     .digest("hex")
     .slice(0, 12)}`;
+
+// A description assembled from VERIFIED evidence, for the turn the interview is forced
+// to wrap up and the model answers with no description of its own.
+//
+// Every claim here has already been matched against a real user turn by
+// verifiedInterviewEvidence, so this is their own account — deduped, ordered and
+// punctuated — never a model summary of it. Without this the clients fall back to
+// joining the raw transcript, which is what the user then pays to have turned into
+// bullets.
+const descriptionFromEvidence = (ledger) => {
+  const claims = (ledger?.evidence || []).map((e) => String(e?.claim || "").trim()).filter(Boolean);
+  if (!claims.length) return "";
+  return claims
+    .map((c) => (/[.!?]$/.test(c) ? c : `${c}.`))
+    .join(" ")
+    .slice(0, 2000);
+};
 
 const declinedRequirementKeys = (draft) => {
   const rows = Array.isArray(draft?.skillDeclines) ? draft.skillDeclines : [];
@@ -1400,11 +1418,11 @@ const chat = async (req, res) => {
     // Route the turn through the selected model (multi-provider dispatcher).
     const meta = { userId: req.user.id, operation: "coachChatTurn", modelId, lang: req.lang };
     const targetTitle = (draft.targetJob?.title || draft.targetJob?.brief?.role || "").trim();
-    const cvSummary = `${targetTitle ? `Target: ${targetTitle}. ` : ""}Progress: ${
-      draft.experience?.length || 0
-    } roles, ${draft.projects?.length || 0} projects, ${draft.skills?.length || 0} skills, summary ${
-      draft.professionalSummary?.trim() ? "written" : "empty"
-    }.`;
+    // The whole CV, bounded — not a count of it. During a focused interview Aria was
+    // asking about role 3 while knowing only that roles 1 and 2 existed, so she re-asked
+    // things already answered elsewhere and could not have spotted a contradiction if one
+    // appeared. What she may DO with this is fenced prompt-side (read, never write from).
+    const cvSummary = aiService.cvDigest(draft, targetTitle);
 
     let brief = null;
     try {
@@ -1503,6 +1521,14 @@ const chat = async (req, res) => {
         // them, which is what a question like "explain the three options" is actually
         // about. Bounded first: it is request-body free text headed for a system prompt.
         screen: screenContext,
+        // The scorecard from the same window she is sitting in. Passed as-is; the service
+        // bounds it and stamps it with its own date, because a scan is a snapshot and the
+        // CV may have moved since.
+        scan: draft.studioScan,
+        // Nine deterministic recruiter checks. Computed here rather than in the AI service
+        // so that service keeps no dependency on the ATS coach — and it costs nothing:
+        // no model call, no query, just a pass over the draft already in memory.
+        redFlags: detectRedFlags(draft),
         cvSummary,
         brief,
         noJd,
@@ -1695,6 +1721,20 @@ const chat = async (req, res) => {
       const current = draft.coachEvidence?.toObject
         ? draft.coachEvidence.toObject()
         : draft.coachEvidence || {};
+      // The cross-history hunt files its confirmations into THIS SAME bucket (see the probe
+      // branch above, which stamps `fromHunt: true`). Replacing the bucket wholesale threw
+      // those away the moment the user re-interviewed the role — silently un-proving a
+      // requirement they had already been asked for separately and confirmed.
+      //
+      // So: this interview owns its own findings and replaces them, and anything the hunt
+      // banked here rides along. Both write sites derive `id` the same way (sha1 of the
+      // normalised quote + claim), so a hunt item the interview re-found is not duplicated.
+      const prior = current[focus.sortId] || {};
+      const freshIds = new Set(evidenceLedger.evidence.map((e) => e.id));
+      const bankedByHunt = (prior.evidence || []).filter((e) => e?.fromHunt && !freshIds.has(e.id));
+      if (bankedByHunt.length) {
+        evidenceLedger.evidence = [...evidenceLedger.evidence, ...bankedByHunt];
+      }
       draft.coachEvidence = { ...current, [focus.sortId]: evidenceLedger };
       if (typeof draft.markModified === "function") draft.markModified("coachEvidence");
       if (typeof draft.save === "function") await draft.save();
@@ -1707,7 +1747,15 @@ const chat = async (req, res) => {
       reply: result.reply,
       intent,
       readyToDraft,
-      description: intent === "ready" ? result.description : "",
+      // Keyed off readyToDraft, not `intent`. The turn cap FORCES the wrap-up server-side,
+      // so a model that answered 'building' on that turn used to produce readyToDraft:true
+      // with an empty description — and both clients quietly joined the raw user turns
+      // instead, meaning the user paid for bullets written from a transcript dump. If the
+      // model gives us nothing, we assemble one from evidence already verified against
+      // their own words.
+      description: readyToDraft
+        ? result.description || descriptionFromEvidence(evidenceLedger)
+        : "",
       evidenceLedger,
       // The hunt's verified outcome: which rung, whether it was accepted, and where the
       // evidence was filed. null on an ordinary turn, or while the user hasn't answered.
