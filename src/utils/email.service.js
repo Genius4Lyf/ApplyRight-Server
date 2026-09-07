@@ -386,11 +386,11 @@ const launchAnnouncementTemplate = (p) => {
                numerals rather than a sentence, so it reads before it's read. -->
           <tr>
             <td style="padding:32px 40px 0;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:${BRAND.accentSoft}; border:1px solid #fde68a; border-radius:12px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:${BRAND.surface}; border:1px solid ${BRAND.border}; border-radius:12px;">
                 <tr>
                   <td align="center" style="padding:22px 16px;">
                     <div style="font-family:Georgia,'Times New Roman',serif; font-size:44px; font-weight:700; line-height:1; letter-spacing:-1px; color:${BRAND.accentInk};">${credits}</div>
-                    <div style="margin-top:4px; font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace; font-size:11px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; color:${BRAND.accentInk};">Credits waiting in your account</div>
+                    <div style="margin-top:4px; font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace; font-size:11px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; color:${BRAND.muted};">Credits waiting in your account</div>
                   </td>
                 </tr>
               </table>
@@ -398,14 +398,15 @@ const launchAnnouncementTemplate = (p) => {
           </tr>
 
           <!-- CTA — a bulletproof table-cell button (background on the TD, not the
-               anchor) so Outlook renders it filled and full-width instead of shrinking
-               it to its text, which is what the old inline-block pill did there. -->
+               anchor, so Outlook renders it filled reliably). The outer table carries
+               no width, so it shrinks to the button's own size; the "align=center" td
+               around it centres that — a normal, centred button, not a full-bleed bar. -->
           <tr>
-            <td style="padding:24px 40px 0;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <td align="center" style="padding:24px 40px 0;">
+              <table role="presentation" cellpadding="0" cellspacing="0">
                 <tr>
                   <td align="center" style="border-radius:10px; background-color:${BRAND.ink};">
-                    <a href="${appUrl}/login" style="display:block; padding:15px 24px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:15px; font-weight:700; color:#ffffff; text-decoration:none; text-align:center;">
+                    <a href="${appUrl}/login" style="display:inline-block; padding:14px 32px; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:15px; font-weight:700; color:#ffffff; text-decoration:none; text-align:center;">
                       Start building your CV →
                     </a>
                   </td>
