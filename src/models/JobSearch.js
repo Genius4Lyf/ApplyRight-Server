@@ -3,6 +3,11 @@ const mongoose = require("mongoose");
 const jobResultSchema = new mongoose.Schema(
   {
     externalId: String,
+    // "adzuna" is RETIRED and no new row will carry it — but it stays in the enum
+    // because rows cached before its removal still do, and `getJobDetails` /
+    // `trackClick` call `.save()` on those documents by id. Tightening the enum would
+    // turn a user clicking Apply on an old cached listing into a validation error, i.e.
+    // a 500 on the one button that matters. The service strips these on read instead.
     source: { type: String, enum: ["adzuna", "jobberman"] },
     title: String,
     company: String,
@@ -28,6 +33,8 @@ const jobSearchSchema = new mongoose.Schema(
       jobType: String,
       remote: { type: Boolean, default: false },
     },
+    // Which filter produced this cached set. "adzuna" and "global" are retired and
+    // never written now; kept for the same save-compatibility reason as above.
     source: {
       type: String,
       enum: ["adzuna", "jobberman", "mixed", "global", "local"],

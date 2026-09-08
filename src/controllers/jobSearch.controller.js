@@ -4,12 +4,18 @@ const JobSearch = require("../models/JobSearch");
 const DEFAULT_PAGE_SIZE = 10;
 
 /**
- * Filter results by source (global = adzuna, local = jobberman, mixed = all)
+ * Filter results by source.
+ *
+ * There is one board now (Jobberman), so every filter resolves to the same list. The
+ * function stays because the API still takes `source` and a second board would filter
+ * here — but "global", which meant Adzuna, is deliberately NOT special-cased any more:
+ * it used to mean `r.source !== "jobberman"`, which with one source is an empty list
+ * every single time. A tab that can only say "no jobs found" is worse than no tab.
  */
 const filterBySource = (results, source) => {
-  if (!source || source === "mixed") return results;
-  if (source === "global") return results.filter((r) => r.source !== "jobberman");
-  if (source === "local") return results.filter((r) => r.source === "jobberman");
+  if (source === "local" || source === "jobberman") {
+    return results.filter((r) => r.source === "jobberman");
+  }
   return results;
 };
 
@@ -37,7 +43,7 @@ const paginate = (results, page = 1, limit = DEFAULT_PAGE_SIZE) => {
   };
 };
 
-// @desc    Search jobs from Adzuna + Jobberman
+// @desc    Search jobs from Jobberman (Nigeria only — see jobSearch.service)
 // @route   POST /api/job-search/search
 // @access  Public
 const searchJobs = async (req, res) => {
