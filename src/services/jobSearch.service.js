@@ -203,14 +203,34 @@ const searchTrending = async (sourceFilter = "mixed") => {
   return data;
 };
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, value] of queryCache.entries()) {
-    if (now - value.timestamp > CACHE_TTL_MS) {
-      queryCache.delete(key);
+// Sweeps expired entries out of the in-memory cache.
+//
+// `.unref()` because this timer is created at REQUIRE time — app.js mounts the route,
+// which pulls in the controller, which pulls in this file — and an active timer keeps
+// Node's event loop alive forever. It is the only module-level timer in the backend.
+// Measured: before this, `node -e "require(./jobSearch.service)"` never exited; now it
+// returns immediately.
+//
+// It is NOT, as first assumed, the reason `npm test` warns about a worker failing to
+// exit gracefully — that warning survives this fix, and `--detectOpenHandles` (which
+// runs in band) reports no open handles at all. That one is a worker-pool teardown
+// artifact, and still unexplained.
+//
+// unref does not stop the sweep. While the server is running there is always a live
+// listener, so the loop stays alive and the interval fires exactly as before; it only
+// stops being a REASON for the loop to stay alive once everything else is done.
+const cacheSweeper = setInterval(
+  () => {
+    const now = Date.now();
+    for (const [key, value] of queryCache.entries()) {
+      if (now - value.timestamp > CACHE_TTL_MS) {
+        queryCache.delete(key);
+      }
     }
-  }
-}, 5 * 60 * 1000);
+  },
+  5 * 60 * 1000
+);
+cacheSweeper.unref();
 
 module.exports = {
   buildSearchQuery,

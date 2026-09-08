@@ -8,6 +8,7 @@ const rateLimit = require("express-rate-limit");
 const logger = require("./utils/logger");
 const swaggerDocs = require("./config/swagger");
 const { attachRateKey, keyOf, isAccountScoped } = require("./middleware/rateLimit.middleware");
+const { requireFeature } = require("./middleware/featureFlag.middleware");
 
 require("./config/env"); // This will validate env vars on startup
 
@@ -163,8 +164,16 @@ const applicationRoutes = require("./routes/application.routes");
 
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
+// NOT gated: /api/jobs is the CV builder's job-description extraction (the Target
+// step), which is load-bearing for building a CV. Only /api/job-search — the parked
+// listings feature — is behind the flag below.
 app.use("/api/jobs", jobRoutes);
-app.use("/api/job-search", require("./routes/jobSearch.routes"));
+// Behind the admin toggle that has always existed and never did anything
+// (features.enableJobSearch). These routes are PUBLIC and unauthenticated, and no page
+// in the app links to the one surface that uses them — so until the feature is
+// deliberately switched on, the only traffic they can receive is a crawler making this
+// server scrape Jobberman on our IP for nobody.
+app.use("/api/job-search", requireFeature("enableJobSearch"), require("./routes/jobSearch.routes"));
 app.use("/api/resumes", resumeRoutes);
 app.use("/api/ai", aiLimiter, aiRoutes); // Apply AI-specific rate limiter
 app.use("/api/applications", applicationRoutes);

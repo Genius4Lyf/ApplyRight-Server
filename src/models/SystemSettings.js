@@ -49,7 +49,12 @@ const systemSettingsSchema = new mongoose.Schema(
       maintenanceMode: { type: Boolean, default: false },
       enablePdfGeneration: { type: Boolean, default: true },
       enableAiAnalysis: { type: Boolean, default: true },
-      enableJobSearch: { type: Boolean, default: true },
+      // Defaults OFF: the listings feature is parked, its only page is unlinked, and
+      // leaving it on means a fresh environment starts scraping Jobberman for anyone
+      // who finds the public routes. NOTE that a default only applies to a NEW settings
+      // document — the existing singleton keeps whatever it already holds, so switching
+      // this off in production is a toggle in the admin panel, not a deploy.
+      enableJobSearch: { type: Boolean, default: false },
       admobEnabled: { type: Boolean, default: false },
     },
     // Pre-launch campaign. Deliberately SEPARATE from features.maintenanceMode: the
