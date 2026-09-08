@@ -360,9 +360,13 @@ exports.exportData = async (req, res) => {
 };
 
 exports.deleteProfile = async (req, res) => {
+  // Declared OUTSIDE the try, because the catch below logs it. Scoped inside, the error
+  // handler for a failed account deletion threw a ReferenceError of its own: nothing was
+  // logged, no 500 body was sent, and the request died in the default Express handler.
+  // On the one path where a user is exercising a data-deletion right, the failure was
+  // silent.
+  const userId = req.user?.id;
   try {
-    const userId = req.user.id;
-
     logger.info(`Starting account deletion for user: ${userId}`);
 
     // Cascade delete all associated data

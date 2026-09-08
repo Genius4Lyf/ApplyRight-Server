@@ -36,4 +36,14 @@ module.exports = [
       "preserve-caught-error": "off",
     },
   },
+  {
+    // Puppeteer: the callback passed to page.evaluate() is serialised and executed
+    // INSIDE the page, where `document` exists and Node globals do not. Declaring it here
+    // rather than disabling no-undef, because no-undef is the one rule that catches a real
+    // crash — a symbol referenced but never defined, which throws the moment that line
+    // runs. Exactly such a bug was hiding among these two false positives elsewhere in the
+    // repo, indistinguishable from them.
+    files: ["src/services/pdf.service.js", "src/services/screenshot.service.js"],
+    languageOptions: { globals: { document: "readonly" } },
+  },
 ];

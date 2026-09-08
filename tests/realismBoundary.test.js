@@ -161,13 +161,23 @@ describe("scripted-line audit — no recitable interviewer sentences remain", ()
   });
 });
 
-describe("the interviewer is not nudged into jumping in", () => {
-  // Phase 1 set semantic_vad/low so candidates get time to think. A prompt line
-  // telling the model not to leave pauses works against that patience.
+describe("the interviewer waits for the candidate, but does not sit in silence", () => {
+  // Turn-taking is set by REALTIME_VAD_EAGERNESS (default `low`), and the prompt must
+  // not fight it from the other side: a line telling the model not to leave pauses
+  // makes it talk over someone who is still thinking. Those two phrasings are named
+  // here so they cannot come back.
+  //
+  // WHAT THE PROMPT SAYS NOW WAS A DELIBERATE CHANGE. It used to read "silence on their
+  // side usually means they are still thinking, so do not fill it", and on 2026-07-31 it
+  // was replaced with "never cut them off mid-thought. But once they've clearly
+  // finished, respond promptly" — patience while they are speaking, no dead air after.
+  // This suite kept asserting the old sentence and has been failing ever since, which is
+  // the whole reason it stopped being read. It now pins the half that is realism-
+  // critical and survived the rewrite: the interviewer never interrupts.
   eachMode((p) => {
     expect(p).not.toMatch(/do NOT drag or leave long pauses/i);
     expect(p).not.toMatch(/with no long pauses/i);
-    expect(p).toMatch(/still thinking, so do not fill it/i);
+    expect(p).toMatch(/never cut them off mid-thought/i);
   });
 });
 

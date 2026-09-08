@@ -1,0 +1,26 @@
+# LINE ENDINGS
+#
+# `.prettierrc` sets endOfLine: "crlf", but nothing enforced it, so 59 of the 191 source
+# files had drifted to LF or to a mix of both. That was 7,616 lint errors — 91% of this
+# package's entire lint run — saying nothing whatever about the code, and drowning the
+# ~780 findings that do.
+#
+# Without this file the answer depends on each machine's core.autocrlf, which means a
+# fresh clone can reintroduce the whole problem. eol=crlf pins it for every checkout on
+# every platform, so the working tree always matches what Prettier is configured to want.
+* text=auto eol=crlf
+
+# The exception, which must stay LF wherever it runs: render-build.sh is executed by
+# Render's Linux builder, and CRLF makes the shebang unusable.
+*.sh text eol=lf
+
+# Never touched, never diffed.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.pdf binary
