@@ -1131,7 +1131,7 @@ const uploadImport = async (req, res) => {
       });
     }
 
-    const { rawText } = await parseResume(filePath, req.file.mimetype);
+    const { rawText } = await parseResume(filePath, req.file.mimetype, req.file.originalname);
     if (!rawText || !rawText.trim()) {
       dropTempFile(filePath);
       return res.status(422).json({
@@ -1262,9 +1262,8 @@ const uploadImport = async (req, res) => {
     dropTempFile(filePath, "in error handler");
 
     if (error.code === "UNSUPPORTED_FILE_TYPE") {
-      return res
-        .status(400)
-        .json({ message: "Unsupported file type. Please upload a PDF or DOC/DOCX CV." });
+      // See resume.controller: the parser names the actual problem, so it is passed on.
+      return res.status(400).json({ code: "UNSUPPORTED_FILE_TYPE", message: error.message });
     }
     if (error.code === "EMPTY_RESUME_TEXT") {
       return res.status(422).json({

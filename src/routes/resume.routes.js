@@ -1,17 +1,18 @@
 const express = require("express");
 const router = express.Router();
-const multer = require("multer");
-const { uploadResume, uploadAndCreateDraft, getResumes } = require("../controllers/resume.controller");
+const {
+  uploadResume,
+  uploadAndCreateDraft,
+  getResumes,
+} = require("../controllers/resume.controller");
 const { protect } = require("../middleware/auth.middleware");
 
-// Multer setup — 5MB limit enforced server-side
-const upload = multer({
-  dest: "uploads/",
-  limits: { fileSize: 5 * 1024 * 1024 },
-});
+// Upload handling — 5MB cap, type filter and multer's own error responses all live in
+// one middleware, shared with the Studio's import route so the two cannot drift.
+const { resumeUpload } = require("../middleware/resumeUpload.middleware");
 
-router.post("/upload", protect, upload.single("resume"), uploadResume);
-router.post("/upload-and-create", protect, upload.single("resume"), uploadAndCreateDraft);
+router.post("/upload", protect, resumeUpload, uploadResume);
+router.post("/upload-and-create", protect, resumeUpload, uploadAndCreateDraft);
 router.get("/", protect, getResumes);
 
 module.exports = router;

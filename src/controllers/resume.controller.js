@@ -42,8 +42,9 @@ const uploadResume = async (req, res) => {
     const filePath = req.file.path;
     const mimetype = req.file.mimetype;
 
-    // Parse content
-    const { rawText } = await parseResume(filePath, mimetype);
+    // Parse content. The original filename is passed too: it is the only thing that
+    // separates a .docx from any other zip when the browser sends octet-stream.
+    const { rawText } = await parseResume(filePath, mimetype, req.file.originalname);
 
     if (!rawText || !rawText.trim()) {
       cleanupUploadedFile(filePath);
@@ -80,9 +81,10 @@ const uploadResume = async (req, res) => {
     cleanupUploadedFile(req.file?.path, "in error handler");
 
     if (error.code === "UNSUPPORTED_FILE_TYPE") {
-      return res.status(400).json({
-        message: "Unsupported file type. Please upload a PDF or DOC/DOCX resume.",
-      });
+      // The parser writes a message that names the actual problem (an RTF saved as .doc
+      // reads very differently from a .png renamed .pdf). Passing it through beats
+      // replacing it with one generic line that leaves the user re-uploading the same file.
+      return res.status(400).json({ code: "UNSUPPORTED_FILE_TYPE", message: error.message });
     }
 
     if (error.code === "EMPTY_RESUME_TEXT") {
@@ -142,7 +144,7 @@ const uploadAndCreateDraft = async (req, res) => {
   try {
     // 2. Parse the file to extract raw text
     const mimetype = req.file.mimetype;
-    const { rawText } = await parseResume(filePath, mimetype);
+    const { rawText } = await parseResume(filePath, mimetype, req.file.originalname);
 
     if (!rawText || !rawText.trim()) {
       cleanupUploadedFile(filePath);
@@ -261,9 +263,10 @@ const uploadAndCreateDraft = async (req, res) => {
     cleanupUploadedFile(filePath, "in error handler");
 
     if (error.code === "UNSUPPORTED_FILE_TYPE") {
-      return res.status(400).json({
-        message: "Unsupported file type. Please upload a PDF or DOC/DOCX resume.",
-      });
+      // The parser writes a message that names the actual problem (an RTF saved as .doc
+      // reads very differently from a .png renamed .pdf). Passing it through beats
+      // replacing it with one generic line that leaves the user re-uploading the same file.
+      return res.status(400).json({ code: "UNSUPPORTED_FILE_TYPE", message: error.message });
     }
 
     if (error.code === "EMPTY_RESUME_TEXT") {

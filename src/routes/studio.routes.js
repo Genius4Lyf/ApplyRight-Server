@@ -1,6 +1,5 @@
 const express = require("express");
 const rateLimit = require("express-rate-limit");
-const multer = require("multer");
 const router = express.Router();
 const {
   tailorStart,
@@ -19,6 +18,7 @@ const {
 
 const { protect } = require("../middleware/auth.middleware");
 const { keyOf, isAccountScoped } = require("../middleware/rateLimit.middleware");
+const { resumeUpload } = require("../middleware/resumeUpload.middleware");
 
 // AI-specific limiter, scoped to the routes that actually call a model (brief-preview,
 // target-job, draft-jd, scan, rewrite-role). build-start, tailor-start, sessions and
@@ -73,17 +73,12 @@ router.post("/duplicate", protect, duplicateSession);
 // details, optionally aimed at a job. Same create gate as tailor-start.
 router.post("/build-start", protect, buildStart);
 
-// Aria Studio — import an uploaded CV into an existing, EMPTY build session. Same multer
-// limits as resume.routes (5MB, temp file deleted on every exit path) and behind aiLimiter
+// Aria Studio — import an uploaded CV into an existing, EMPTY build session. Shares the
+// SAME upload middleware as resume.routes (5MB, type filter, temp file deleted on every
+// exit path) rather than re-declaring it, and sits behind aiLimiter
 // because it runs two model calls. Charges CREATE_FROM_UPLOAD — the same price the CV
 // builder's upload charges — and only once the extraction has produced something.
-router.post(
-  "/upload-import",
-  protect,
-  aiLimiter,
-  multer({ dest: "uploads/", limits: { fileSize: 5 * 1024 * 1024 } }).single("resume"),
-  uploadImport
-);
+router.post("/upload-import", protect, aiLimiter, resumeUpload, uploadImport);
 
 // Aria Studio — full scan: AI fit analysis + deterministic per-section verdicts.
 // Charges ANALYSIS, and only after the AI succeeds.
