@@ -14,6 +14,11 @@ const DESIGN_ENUMS = Object.freeze({
   margins: ["narrow", "normal", "wide"],
   density: ["compact", "normal", "relaxed"],
   paper: ["a4", "letter"],
+  // Body text scale and the space between sections. Named "textSize", not "type": the
+  // Mongoose subdocument below declares itself with a `type:` key, and a design field
+  // called `type` would sit at `design.type.type` and be read as a type declaration.
+  textSize: ["small", "normal", "large"],
+  sectionGap: ["tight", "normal", "airy"],
 });
 
 // Free-text fields, each bounded. A font stack and a hex are both short strings, and an

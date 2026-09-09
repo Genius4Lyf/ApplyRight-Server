@@ -68,7 +68,7 @@ describe("sanitizeDesign", () => {
     // The client has a twin of this in src/lib/cvDesign.js. A key allowed by one and
     // dropped by the other is a setting that appears to save and does not.
     expect([...DESIGN_KEYS].sort()).toEqual(
-      ["density", "font", "ground", "margins", "paper"].sort()
+      ["density", "font", "ground", "margins", "paper", "textSize", "sectionGap"].sort()
     );
   });
 });

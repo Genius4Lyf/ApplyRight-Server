@@ -176,6 +176,8 @@ const applicationSchema = new mongoose.Schema(
         paper: { type: String, enum: ["a4", "letter"], default: "a4" },
         font: { type: String, default: "" },
         ground: { type: String, default: "" },
+        textSize: { type: String, enum: ["small", "normal", "large"], default: "normal" },
+        sectionGap: { type: String, enum: ["tight", "normal", "airy"], default: "normal" },
       },
       default: undefined,
       _id: false,
