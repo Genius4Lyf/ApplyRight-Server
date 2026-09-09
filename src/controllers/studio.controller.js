@@ -525,6 +525,9 @@ const DUPLICATED_FIELDS = [
   // Presentation and settings the user chose, which a copy of their CV should keep.
   "source",
   "templateId",
+  // A copy of someone's CV that arrives looking like a different document is a bug by
+  // the standard this list already sets.
+  "design",
   "careerStage",
   "dismissedSections",
   "outputLang",
@@ -641,6 +644,12 @@ const duplicateSession = async (req, res) => {
     }
 
     const cost = (await settingsService.getCreditCosts()).DUPLICATE_CV;
+    // Free by default (see config/creditCosts.js). Everything below that touches money is
+    // skipped rather than run with a zero — a 0-credit Transaction is a line in the user's
+    // ledger recording that nothing happened, and "insufficient credits" against a price
+    // of nothing is a refusal that could never be satisfied. The whole paid path is kept
+    // intact so an admin can turn the price back on without a deploy.
+    const chargeable = cost > 0;
     // availableCredits/spendCredits read the plan allowance as well as the wallet, so the
     // user has to be loaded with those fields (see subscription.service).
     const user = await User.findById(req.user.id).select("role plan tier subscription credits");
@@ -649,7 +658,7 @@ const duplicateSession = async (req, res) => {
     }
     // Checked BEFORE the write, so someone who cannot afford it never gets a document
     // created and rolled back underneath them.
-    if (subscription.availableCredits(user) < cost) {
+    if (chargeable && subscription.availableCredits(user) < cost) {
       return res.status(403).json({
         message: "Insufficient credits",
         code: "INSUFFICIENT_CREDITS",
@@ -673,10 +682,12 @@ const duplicateSession = async (req, res) => {
 
     // Charged only now that the copy exists. The standing rule in this codebase is that
     // nobody pays for output that is not there.
-    const charge = await subscription.spendCredits(user, cost, {
-      type: TRANSACTION_TYPES.DUPLICATE_CV,
-      description: "Duplicate an Aria Studio CV",
-    });
+    const charge = chargeable
+      ? await subscription.spendCredits(user, cost, {
+          type: TRANSACTION_TYPES.DUPLICATE_CV,
+          description: "Duplicate an Aria Studio CV",
+        })
+      : { charged: false };
 
     if (charge.insufficient) {
       // The balance moved between the check above and the charge — another tab spent it.

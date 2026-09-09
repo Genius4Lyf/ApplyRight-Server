@@ -156,6 +156,30 @@ const applicationSchema = new mongoose.Schema(
       type: String,
       default: "ats-clean",
     },
+    // How the CV Studio is presenting it — typeface, margins, density, paper size, page
+    // colour. Stored beside templateId and for the same reason: reopening the Studio on
+    // another device must not silently reset the document's design to defaults, which is
+    // what happened while this lived only in the browser's localStorage.
+    //
+    // `default: undefined` is load-bearing. A nested schema with per-field defaults
+    // MATERIALISES this object on every existing draft the first time one is saved, and a
+    // materialised default would then outrank the user's real choice still sitting in
+    // localStorage on their own machine. Absent means "never chosen", and the client
+    // reads it that way.
+    //
+    // The enums here are documentation, not enforcement: findByIdAndUpdate does not run
+    // validators. config/cvDesign.js sanitizeDesign() is the check that actually runs.
+    design: {
+      type: {
+        margins: { type: String, enum: ["narrow", "normal", "wide"], default: "normal" },
+        density: { type: String, enum: ["compact", "normal", "relaxed"], default: "normal" },
+        paper: { type: String, enum: ["a4", "letter"], default: "a4" },
+        font: { type: String, default: "" },
+        ground: { type: String, default: "" },
+      },
+      default: undefined,
+      _id: false,
+    },
     skills: [
       {
         name: String,

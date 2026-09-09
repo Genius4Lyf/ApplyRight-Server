@@ -1416,7 +1416,19 @@ const chat = async (req, res) => {
     const mustFinish = !!focus && Number(buildTurns) >= turnCap;
 
     // Route the turn through the selected model (multi-provider dispatcher).
-    const meta = { userId: req.user.id, operation: "coachChatTurn", modelId, lang: req.lang };
+    //
+    // The id is minted HERE, before the call, and returned to the client as `feedbackId`
+    // so a 👍/👎 on this specific reply lands on the row that produced it. Resolving it
+    // afterwards is not possible: the audit write is fire-and-forget, and "the newest log
+    // for this user and operation" would misfile a rating on any message but the last.
+    const feedbackId = new mongoose.Types.ObjectId();
+    const meta = {
+      userId: req.user.id,
+      operation: "coachChatTurn",
+      modelId,
+      lang: req.lang,
+      logId: feedbackId,
+    };
     const targetTitle = (draft.targetJob?.title || draft.targetJob?.brief?.role || "").trim();
     // The whole CV, bounded — not a count of it. During a focused interview Aria was
     // asking about role 3 while knowing only that roles 1 and 2 existed, so she re-asked
@@ -1745,6 +1757,8 @@ const chat = async (req, res) => {
 
     return res.json({
       reply: result.reply,
+      // What a 👍/👎 on this reply attaches to. See the mint above.
+      feedbackId: feedbackId.toString(),
       intent,
       readyToDraft,
       // Keyed off readyToDraft, not `intent`. The turn cap FORCES the wrap-up server-side,

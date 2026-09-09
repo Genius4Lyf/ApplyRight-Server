@@ -1,4 +1,5 @@
 const Application = require("../models/Application");
+const { sanitizeDesign } = require("../config/cvDesign");
 
 // @desc    Get user's applications
 // @route   GET /api/applications
@@ -64,9 +65,17 @@ const deleteApplication = async (req, res) => {
   }
 };
 
-const updateTemplate = async (req, res) => {
+// @desc    Update how a tailored CV is PRESENTED — its template and its design.
+//
+//          One endpoint for both because they are one thing to the person changing them,
+//          and because they were only ever separate while the design half had nowhere on
+//          the server to live. `PATCH /:id/template` still routes here so an older
+//          client keeps working; either field may be omitted.
+// @route   PATCH /api/applications/:id/presentation
+// @access  Private
+const updatePresentation = async (req, res) => {
   try {
-    const { templateId } = req.body;
+    const { templateId, design } = req.body;
     const application = await Application.findById(req.params.id);
 
     if (!application) {
@@ -78,7 +87,13 @@ const updateTemplate = async (req, res) => {
       return res.status(401).json({ message: "User not authorized" });
     }
 
-    application.templateId = templateId;
+    if (typeof templateId === "string" && templateId) application.templateId = templateId;
+    // Dropped rather than rejected when unusable: a bad value must not fail the save and
+    // strand the template change riding alongside it.
+    if ("design" in req.body) {
+      const clean = sanitizeDesign(design);
+      if (clean) application.design = clean;
+    }
     await application.save();
 
     res.json(application);
@@ -138,7 +153,9 @@ const updateStatus = async (req, res) => {
 module.exports = {
   getApplications,
   getApplicationById,
-  updateTemplate,
+  updatePresentation,
+  // Kept so PATCH /:id/template goes on working for any client that has not moved.
+  updateTemplate: updatePresentation,
   updateStatus,
   deleteApplication,
 };

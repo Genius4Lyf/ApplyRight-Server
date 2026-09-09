@@ -54,16 +54,26 @@ const DEFAULT_CREDIT_COSTS = Object.freeze({
   // Uniform premium CV-template unlock price (paid tiers unlock all for free).
   TEMPLATE_UNLOCK: 30,
   // Fork a finished Aria Studio session — CV, conversation and all — so the original
-  // can be left alone. No AI runs, so this price is not cost recovery.
+  // can be left alone.
   //
-  // Priced deliberately ABOVE the cheapest way to get a full CV any other way
-  // (GENERATE_CV, 10cr — one AI-written CV from an upload + JD), so duplicating a
-  // finished session is never a cheaper shortcut to a second full CV than generating
-  // one outright. It still undercuts an actual from-scratch Aria Studio build, which
-  // measured against real sessions runs roughly 23cr (light) to 40cr (flagship) —
-  // GENERATE_BULLET × bullets-per-role, GENERATE_SUMMARY, GENERATE_SKILLS, summed —
-  // so "still cheaper than starting over" stays true without being a giveaway.
-  DUPLICATE_CV: 20,
+  // FREE (product decision, 2026-09-09). No AI runs: this is a document copy, so there is
+  // no cost to recover. The 20cr price it carried was not cost recovery either — it was
+  // priced above GENERATE_CV (10cr) so that forking could never be a cheaper shortcut to
+  // a second full CV than generating one, and it doubled as a brake against spam.
+  //
+  // What replaces each of those:
+  //   the SHORTCUT worry — a fork is the same document. Aiming it at a different job
+  //   still costs whatever the tailoring and re-generation cost, which is where the
+  //   model actually runs.
+  //   the BRAKE — the idempotency window in studio.controller absorbs double-clicks, and
+  //   duplication is gated on a COMPLETE CV, so there is nothing to spam until someone
+  //   has finished one.
+  //
+  // Kept as a configured cost rather than deleted, so it can be turned back on from the
+  // admin panel without a deploy if forking ever is abused. The controller skips the
+  // balance check and the charge entirely while it is 0 — a 0-credit Transaction row
+  // would be a line in the user's ledger saying nothing happened.
+  DUPLICATE_CV: 0,
 });
 
 // FLAGSHIP-tier credit costs. A model-tier can charge a DIFFERENT credit cost per action:

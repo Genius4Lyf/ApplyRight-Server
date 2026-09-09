@@ -29,7 +29,12 @@ const USER_ID = "60c72b2f9b1d8b2bad6e1a11";
 const OTHER_ID = "60c72b2f9b1d8b2bad6e1a22";
 const DRAFT_ID = "60c72b2f9b1d8b2bad6e1b11";
 const COPY_ID = "60c72b2f9b1d8b2bad6e1c11";
-const COST = 20; // the real default (config/creditCosts.js) — priced above GENERATE_CV
+// NOT the default any more — duplicating is FREE (config/creditCosts.js sets 0). This
+// is a non-zero ADMIN-CONFIGURED price, which the whole paid path below still has to
+// work for: the price is kept configurable so it can be turned back on without a
+// deploy if forking is ever abused. The free case has its own describe block at the
+// bottom.
+const COST = 20;
 
 // A finished build session carrying everything a real one would: content, the
 // conversation, the ledger, the scan — and the fields that must be left behind.
@@ -410,5 +415,54 @@ describe("Who and what may be duplicated", () => {
     authUser.role = "agent";
     subscription.isPaidActive.mockReturnValue(true);
     expect((await duplicate()).statusCode).toBe(201);
+  });
+});
+
+describe("Free by default", () => {
+  // The price was never cost recovery — nothing here runs a model. It was doing two
+  // other jobs, and both are covered without money: a fork is the same document (so it
+  // is not a shortcut to a second CV — aiming it at another job still costs whatever
+  // the tailoring costs), and spam is held off by the idempotency window plus the
+  // completeness gate.
+  beforeEach(() => {
+    settingsService.getCreditCosts.mockResolvedValue({ DUPLICATE_CV: 0 });
+  });
+
+  it("makes the copy and charges nothing", async () => {
+    const res = await duplicate();
+
+    expect(res.statusCode).toBe(201);
+    expect(DraftCV.create).toHaveBeenCalledTimes(1);
+    expect(subscription.spendCredits).not.toHaveBeenCalled();
+    expect(res.body.charged).toBe(false);
+    expect(res.body.cost).toBe(0);
+  });
+
+  it("writes no ledger row at all, rather than a 0-credit one", async () => {
+    // A Transaction for nothing is a line in the user’s own credit history recording
+    // that nothing happened. spendCredits is what writes it, so not calling it IS the
+    // assertion.
+    await duplicate();
+    expect(subscription.spendCredits).not.toHaveBeenCalled();
+  });
+
+  it("copies for a user with NO credits at all", async () => {
+    // The regression this closes: "insufficient credits" measured against a price of
+    // nothing is a refusal that can never be satisfied.
+    subscription.availableCredits.mockReturnValue(0);
+    const res = await duplicate();
+
+    expect(res.statusCode).toBe(201);
+    expect(DraftCV.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("still refuses an unfinished CV — free is not the same as ungated", async () => {
+    DraftCV.findById.mockResolvedValue(
+      asDoc(sourceDoc({ experience: [{ _sortId: "placeholder" }] }))
+    );
+    const res = await duplicate();
+
+    expect(res.statusCode).toBe(409);
+    expect(DraftCV.create).not.toHaveBeenCalled();
   });
 });

@@ -5,17 +5,24 @@ const mongoose = require("mongoose");
 const ALLOWED_FEEDBACK = ["up", "down"];
 
 /**
- * Submit user feedback on an AI-generated artifact. The frontend identifies
- * the artifact by (applicationId, operation) — we resolve to the most recent
- * matching log entry and stamp the feedback there.
+ * Submit user feedback on an AI-generated artifact. Two ways to say which artifact:
  *
- * One feedback per (application, operation): subsequent submissions overwrite
- * the previous on the latest log row. This keeps the data simple — we want
- * "is this user happy with the latest output?" not a full feedback history.
+ *   logId          — the exact call. The endpoint that produced the thing being rated
+ *                    minted this id before making the call and returned it (see
+ *                    persistLog in ai.service). This is the only way to rate ONE message
+ *                    in a conversation, where "the latest call of this operation" would
+ *                    file the rating against whichever answer happened to come last.
+ *
+ *   applicationId  — the original path, kept: rate the most recent <operation> run for
+ *   + operation      an application. Right where an application HAS one current artifact
+ *                    (a cover letter, an analysis) and rating means "this one".
+ *
+ * Either way the rating overwrites any previous one on that row. We want "is the user
+ * happy with this output?", not a history of them changing their mind.
  */
 exports.submitFeedback = async (req, res) => {
   try {
-    const { applicationId, operation, feedback, comment } = req.body;
+    const { applicationId, operation, feedback, comment, logId } = req.body;
 
     if (!ALLOWED_FEEDBACK.includes(feedback)) {
       return res.status(400).json({
@@ -23,26 +30,43 @@ exports.submitFeedback = async (req, res) => {
         allowed: ALLOWED_FEEDBACK,
       });
     }
-    if (!applicationId || !operation) {
-      return res.status(400).json({ message: "applicationId and operation are required" });
+    if (!logId && (!applicationId || !operation)) {
+      return res
+        .status(400)
+        .json({ message: "logId, or applicationId and operation, are required" });
     }
 
-    // Verify the user owns the application before letting them rate its logs.
-    const app = await Application.findById(applicationId).select("userId");
-    if (!app) return res.status(404).json({ message: "Application not found" });
-    if (app.userId.toString() !== req.user.id) {
-      return res.status(401).json({ message: "User not authorized" });
-    }
+    let log;
+    if (logId) {
+      if (!mongoose.Types.ObjectId.isValid(logId)) {
+        return res.status(400).json({ message: "Invalid logId" });
+      }
+      log = await AICallLog.findById(logId);
+      // Ownership is on the log itself here — there is no application standing in front
+      // of it — so this check IS the authorization, not a formality. Without it any
+      // signed-in user could stamp feedback onto anyone's call by guessing an id.
+      if (log && String(log.userId || "") !== req.user.id) {
+        return res.status(401).json({ message: "User not authorized" });
+      }
+    } else {
+      // Verify the user owns the application before letting them rate its logs.
+      const app = await Application.findById(applicationId).select("userId");
+      if (!app) return res.status(404).json({ message: "Application not found" });
+      if (app.userId.toString() !== req.user.id) {
+        return res.status(401).json({ message: "User not authorized" });
+      }
 
-    const log = await AICallLog.findOne({
-      applicationId,
-      operation,
-    }).sort({ createdAt: -1 });
+      log = await AICallLog.findOne({
+        applicationId,
+        operation,
+      }).sort({ createdAt: -1 });
+    }
 
     if (!log) {
-      // No log to attach to — happens if logs were TTL'd or AI failed before
-      // logging. Don't error: tell the client we accepted the feedback but
-      // had nothing to attach it to.
+      // No log to attach to — the row was TTL'd, the AI failed before logging, or (for
+      // logId) the audit write lost its race with a very fast rating. Don't error: the
+      // user pressed a thumb and the UI must not tell them their opinion failed. We
+      // accepted it; we just had nothing to hang it on.
       return res.json({ status: "noop", reason: "no matching log" });
     }
 

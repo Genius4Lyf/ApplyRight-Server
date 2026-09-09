@@ -1,4 +1,5 @@
 const DraftCV = require("../models/DraftCV");
+const { sanitizeDesign } = require("../config/cvDesign");
 const { isPaidActive } = require("../services/subscription.service");
 
 // Accepted values for DraftCV.outputLang. `null` stays allowed implicitly by
@@ -23,6 +24,16 @@ const saveDraft = async (req, res) => {
     // findByIdAndUpdate doesn't run validators, so this guard is the only check.
     if ("outputLang" in data && !OUTPUT_LANGS.includes(data.outputLang)) {
       delete data.outputLang;
+    }
+
+    // Presentation, same guard style and for the same reason as outputLang above:
+    // findByIdAndUpdate runs no validators, so the schema's enums never execute. An
+    // unusable value is dropped rather than failing the save — a bad client must not be
+    // able to wedge someone's CV over a typeface.
+    if ("design" in data) {
+      const clean = sanitizeDesign(data.design);
+      if (clean) data.design = clean;
+      else delete data.design;
     }
 
     // If ID exists, update existing

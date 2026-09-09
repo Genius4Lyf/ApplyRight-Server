@@ -193,16 +193,34 @@ const truncForLog = (s) => {
 /**
  * Persist an AI call to the audit log. Best-effort: never throws.
  * Loaded lazily so unit tests of pure functions don't pull mongoose.
+ *
+ * A caller may pass `meta.logId` — an ObjectId it minted BEFORE the call — and the row
+ * is written under that id. That is what makes a specific answer rateable: the write here
+ * is fire-and-forget, so there is no id to hand back afterwards, and "the newest log for
+ * this user and operation" would attach a 👍 to whichever call happened to be last. The
+ * caller knowing the id up front is the only way the rating lands on the row that actually
+ * produced the message being rated.
  */
 const persistLog = (entry) => {
   try {
     const AICallLog = require("../models/AICallLog");
-    AICallLog.create({
-      ...entry,
+    const { logId, ...rest } = entry;
+    const doc = {
+      ...rest,
       systemPrompt: truncForLog(entry.systemPrompt),
       userPrompt: truncForLog(entry.userPrompt),
       response: truncForLog(entry.response),
-    }).catch((e) => console.error("[AICallLog] persist failed:", e.message));
+    };
+    // UPSERT rather than create when the id is known, because ONE call can log TWICE:
+    // callModel writes the success row and then, if the response fails to parse as JSON,
+    // the surrounding catch writes an error row for the same call. A second create() on a
+    // fixed _id would be a duplicate-key error and the error detail would be lost — the
+    // one row you would actually want to read. Upserting means the later write updates
+    // the same row, which is the truth: it is one call.
+    const written = logId
+      ? AICallLog.updateOne({ _id: logId }, { $set: doc }, { upsert: true })
+      : AICallLog.create(doc);
+    Promise.resolve(written).catch((e) => console.error("[AICallLog] persist failed:", e.message));
   } catch (e) {
     console.error("[AICallLog] model load failed:", e.message);
   }
@@ -263,6 +281,8 @@ const callJSON = async ({
     model: activeProvider === "openai" ? openaiModel : GEMINI_MODEL,
     userId: meta.userId,
     applicationId: meta.applicationId,
+    // Optional, minted by the caller so the produced artifact can be rated. See persistLog.
+    logId: meta.logId,
     systemPrompt: system,
     // A multi-turn call logs its whole window; a single-shot call logs its user string.
     userPrompt: messages ? JSON.stringify(messages) : user,
@@ -367,6 +387,8 @@ const callText = async ({ system, user, temperature = 0.4, maxTokens, meta = {} 
     model: activeProvider === "openai" ? openaiModel : GEMINI_MODEL,
     userId: meta.userId,
     applicationId: meta.applicationId,
+    // Optional, minted by the caller so the produced artifact can be rated. See persistLog.
+    logId: meta.logId,
     systemPrompt: system,
     userPrompt: user,
   };
@@ -540,6 +562,8 @@ const callModel = async (
     model: apiModel,
     userId: meta.userId,
     applicationId: meta.applicationId,
+    // Optional, minted by the caller so the produced artifact can be rated. See persistLog.
+    logId: meta.logId,
     systemPrompt: system,
     userPrompt: messages ? JSON.stringify(messages) : user,
   };
