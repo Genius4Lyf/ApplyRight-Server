@@ -119,13 +119,29 @@ describe("coachChatTurn — the project branch now forks on career stage", () =>
 });
 
 describe("coachChatTurn — the grad metric scrubbers now cover project turns", () => {
-  it("drops a fabricated metric from exampleAnswer on a grad PROJECT turn", async () => {
+  it("drops a fabricated metric from a sample answer on a grad PROJECT turn", async () => {
     mockOpenAICreate.mockResolvedValue(
-      reply({ exampleAnswer: "Built an app, increasing ridership by 20%" })
+      reply({ exampleAnswers: ["Built an app, increasing ridership by 20%"] })
     );
 
     const out = await turn({ stage: "grad" });
-    expect(out.exampleAnswer).toBe("");
+    expect(out.exampleAnswers).toEqual([]);
+  });
+
+  it("drops only the OFFENDING sample and keeps the clean one", async () => {
+    // The point of two samples: losing one to the scrubber must not cost the other. One
+    // good sample beats one good sample sitting next to a fabricated figure.
+    mockOpenAICreate.mockResolvedValue(
+      reply({
+        exampleAnswers: [
+          "Built an app, increasing ridership by 20%",
+          "Built a route planner used by the whole student union",
+        ],
+      })
+    );
+
+    const out = await turn({ stage: "grad" });
+    expect(out.exampleAnswers).toEqual(["Built a route planner used by the whole student union"]);
   });
 
   it("filters metric-shaped suggestion blanks on a grad PROJECT turn", async () => {
@@ -141,11 +157,43 @@ describe("coachChatTurn — the grad metric scrubbers now cover project turns", 
 
   it("leaves an experienced candidate's project metrics alone", async () => {
     mockOpenAICreate.mockResolvedValue(
-      reply({ exampleAnswer: "Shipped the tool, cutting handling time by 30%" })
+      reply({ exampleAnswers: ["Shipped the tool, cutting handling time by 30%"] })
     );
 
     const out = await turn({ stage: "experienced" });
-    expect(out.exampleAnswer).toMatch(/30%/);
+    expect(out.exampleAnswers[0]).toMatch(/30%/);
+  });
+});
+
+describe("coachChatTurn — two sample answers", () => {
+  it("passes both through", async () => {
+    mockOpenAICreate.mockResolvedValue(reply({ exampleAnswers: ["First sample.", "Second one."] }));
+    const out = await turn({ stage: "experienced" });
+    expect(out.exampleAnswers).toEqual(["First sample.", "Second one."]);
+  });
+
+  it("caps at two however many the model returns", async () => {
+    // The cap is load-bearing, not tidiness: this renders as a help panel under a
+    // question, and five samples turn a hint into a reading task.
+    mockOpenAICreate.mockResolvedValue(
+      reply({ exampleAnswers: ["One.", "Two.", "Three.", "Four."] })
+    );
+    const out = await turn({ stage: "experienced" });
+    expect(out.exampleAnswers).toEqual(["One.", "Two."]);
+  });
+
+  it("still accepts the OLD single-field shape", async () => {
+    // Models do not always follow a renamed key on the first turn after a prompt change.
+    // Falling back keeps a real sample on screen instead of an empty panel.
+    mockOpenAICreate.mockResolvedValue(reply({ exampleAnswer: "A lone sample." }));
+    const out = await turn({ stage: "experienced" });
+    expect(out.exampleAnswers).toEqual(["A lone sample."]);
+  });
+
+  it("drops blanks rather than rendering empty rows", async () => {
+    mockOpenAICreate.mockResolvedValue(reply({ exampleAnswers: ["", "   ", "Real one."] }));
+    const out = await turn({ stage: "experienced" });
+    expect(out.exampleAnswers).toEqual(["Real one."]);
   });
 });
 

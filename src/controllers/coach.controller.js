@@ -1569,7 +1569,7 @@ const chat = async (req, res) => {
           intent: focus ? "building" : "answer",
           description: "",
           suggestions: [],
-          exampleAnswer: "",
+          exampleAnswers: [],
           suggestionsLabel: "",
         };
       } else {
@@ -1793,7 +1793,7 @@ const chat = async (req, res) => {
         : { layout: "prose", blocks: [] }),
       // Answer scaffolds — only while building (Aria just asked a follow-up).
       suggestions: intent === "building" ? result.suggestions || [] : [],
-      exampleAnswer: intent === "building" ? result.exampleAnswer || "" : "",
+      exampleAnswers: intent === "building" ? result.exampleAnswers || [] : [],
       suggestionsLabel: intent === "building" ? result.suggestionsLabel || "" : "",
       freeRemaining,
       charged,

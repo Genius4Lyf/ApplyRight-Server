@@ -4139,20 +4139,20 @@ const EXPERIENCE_CORE_RULE = `
 - ELICITATION: your follow-ups DISCOVER material, they don't demand it. Ask ONE focused question — "What problem did you solve?", "Who benefited — the team, customers, your class?", "How did you know it worked?" — or the Ws (what / where / when / why / how / how many). NEVER answer "I haven't really done anything" with "give me a number"; answer it with a discovery question that surfaces something they HAVE done.`;
 
 // The stage forks. Each ends with a note steering the answer scaffolds (suggestions /
-// exampleAnswer) so they're stage-appropriate — this is the fix for the "generic"
+// exampleAnswers) so they're stage-appropriate — this is the fix for the "generic"
 // scaffolds: entry-level starts from projects/coursework, not "increased revenue by X".
 const EXPERIENCE_STAGE = {
   experienced: `${EXPERIENCE_CORE_RULE}
 - STAGE — EXPERIENCED: keep the XYZ/achievement framing (accomplished [result], as measured by [scale/number], by doing [action]); a number STRENGTHENS a bullet when it's real, otherwise fall back to scope/scale. When ready, 3-5 achievement bullets, action-verb-first, impact-focused, tailored to the target role.
-- SCAFFOLDS: your \`suggestions\` may offer a metric starter (e.g. "We cut ___ by "), and \`exampleAnswer\` may show a quantified bullet — but explicitly as a SAMPLE, never the user's claim.`,
+- SCAFFOLDS: your \`suggestions\` may offer a metric starter (e.g. "We cut ___ by "), and \`exampleAnswers\` may show a quantified bullet — but explicitly as a SAMPLE, never the user's claim.`,
 
   grad: `${EXPERIENCE_CORE_RULE}
 - STAGE — ENTRY-LEVEL (student, recent grad, intern, or first-ever CV): be gentle and reassuring — a first CV is built from EXPERIENCE broadly defined, NOT from job titles. Material counts from coursework, academic/capstone & personal projects, campus leadership/societies, volunteering, part-time or informal work, internships/SIWES, and (where it applies) an NYSC/service year — all framed as achievements. Do NOT demand a metric; a strong entry-level bullet usually shows scope or scale instead ("built the booking tool used by the whole class", "ran the society stall every market day"). If they say they've "done nothing", reassure them and ask a discovery question about a project, a course, or something they organised — never a number. When ready, frame 2-4 achievement bullets from whatever real material they gave.
-- SCAFFOLDS: your \`suggestions\` LEAD with project / coursework / leadership angles (e.g. "In my final-year project I ", "I organised the ___ for our society ") — NOT "increased revenue by ___". \`exampleAnswer\` shows a strong bullet whose impact is SCOPE or SCALE, not a number (as a sample).`,
+- SCAFFOLDS: your \`suggestions\` LEAD with project / coursework / leadership angles (e.g. "In my final-year project I ", "I organised the ___ for our society ") — NOT "increased revenue by ___". \`exampleAnswers\` show strong bullets whose impact is SCOPE or SCALE, not a number (as a sample).`,
 
   changer: `${EXPERIENCE_CORE_RULE}
 - STAGE — CAREER CHANGER (moving into a new field): foreground TRANSFERABLE skills and frame prior work for its RELEVANCE to the target role — a hybrid of what they did and where they're headed. Establish credibility through evidence of IMPACT, not industry tenure; name what they achieved and translate it toward the new field. When ready, 3-5 bullets that lead with the transferable achievement, tailored to the target role.
-- SCAFFOLDS: your \`suggestions\` surface transferable angles (e.g. "A skill that carries over is ___", "I did ___, which maps to this role "); \`exampleAnswer\` translates a past achievement toward the target field (as a sample).`,
+- SCAFFOLDS: your \`suggestions\` surface transferable angles (e.g. "A skill that carries over is ___", "I did ___, which maps to this role "); \`exampleAnswers\` translate a past achievement toward the target field (as a sample).`,
 };
 
 // The experience-branch coaching fragment for a resolved stage. Exported for tests.
@@ -4420,14 +4420,14 @@ ${contextLines ? `- THEIR CONTEXTS (places to ASK about — never claims that th
 - PLAUSIBILITY CHECK (protect them from a wrong bullet): you know, in general terms, what a '${entryTitle}'${entryCompany ? ` at ${entryCompany}` : ""} typically does. If the user describes an activity that would be genuinely ATYPICAL or out of scope for THAT role/title — not merely impressive or unusually detailed — do NOT quietly fold it into the bullets. First, in ONE warm sentence, note it's not what you'd expect for this role and ask them to double-check it's right, so a bullet that doesn't fit the role never lands on their CV. Stay intent:'building'. The MOMENT they confirm or clarify, take their answer as TRUE and continue normally — never re-challenge the same point, never accuse, never refuse, never imply they couldn't have done it. Use this sparingly: only for a real role/activity mismatch.
 - When intent:'building' (you just asked a follow-up), ALSO help an unsure user START their answer:
   · \`suggestions\`: 2-3 SHORT first-person answer STARTERS (≤ 9 words each) for the question you just asked. Each may include a literal "___" where the user's own detail goes. These are SCAFFOLDS/angles to unstick them — NEVER invented achievements, numbers, or claims the user hasn't made. e.g. ["I ran the ___ tool and it ", "One safety thing I did was ", "We handled about ___ wells per shift"].
-  · \`exampleAnswer\`: ONE sentence showing what a strong answer to that question SOUNDS like — explicitly a SAMPLE, not the user's claim. e.g. "I rigged up the logging tool and caught a pressure anomaly early, avoiding a costly re-run."
+  · \`exampleAnswers\`: EXACTLY TWO sentences, each showing what a strong answer to that question SOUNDS like — explicitly SAMPLES, never the user's claim. They must differ in ANGLE, not merely in wording: one might show a task done well and the other a problem noticed or a person helped, so that between them they mark out a RANGE rather than one right answer. e.g. ["I rigged up the logging tool and caught a pressure anomaly early, avoiding a costly re-run.", "I rewrote the shift handover checklist after two crews missed the same step."]
   · \`suggestionsLabel\`: a SHORT (≤ 6 words) natural lead-in in your voice, specific to the question you just asked, that introduces those starters — e.g. "Ways to show the impact:", "A number you might have:", "A few starting points:", "How you could phrase it:".
 - When the useful activities have enough truthful detail for the requested bullets (real actions plus context, scope, or results where natural), OR you're told to wrap up → intent:'ready'. Put ALL gathered activities into \`description\` as concise FIRST-PERSON sentences for the bullet writer, preserving the user's facts and never inventing.
 - For intent:'ready', make \`reply\` a brief statement that you have enough and are opening the bullet options. Do NOT ask whether they want to keep talking, and do NOT ask them to type "Done".
 - For intent:'ready', return an \`evidence\` array containing the distinct user-backed facts you relied on. Every item MUST have: \`claim\` (a concise first-person fact), \`sourceQuote\` (an EXACT contiguous quote copied from ONE user message), \`skills\`, \`tools\`, \`outcomes\`, \`metrics\`, and \`requirementIds\`. Never manufacture or paraphrase sourceQuote. A requirement id may appear only when that exact evidence supports it.
 - For intent:'ready', return \`requirementChecks\` for target requirements actually discussed: { requirementId, status, evidenceIndex, note }. status is confirmed|demonstrated|related|not_demonstrated|not_applicable. evidenceIndex is the zero-based index in \`evidence\`, or null for not_demonstrated/not_applicable. Do not mark a requirement confirmed merely because it appears in the JD.
 - If instead they ask a GENERAL CV question (about summaries, formatting, other sections, the job, etc.) → answer it warmly → intent:'answer'.
-- For intent:'answer' or 'ready', return \`suggestions\`:[], \`exampleAnswer\`:"" and \`suggestionsLabel\`:"".
+- For intent:'answer' or 'ready', return \`suggestions\`:[], \`exampleAnswers\`:[] and \`suggestionsLabel\`:"".
 - BIAS: when you're unsure whether a message is a general question vs. describing their work, choose 'building' (the free path). NEVER default to 'answer'.`;
 
     // Steer the interview toward the role's STILL-UNCOVERED must-haves, so coverage the
@@ -4467,7 +4467,7 @@ ${contextLines ? `- THEIR CONTEXTS (places to ASK about — never claims that th
 ${projectFunnel(projectType)}
 ${projectTypeLine}
 - ONE informed question at a time, following the sequence for this type. Nudge them to add a link (GitHub / live demo / portfolio / repo) only where that kind of project would actually have one. When ready, frame 2-4 bullets accordingly, action-verb first.
-- IMPACT IS NOT A SYNONYM FOR A NUMBER: use a real figure only where the user actually gave one, and otherwise show scope, audience, recognition, or the fact that it shipped/was adopted. Never fabricate scope, numbers, or a link the user didn't give. (suggestions/exampleAnswer behavior is unchanged — generate them per question as usual.)`;
+- IMPACT IS NOT A SYNONYM FOR A NUMBER: use a real figure only where the user actually gave one, and otherwise show scope, audience, recognition, or the fact that it shipped/was adopted. Never fabricate scope, numbers, or a link the user didn't give. (suggestions/exampleAnswers behavior is unchanged — generate them per question as usual.)`;
 
       // Projects were the ONE coaching branch with no stage fork at all, which mattered
       // most for the people who have nothing else on their CV. NOT experienceCoachingBlock:
@@ -4484,7 +4484,7 @@ ${projectTypeLine}
     }
   } else {
     system += `
-- The user is NOT focused on a specific role right now, so treat their message as a GENERAL CV question → answer it warmly and helpfully → intent:'answer'. (Do not write full bullets — if they want bullets, tell them to tap 'Ask Aria' on a role.) Use intent:'answer' for every turn here. Always return \`suggestions\`:[] and \`exampleAnswer\`:"".`;
+- The user is NOT focused on a specific role right now, so treat their message as a GENERAL CV question → answer it warmly and helpfully → intent:'answer'. (Do not write full bullets — if they want bullets, tell them to tap 'Ask Aria' on a role.) Use intent:'answer' for every turn here. Always return \`suggestions\`:[] and \`exampleAnswers\`:[].`;
     // This branch used to be career-stage blind. `resolvedStage` above is nulled whenever
     // there is no focus, so a general question here never got the CV-WIDE CAREER CONTEXT
     // that /coach/ask has always had — the same person asking the same thing got a
@@ -4502,7 +4502,7 @@ ${projectTypeLine}
 
 ${ARIA_FORMATTING}
 
-Keep \`reply\` to ~${!focus && screen ? 130 : 90} words max. Always return STRICT valid JSON with ALL keys: { "reply": string, "intent": "answer" | "building" | "ready", "description": string, "suggestions": string[], "exampleAnswer": string, "suggestionsLabel": string, "layout": "prose" | "options" | "compare", "blocks": [{ "label": string, "detail": string }], "evidence": [{ "claim": string, "sourceQuote": string, "skills": string[], "tools": string[], "outcomes": string[], "metrics": string[], "requirementIds": string[] }], "requirementChecks": [{ "requirementId": string, "status": "confirmed"|"demonstrated"|"related"|"not_demonstrated"|"not_applicable", "evidenceIndex": number|null, "note": string }]${probe?.name ? ', "probeResult": { "requirementId": string, "level": "regular"|"basic"|"coursework"|"encountered"|"never", "contextSortId": string|null, "contextKind": string|null, "evidenceIndex": number|null } | null' : ""} }. Use "" for \`description\` unless intent is 'ready'; [] / "" for \`suggestions\` / \`exampleAnswer\` / \`suggestionsLabel\` unless intent is 'building'; use [] for evidence and requirementChecks unless intent is 'ready'. Use "prose" and [] for \`layout\`/\`blocks\` unless the ANSWER SHAPE rules below say otherwise.${probe?.name ? " Use null for `probeResult` until they have actually answered." : ""}
+Keep \`reply\` to ~${!focus && screen ? 130 : 90} words max. Always return STRICT valid JSON with ALL keys: { "reply": string, "intent": "answer" | "building" | "ready", "description": string, "suggestions": string[], "exampleAnswers": string[], "suggestionsLabel": string, "layout": "prose" | "options" | "compare", "blocks": [{ "label": string, "detail": string }], "evidence": [{ "claim": string, "sourceQuote": string, "skills": string[], "tools": string[], "outcomes": string[], "metrics": string[], "requirementIds": string[] }], "requirementChecks": [{ "requirementId": string, "status": "confirmed"|"demonstrated"|"related"|"not_demonstrated"|"not_applicable", "evidenceIndex": number|null, "note": string }]${probe?.name ? ', "probeResult": { "requirementId": string, "level": "regular"|"basic"|"coursework"|"encountered"|"never", "contextSortId": string|null, "contextKind": string|null, "evidenceIndex": number|null } | null' : ""} }. Use "" for \`description\` unless intent is 'ready'; [] / "" for \`suggestions\` / \`exampleAnswers\` / \`suggestionsLabel\` unless intent is 'building'; use [] for evidence and requirementChecks unless intent is 'ready'. Use "prose" and [] for \`layout\`/\`blocks\` unless the ANSWER SHAPE rules below say otherwise.${probe?.name ? " Use null for `probeResult` until they have actually answered." : ""}
 
 THE CV SO FAR — you may READ all of this, and you may NOT WRITE from it:
 ${cvSummary}
@@ -4525,7 +4525,7 @@ READING THE REST OF THE CV: the entries above are CONTEXT — for not re-asking 
   if (isGradExperience) {
     system += `
 
-NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Their work can be coursework, projects, internships, volunteering, campus leadership, part-time or informal work. Ask about what they did, the tools or skills used, their responsibility, and real scope; never steer them toward revenue, efficiency, downtime, percentages, or a number. Do not put metric-shaped starters such as "improved ___ by ___" or "reduced ___ by ___" in suggestions or exampleAnswer.`;
+NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Their work can be coursework, projects, internships, volunteering, campus leadership, part-time or informal work. Ask about what they did, the tools or skills used, their responsibility, and real scope; never steer them toward revenue, efficiency, downtime, percentages, or a number. Do not put metric-shaped starters such as "improved ___ by ___" or "reduced ___ by ___" in suggestions or exampleAnswers.`;
   }
 
   if (focus && mustFinish) {
@@ -4571,13 +4571,22 @@ NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Th
   let suggestions = Array.isArray(data?.suggestions)
     ? data.suggestions.map((s) => String(s || "").trim()).filter(Boolean)
     : [];
-  let exampleAnswer = String(data?.exampleAnswer || "").trim();
-  // Grad-stage exampleAnswer must show scope/scale, never a number (the model doesn't
-  // always honour this) — a real user got "increasing monthly revenue by 20%" invented
-  // out of nothing. Detect a fabricated metric and drop the example rather than show it.
+  // TWO samples now, not one. `exampleAnswer` is still read as a fallback: a model that
+  // answers in the old shape should still get the one sample it produced through, rather
+  // than leaving the panel empty.
+  let exampleAnswers = Array.isArray(data?.exampleAnswers)
+    ? data.exampleAnswers.map((s) => String(s || "").trim()).filter(Boolean)
+    : [String(data?.exampleAnswer || "").trim()].filter(Boolean);
+  // Two is the design, and the cap is load-bearing: more would turn a hint into a reading
+  // task, and this is a help affordance, not a list of options to choose between.
+  exampleAnswers = exampleAnswers.slice(0, 2);
+  // Grad-stage samples must show scope/scale, never a number (the model doesn't always
+  // honour this) — a real user got "increasing monthly revenue by 20%" invented out of
+  // nothing. Drop the offending sample and keep the other: one good sample beats one good
+  // sample next to a fabricated figure.
   const FABRICATED_METRIC = /\d+(\.\d+)?\s?%|\$\s?\d|\bby\s+\d+\b/i;
-  if (isGradExperience && FABRICATED_METRIC.test(exampleAnswer)) {
-    exampleAnswer = "";
+  if (isGradExperience) {
+    exampleAnswers = exampleAnswers.filter((s) => !FABRICATED_METRIC.test(s));
   }
   if (isGradExperience) {
     // The model can obey the no-invention rule yet still offer metric-shaped blanks
@@ -4593,7 +4602,7 @@ NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Th
     intent,
     description: String(data?.description || "").trim(),
     suggestions,
-    exampleAnswer,
+    exampleAnswers,
     suggestionsLabel: String(data?.suggestionsLabel || "").trim(),
     evidence: Array.isArray(data?.evidence) ? data.evidence : [],
     requirementChecks: Array.isArray(data?.requirementChecks) ? data.requirementChecks : [],
