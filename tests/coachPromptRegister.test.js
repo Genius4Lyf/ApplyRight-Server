@@ -135,3 +135,58 @@ describe("the entry-level guardrail", () => {
     expect(systemPrompt()).toMatch(/never steer them toward revenue, efficiency/i);
   });
 });
+
+describe("Aria never answers her own question in the user's voice", () => {
+  // Reported from production: the user replied "I used Microsoft Excel" and Aria came
+  // back with "Using Microsoft Excel, I organized invoice data by categorizing purchases
+  // and ensuring accuracy in records. This helped the finance team track expenses
+  // effectively." — a first-person sentence, in the candidate's voice, built almost
+  // entirely out of details she had never been given.
+  //
+  // Two harms at once. She wrote the answer for them, so the interview stops gathering
+  // anything true; and because it is in their voice and reads like a recap, they believe
+  // it is what they said, and it ends up on the CV as fact.
+  //
+  // The pull is structural: `suggestions`, `exampleAnswers`, `description` and `evidence`
+  // are ALL specified as first-person, so first person is everywhere in this prompt. Only
+  // `reply` is Aria talking, and nothing used to say so.
+  it("says the reply is second person, and says it on a focused turn", async () => {
+    await turn();
+    expect(systemPrompt()).toMatch(/YOUR REPLY IS YOUR OWN VOICE/);
+    expect(systemPrompt()).toMatch(/second person/i);
+  });
+
+  it("bans a first-person sentence about their work inside the reply", async () => {
+    await turn();
+    expect(systemPrompt()).toMatch(
+      /NEVER compose a sentence beginning "I \.\.\." about their work/
+    );
+  });
+
+  it("carves out the starter bullets, which ARE first person by design", async () => {
+    // Without the exception the model has two contradictory instructions: write the
+    // first-person starters into the reply, and never write first person in the reply.
+    await turn();
+    expect(systemPrompt()).toMatch(/only first-person lines allowed in `reply`/i);
+    expect(systemPrompt()).toMatch(/WRITE THE STARTERS INTO `reply`/);
+  });
+
+  it("keeps the rule on a project turn and on every career stage", async () => {
+    for (const over of [
+      { focus: { section: "project", sortId: "p1" }, section: "project" },
+      { stage: "grad" },
+      { stage: "experienced" },
+      { stage: "changer" },
+    ]) {
+      mockOpenAICreate.mockClear();
+      await turn(over);
+      expect(systemPrompt()).toMatch(/YOUR REPLY IS YOUR OWN VOICE/);
+    }
+  });
+
+  it("no longer asks for a bare 'warm reaction', which is what it restated", async () => {
+    await turn();
+    expect(systemPrompt()).toMatch(/React in ONE short sentence of your own/);
+    expect(systemPrompt()).not.toMatch(/Warmly react, then ask ONE focused follow-up/);
+  });
+});
