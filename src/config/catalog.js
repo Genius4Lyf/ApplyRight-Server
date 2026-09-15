@@ -76,7 +76,7 @@ const CATALOG = {
     periodDays: 30,
   },
   // CV Agent plans — for people who create CVs for clients. Each grants a pool of
-  // CV credits (for tailoring) + UNLIMITED downloads (isPaidActive skips the ₦1,000
+  // CV credits (for tailoring) + UNLIMITED downloads (isPaidActive skips the ₦500
   // download charge), and NO live interview minutes (minutes: 0). Map to "plus" so
   // they count as paid. weekly / monthly / yearly cycles. Drives the agent role +
   // earnings dashboard (/agent).
@@ -228,15 +228,21 @@ const CATALOG = {
     amountUsd: 42,
     minutes: 300,
   },
-  // One-time clean CV download (after the free first download). Priced at about
-  // what a casual reseller charges their client for a CV — this deliberately
-  // steers repeat resellers toward an agent subscription (unlimited downloads
-  // from ₦3,500) instead of paying per-download.
+  // One-time clean CV download (after the free first download).
+  //
+  // ₦500 is the NIGERIAN price only. A confidently-foreign buyer is forced onto USD
+  // at checkout (createCheckout in billing.controller), so amountUsd is what the rest
+  // of the world pays and is deliberately NOT cut alongside it.
+  //
+  // The cut halves the steer toward an agent subscription: at ₦1,000 an agent plan
+  // (unlimited downloads from ₦3,500) paid for itself past ~4 downloads a period, at
+  // ₦500 it takes ~7. Watch the reseller mix in admin revenue — if per-download
+  // purchases start crowding out agent plans, that trade is why.
   download_single: {
     id: "download_single",
     label: "CV Download",
     purpose: "download",
-    amountNgn: 1000,
+    amountNgn: 500,
     amountUsd: 1.5,
     downloads: 1,
   },

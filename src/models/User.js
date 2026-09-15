@@ -95,7 +95,7 @@ const userSchema = new mongoose.Schema(
       },
     },
     // CV PDF downloads. Free users get one clean download (lifetime taste); after
-    // that they buy ₦1,000 single-download passes or subscribe (paid = unlimited).
+    // that they buy ₦500 single-download passes or subscribe (paid = unlimited).
     downloads: {
       freeDownloadUsed: { type: Boolean, default: false },
       passRemaining: { type: Number, default: 0 },

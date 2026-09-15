@@ -14,8 +14,8 @@ exports.generateCvDocx = async (req, res) => {
 
     // Download entitlement (WEB only). The native app keeps its own AdMob-rewarded
     // download model, so native requests are exempt (see api.js X-Client-Platform).
-    // On web: first download is free (lifetime taste); after that a ₦1,000 single-
-    // download pass or any paid subscription (unlimited). Consume BEFORE generating
+    // On web: first download is free (lifetime taste); after that a single-download
+    // pass or any paid subscription (unlimited). Consume BEFORE generating
     // and refund on failure, so a failed doc never burns a unit and concurrent
     // requests can't double-spend.
     const isNativeApp = req.headers["x-client-platform"] === "native";
@@ -24,8 +24,10 @@ exports.generateCvDocx = async (req, res) => {
       consumed = await subscription.consumeDownload(req.user);
       if (!consumed.ok) {
         return res.status(402).json({
+          // No price in the copy: it is region-split (₦ in Nigeria, $ elsewhere) and the
+          // client shows the localised DownloadPaywallModal on this code anyway.
           message:
-            "Pay ₦1,000 to download this CV as an ATS-ready Word doc, or go unlimited with a plan.",
+            "Buy a single-download pass to get this CV as an ATS-ready Word doc, or go unlimited with a plan.",
           code: "NEED_DOWNLOAD",
         });
       }
