@@ -3,6 +3,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const crypto = require("crypto");
 const { DEFAULT_MODELS, DEFAULT_MODEL, modelFrom } = require("../config/catalog");
 const { summarizeDelivery, formatDeliveryForPrompt } = require("./deliveryTelemetry.service");
+const { appendStarters } = require("../utils/ariaStarters");
 const {
   styleFromRole,
   formatArchetypeForPrompt,
@@ -81,11 +82,17 @@ class AIUnavailableError extends Error {
 // A provider can occasionally ignore a JSON-only instruction and return a perfectly
 // usable plain-text answer. Keep that answer attached to the error so interactive
 // surfaces can degrade gracefully instead of turning it into a generic 502.
+//
+// `truncated` distinguishes the OTHER way this fires, which is not graceful at all: the
+// model ran out of budget mid-object, so `response` is a half-written JSON literal. Those
+// two cases were indistinguishable, and treating the second as the first is how a user
+// ended up reading `{"reply":"That's an excellent example! ...` as Aria's message.
 class AIJSONParseError extends Error {
-  constructor(message, response) {
+  constructor(message, response, truncated = false) {
     super(message);
     this.name = "AIJSONParseError";
     this.response = String(response || "").trim();
+    this.truncated = Boolean(truncated);
   }
 }
 
@@ -570,6 +577,11 @@ const callModel = async (
   try {
     let content = "";
     let usage = {};
+    // Did the model stop because it RAN OUT OF ROOM? Every provider says so and nothing
+    // here used to ask. Without it, a response cut off mid-token is indistinguishable from
+    // one the model chose to end — so a truncated JSON object looked exactly like a model
+    // that had ignored the format instruction, and was handed to the user as prose.
+    let truncated = false;
     if (provider === "openai" || provider === "deepseek" || provider === "moonshot") {
       const resp = await client.chat.completions.create({
         model: apiModel,
@@ -584,6 +596,7 @@ const callModel = async (
         ...(maxTokens ? { max_tokens: maxTokens } : {}),
       });
       content = resp.choices[0].message.content;
+      truncated = resp.choices[0].finish_reason === "length";
       usage = {
         tokensInput: resp.usage?.prompt_tokens,
         tokensOutput: resp.usage?.completion_tokens,
@@ -618,6 +631,7 @@ const callModel = async (
         })),
       });
       content = (resp.content || []).map((b) => b.text || "").join("");
+      truncated = resp.stop_reason === "max_tokens";
       usage = {
         tokensInput: resp.usage?.input_tokens,
         tokensOutput: resp.usage?.output_tokens,
@@ -641,6 +655,7 @@ const callModel = async (
         },
       });
       content = result.response.text();
+      truncated = result.response.candidates?.[0]?.finishReason === "MAX_TOKENS";
       const u = result.response.usageMetadata || {};
       usage = { tokensInput: u.promptTokenCount, tokensOutput: u.candidatesTokenCount };
     } else {
@@ -655,7 +670,12 @@ const callModel = async (
     try {
       return JSON.parse(cleaned);
     } catch (err) {
-      throw new AIJSONParseError(err.message, cleaned);
+      if (truncated) {
+        console.warn(
+          `[callModel] ${baseLog.operation} truncated at max_tokens (${maxTokens || "provider default"}); JSON incomplete`
+        );
+      }
+      throw new AIJSONParseError(err.message, cleaned, truncated);
     }
   } catch (err) {
     persistLog({
@@ -4135,7 +4155,7 @@ const resolveCareerStage = ({ stage, draft } = {}) => {
 // of evidence, never required, NEVER invented or pressured for.
 const EXPERIENCE_CORE_RULE = `
 - THIS IS A JOB (work experience) — the rule is ACHIEVEMENTS, not duties. Never settle for "responsible for X" / "duties included" — draw out what CHANGED because they did it (PAR/CAR: "responsible for training new staff" → "trained new hires, several promoted within the year"). Shape each bullet as: a strong action verb + the specific work + context/constraint + a TRUTHFUL outcome.
-- EVIDENCE, not numbers: an outcome CAN be a number, but a number is only ONE kind of evidence and is NEVER required. Use a real figure ONLY when the user actually has one — NEVER invent, guess, or pressure them for a number. With no metric, the outcome uses non-numeric evidence instead: scope · frequency · audience · constraint · decision role · range · scale (e.g. "across 40+ tickets a shift", "for the whole final-year cohort").
+- EVIDENCE, not numbers: an outcome CAN be a number, but a number is only ONE kind of evidence and is NEVER required. Use a real figure ONLY when the user actually has one — NEVER invent, guess, or pressure them for a number. With no metric, the outcome uses non-numeric evidence instead: scope · frequency · audience · constraint · decision role · range · scale (e.g. "across 40+ cases a week", "for the whole final-year cohort").
 - ELICITATION: your follow-ups DISCOVER material, they don't demand it. Ask ONE focused question — "What problem did you solve?", "Who benefited — the team, customers, your class?", "How did you know it worked?" — or the Ws (what / where / when / why / how / how many). NEVER answer "I haven't really done anything" with "give me a number"; answer it with a discovery question that surfaces something they HAVE done.`;
 
 // The stage forks. Each ends with a note steering the answer scaffolds (suggestions /
@@ -4410,17 +4430,18 @@ ${contextLines ? `- THEIR CONTEXTS (places to ASK about — never claims that th
     }
   } else if (focus) {
     system += `
-- FOCUS: you are gathering truthful material for several strong bullets for their ${section} entry titled '${entryTitle}'${entryCompany ? ` at ${entryCompany}` : ""}. You know, in general terms, what that role${entryCompany ? " and company" : ""} typically involves — use it to ask SPECIFIC, informed follow-ups, not generic filler.${experienceEntryTypeLine}
+- FOCUS: you are gathering truthful material for several strong bullets for their ${section} entry titled '${entryTitle}'${entryCompany ? ` at ${entryCompany}` : ""}. You know, in general terms, what that role typically involves — use it to ask SPECIFIC, informed follow-ups, not generic filler.
+- SPEAK THEIR TRADE. Take your vocabulary from the job title above and from the words the user has actually used, and from nothing else. An accounts role is asked about ledgers, invoices and month-end; a teaching role about lessons, pupils and marking; a field role about equipment, shifts and safety. Asking an accounts assistant what their work "helped the team complete safely or reliably" is the wrong question in the wrong language, and it tells the user you were not listening.${entryCompany ? ` The employer is '${entryCompany}'. If that name does not plainly identify an industry to you, treat it as a name only — NEVER guess a sector from it, because guessing wrong steers every question you ask after it.` : ""}${experienceEntryTypeLine}
 - The user may give ONE activity or SEVERAL activities separated by full stops, commas, or list items. If there are several, remember every distinct activity from the conversation, choose the first one that still needs useful detail, and explore it with ONE focused question at a time. Then move to the next unresolved activity. Do not ask them to repeat the list and do not collapse several activities into one vague thread.
 - If the user is DESCRIBING what they actually did in this role/project → intent:'building'. Warmly react, then ask ONE focused follow-up to draw out ${
       isGradExperience
-        ? "the real action plus its context or scope (who it helped, what they learned, what they were trusted to do). Do NOT ask for a number, revenue, efficiency, downtime, or another business metric."
+        ? "the real action plus its context or scope (who it helped, what they learned, what they were trusted to do). Do NOT ask for a number, revenue, efficiency, or another business metric."
         : "(a) the real action and (b) the result/impact (a number if natural)."
     } Do NOT write the finished bullet yourself.
 - PLAUSIBILITY CHECK (protect them from a wrong bullet): you know, in general terms, what a '${entryTitle}'${entryCompany ? ` at ${entryCompany}` : ""} typically does. If the user describes an activity that would be genuinely ATYPICAL or out of scope for THAT role/title — not merely impressive or unusually detailed — do NOT quietly fold it into the bullets. First, in ONE warm sentence, note it's not what you'd expect for this role and ask them to double-check it's right, so a bullet that doesn't fit the role never lands on their CV. Stay intent:'building'. The MOMENT they confirm or clarify, take their answer as TRUE and continue normally — never re-challenge the same point, never accuse, never refuse, never imply they couldn't have done it. Use this sparingly: only for a real role/activity mismatch.
-- When intent:'building' (you just asked a follow-up), ALSO help an unsure user START their answer:
-  · \`suggestions\`: 2-3 SHORT first-person answer STARTERS (≤ 9 words each) for the question you just asked. Each may include a literal "___" where the user's own detail goes. These are SCAFFOLDS/angles to unstick them — NEVER invented achievements, numbers, or claims the user hasn't made. e.g. ["I ran the ___ tool and it ", "One safety thing I did was ", "We handled about ___ wells per shift"].
-  · \`exampleAnswers\`: EXACTLY TWO sentences, each showing what a strong answer to that question SOUNDS like — explicitly SAMPLES, never the user's claim. They must differ in ANGLE, not merely in wording: one might show a task done well and the other a problem noticed or a person helped, so that between them they mark out a RANGE rather than one right answer. e.g. ["I rigged up the logging tool and caught a pressure anomaly early, avoiding a costly re-run.", "I rewrote the shift handover checklist after two crews missed the same step."]
+- When intent:'building' (you just asked a follow-up), ALSO help an unsure user START their answer. WRITE THE STARTERS INTO \`reply\` as well as returning them in the field: end the reply with your \`suggestionsLabel\` line, then each starter on its own "- " bullet, in quotes. They are the most useful thing the turn produces for someone staring at an empty box, and a field the interface may not show is not help.
+  · \`suggestions\`: 2-3 SHORT first-person answer STARTERS (≤ 9 words each) for the question you just asked. Each may include a literal "___" where the user's own detail goes. These are SCAFFOLDS/angles to unstick them — NEVER invented achievements, numbers, or claims the user hasn't made. Examples of the SHAPE only — never of the subject matter; each belongs to a different line of work, and yours must belong to the user's: ["I handled the ___ every week", "One thing I sorted out was ", "I was the one who ___ for the team"].
+  · \`exampleAnswers\`: EXACTLY TWO sentences, each showing what a strong answer to that question SOUNDS like — explicitly SAMPLES, never the user's claim. They must differ in ANGLE, not merely in wording: one might show a task done well and the other a problem noticed or a person helped, so that between them they mark out a RANGE rather than one right answer. These are examples of the SHAPE only. Deliberately from unrelated fields, so that you copy the structure and NEVER the subject matter: ["I reconciled the monthly ledger and caught a duplicate payment before it went out.", "I rewrote the team instructions after two people missed the same step."]
   · \`suggestionsLabel\`: a SHORT (≤ 6 words) natural lead-in in your voice, specific to the question you just asked, that introduces those starters — e.g. "Ways to show the impact:", "A number you might have:", "A few starting points:", "How you could phrase it:".
 - When the useful activities have enough truthful detail for the requested bullets (real actions plus context, scope, or results where natural), OR you're told to wrap up → intent:'ready'. Put ALL gathered activities into \`description\` as concise FIRST-PERSON sentences for the bullet writer, preserving the user's facts and never inventing.
 - For intent:'ready', make \`reply\` a brief statement that you have enough and are opening the bullet options. Do NOT ask whether they want to keep talking, and do NOT ask them to type "Done".
@@ -4525,7 +4546,7 @@ READING THE REST OF THE CV: the entries above are CONTEXT — for not re-asking 
   if (isGradExperience) {
     system += `
 
-NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Their work can be coursework, projects, internships, volunteering, campus leadership, part-time or informal work. Ask about what they did, the tools or skills used, their responsibility, and real scope; never steer them toward revenue, efficiency, downtime, percentages, or a number. Do not put metric-shaped starters such as "improved ___ by ___" or "reduced ___ by ___" in suggestions or exampleAnswers.`;
+NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Their work can be coursework, projects, internships, volunteering, campus leadership, part-time or informal work. Ask about what they did, the tools or skills used, their responsibility, and real scope; never steer them toward revenue, efficiency, percentages, or a number. Do not put metric-shaped starters such as "improved ___ by ___" or "reduced ___ by ___" in suggestions or exampleAnswers.`;
   }
 
   if (focus && mustFinish) {
@@ -4556,11 +4577,31 @@ NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Th
     });
   }
 
+  // THE BUDGET. This was a flat 700 with a comment conceding that ready turns "also return
+  // source-quoted evidence + requirement checks" — and 700 could not hold them. A wrap-up
+  // turn must fill `reply` (~90 words), a whole `description` of 3-5 finished bullets, an
+  // `evidence` array quoting the transcript verbatim, and `requirementChecks`. It overran,
+  // the JSON came back cut off mid-word, and the controller served the fragment to the user
+  // as Aria's message.
+  //
+  // Keyed on `focus`, NOT on `mustFinish`: the model decides `intent` itself and can declare
+  // itself ready on any focused turn, so a budget that only widened for the FORCED wrap-up
+  // would still truncate the one the model chose. Every focused turn therefore gets room for
+  // the largest shape it is allowed to return.
+  //
+  // Headroom is free — max_tokens caps generation, it does not reserve or bill anything.
+  const maxTokens = focus ? 3000 : 1200;
+
   const data = await callJSON({
     system,
     messages: turns,
     temperature: 0.5,
-    maxTokens: 700, // ready turns also return source-quoted evidence + requirement checks
+    maxTokens,
+    // Sonnet 5 leaves adaptive thinking ON by default, and thinking shares max_tokens with
+    // the visible response — so on the Pro model the budget above was being spent on
+    // reasoning before a single character of JSON was written. Every other structured call
+    // in this file already disables it; this was the one that did not.
+    disableThinking: true,
     // Honour the caller's selected model (meta.modelId → multi-provider dispatcher). With
     // no selection it stays on the cheap base model (callJSON's default path).
     meta: { ...meta, operation: "coachChatTurn" },
@@ -4597,8 +4638,20 @@ NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Th
         !/\b(?:by|about|over|under|within)\s+_+|\d+(?:\.\d+)?\s?%|\$\s?\d/i.test(suggestion)
     );
   }
+  // THE STARTERS MUST ACTUALLY APPEAR. The prompt now asks for them in the prose as well
+  // as in the field, but a prompt is a request, not a guarantee — and that is the exact
+  // failure being fixed: they showed up only on the turns the model felt like writing them
+  // into the reply. Appended here when it did not, so the floor is "always" not "usually".
+  //
+  // Placed AFTER the entry-level filter above, or a starter that scrub just removed would
+  // walk straight back in through the reply.
+  const reply =
+    intent === "building"
+      ? appendStarters(String(data?.reply || "").trim(), suggestions, data?.suggestionsLabel)
+      : String(data?.reply || "").trim();
+
   return {
-    reply: String(data?.reply || "").trim(),
+    reply,
     intent,
     description: String(data?.description || "").trim(),
     suggestions,

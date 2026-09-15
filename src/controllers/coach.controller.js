@@ -4,6 +4,7 @@ const env = require("../config/env");
 const logger = require("../utils/logger");
 const { sanitizeScreen } = require("../utils/screenContext");
 const { sanitizeAnswerLayout } = require("../utils/answerLayout");
+const { salvageJsonReply, looksLikeJsonObject } = require("../utils/salvageJsonReply");
 const { detectRedFlags } = require("../services/atsCoach.service");
 const User = require("../models/User");
 const DraftCV = require("../models/DraftCV");
@@ -1517,6 +1518,9 @@ const chat = async (req, res) => {
     }
 
     let result;
+    // Set when the model's answer came back unreadable and we recovered a fragment. It
+    // suppresses charging below: a turn we could not read is not a turn to bill for.
+    let turnFailed = false;
     try {
       result = await aiService.coachChatTurn({
         messages: window,
@@ -1556,22 +1560,58 @@ const chat = async (req, res) => {
           .status(503)
           .json({ message: "AI is not configured right now. Please try again later." });
       }
-      // Claude occasionally returns the requested coaching prose without the JSON
-      // wrapper. The response itself is useful, so deliver it rather than making the
-      // user resend the exact same prompt. A focused turn defaults to "building",
-      // matching the service's safe classifier default.
+      // TWO DIFFERENT FAILURES ARRIVE HERE, and treating them as one is what put a raw
+      // JSON object into a user's chat.
+      //
+      //   (a) The model ignored the JSON instruction and answered in plain prose. That
+      //       answer is genuinely useful, so it is delivered rather than making the user
+      //       retype the same thing. This is the case the fallback was written for.
+      //
+      //   (b) The model ran out of budget mid-object. `response` is then a half-written
+      //       JSON literal, which the old code assigned straight to `reply`. `reply` is
+      //       the FIRST key the prompt asks for, so it is usually complete inside the
+      //       fragment: salvage it, and when there is nothing to salvage say so honestly
+      //       rather than showing the wreckage.
       if (aiErr instanceof aiService.AIJSONParseError && aiErr.response) {
-        logger.warn(
-          `Coach chat received non-JSON AI output; using text fallback (user=${req.user.id}, model=${modelId})`
-        );
-        result = {
-          reply: aiErr.response,
-          intent: focus ? "building" : "answer",
-          description: "",
-          suggestions: [],
-          exampleAnswers: [],
-          suggestionsLabel: "",
-        };
+        if (aiErr.truncated || looksLikeJsonObject(aiErr.response)) {
+          const salvaged = salvageJsonReply(aiErr.response);
+          logger.warn(
+            `Coach chat AI output truncated/unparseable (user=${req.user.id}, model=${modelId}, salvaged=${salvaged.length} chars)`
+          );
+          // Too little to be worth showing. Returning here is deliberate: falling through
+          // with an empty reply would push a blank bubble into the transcript — where it
+          // would be persisted and replayed to the model on every later turn — and bill
+          // for it.
+          if (salvaged.length < 20) {
+            return res
+              .status(502)
+              .json({ message: "That answer got cut off. Say that again and I'll pick it up." });
+          }
+          turnFailed = true;
+          result = {
+            reply: salvaged,
+            // Never 'ready'. The `description` a ready turn exists to produce is precisely
+            // what was lost, and claiming ready would hand the client an empty one and
+            // start a bullet generation the user PAYS for.
+            intent: focus ? "building" : "answer",
+            description: "",
+            suggestions: [],
+            exampleAnswers: [],
+            suggestionsLabel: "",
+          };
+        } else {
+          logger.warn(
+            `Coach chat received non-JSON AI output; using text fallback (user=${req.user.id}, model=${modelId})`
+          );
+          result = {
+            reply: aiErr.response,
+            intent: focus ? "building" : "answer",
+            description: "",
+            suggestions: [],
+            exampleAnswers: [],
+            suggestionsLabel: "",
+          };
+        }
       } else {
         console.error("Coach chat AI error:", aiErr.message);
         return res.status(502).json({ message: "Couldn't continue right now. Please try again." });
@@ -1588,7 +1628,11 @@ const chat = async (req, res) => {
     // 'building'/'ready' (focused build-with) is free on LIGHT, metered on FLAGSHIP.
     let charged = false;
     let freeRemaining = Math.max(0, FREE_DAILY_CHATS - pre.used);
-    if (intent === "answer") {
+    // A turn we could not read is not a turn to bill for. The old code charged for the
+    // raw-JSON dump exactly as it would for a good answer.
+    if (turnFailed) {
+      // nothing spent
+    } else if (intent === "answer") {
       const c = await commitChatTurn(user, pre, cost, tier);
       if (c.insufficient) {
         // They can't pay for a general answer — don't leak the reply. (On LIGHT they
