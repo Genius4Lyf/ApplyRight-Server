@@ -249,6 +249,25 @@ const userSchema = new mongoose.Schema(
     },
     resetPasswordToken: String,
     resetPasswordExpire: Date,
+    // CONTACT DETAILS REUSED ACROSS EVERY CV.
+    //
+    // `phone` was read in four places (studio.controller.personalInfoFromUser, the CV
+    // builder's Heading prefill, and updateProfile's own whitelist) and declared in none
+    // of them — so the Profile page's phone input saved to a field that did not exist,
+    // Mongoose dropped it in strict mode, the request still returned 200, and the value
+    // came back empty on the next read. Users re-typed their number into every new CV
+    // because the app was quietly losing it, not because it never asked to keep it.
+    //
+    // `location` is new. It maps to the CV contact block's `address`; the names differ
+    // because the CV field predates this one and renaming it would touch every template.
+    phone: {
+      type: String,
+      default: "",
+    },
+    location: {
+      type: String,
+      default: "",
+    },
     portfolioUrl: {
       type: String,
       default: "",
@@ -294,6 +313,13 @@ const userSchema = new mongoose.Schema(
         default: true,
       },
       hideSkillsAiPrompt: {
+        type: Boolean,
+        default: false,
+      },
+      // Set only by the "Don't show again" control on Aria's offer to remember a contact
+      // detail. Deliberately distinct from dismissing that card once: "Not now" closes it
+      // for this CV and she may ask again, this says stop asking at all.
+      hideContactSavePrompt: {
         type: Boolean,
         default: false,
       },

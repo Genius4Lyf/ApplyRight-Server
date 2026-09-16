@@ -931,15 +931,21 @@ const recompute = async (req, res) => {
 // Prefill a new CV's contact block from the user's profile.
 //
 // MIRRORS the CV builder's Heading.jsx populateForm — same fields, same name join, and
-// the same restraint: only fill what the profile actually has, and leave `address`
-// blank because User doesn't store one. Two surfaces disagreeing about what "your
-// details" means is exactly the kind of thing users notice and don't trust.
+// the same restraint: only fill what the profile actually has. Two surfaces disagreeing
+// about what "your details" means is exactly the kind of thing users notice and don't
+// trust.
+//
+// `address` used to be left blank here with a note that User doesn't store a location.
+// It does now, as `location` — the names differ because the CV contact field predates
+// the profile one. `phone` was always read here and was silently never stored; both are
+// real fields now, so both actually prefill.
 const personalInfoFromUser = (user = {}) => {
   const info = {};
   const nameParts = [user.firstName, user.otherName, user.lastName].filter(Boolean);
   if (nameParts.length) info.fullName = nameParts.join(" ");
   if (user.email) info.email = user.email;
   if (user.phone) info.phone = user.phone;
+  if (user.location) info.address = user.location;
   if (user.linkedinUrl) info.linkedin = user.linkedinUrl;
   if (user.portfolioUrl) info.website = user.portfolioUrl;
   // Seeded, not read: from here on the DRAFT owns the title, so tailoring one CV to a
@@ -988,7 +994,7 @@ const buildStart = async (req, res) => {
     }
 
     const user = await User.findById(req.user.id).select(
-      "firstName otherName lastName email phone linkedinUrl portfolioUrl"
+      "firstName otherName lastName email phone location linkedinUrl portfolioUrl"
     );
     const personalInfo = personalInfoFromUser(user || {});
 

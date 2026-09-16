@@ -30,6 +30,7 @@ exports.updateProfile = async (req, res) => {
       lastName,
       otherName,
       phone,
+      location,
       linkedinUrl,
       portfolioUrl,
       currentJobTitle,
@@ -48,6 +49,7 @@ exports.updateProfile = async (req, res) => {
     if (lastName) updateFields.lastName = lastName;
     if (otherName !== undefined) updateFields.otherName = otherName;
     if (phone !== undefined) updateFields.phone = phone;
+    if (location !== undefined) updateFields.location = location;
     if (linkedinUrl !== undefined) updateFields.linkedinUrl = linkedinUrl;
     if (portfolioUrl !== undefined) updateFields.portfolioUrl = portfolioUrl;
     if (currentJobTitle !== undefined) updateFields.currentJobTitle = currentJobTitle;
@@ -71,6 +73,9 @@ exports.updateProfile = async (req, res) => {
       }
       if (settings.hideSkillsAiPrompt !== undefined) {
         updateFields["settings.hideSkillsAiPrompt"] = settings.hideSkillsAiPrompt;
+      }
+      if (settings.hideContactSavePrompt !== undefined) {
+        updateFields["settings.hideContactSavePrompt"] = settings.hideContactSavePrompt;
       }
       // Notification preferences — whitelist each key so a client can't write
       // arbitrary fields into the settings subdoc.
