@@ -12,6 +12,21 @@
 // Free tier's one-time live-interview taste (seconds). Lifetime, never resets.
 const FREE_TASTE_SEC = 300; // 5 minutes
 
+// The Aria-call taste: one short spoken build, on the FIRST role. Lifetime, never resets.
+//
+// Two minutes, not five. A build call is a different shape from an interview taste — it is
+// roughly three exchanges, which is enough to feel that talking is easier than typing and
+// deliberately NOT enough to finish a role. It also costs real money on every new account
+// that tries it (GPT-Live bills a flat $0.05/min), so the taste is sized to convert rather
+// than to complete.
+const ARIA_CALL_FREE_TASTE_SEC = 120; // 2 minutes
+
+// Per-call hard cap (seconds) — the Aria-call equivalent of MAX_SESSION_SEC_BY_TIER.
+// Flat rather than tier-split: a call is bounded by what it is FOR (one role, one project),
+// not by what the caller pays. The balance is what actually limits a session —
+// budgetCap = min(cap, balance) — and ARIA_LIVE_MAX_SESSION_SEC backstops both.
+const ARIA_CALL_MAX_SESSION_SEC = 600; // 10 minutes
+
 // Minimum interview length (seconds) before the AI scorecard ("review") is run.
 // The grading call is the costly part of a session, so we only spend it once the
 // candidate has done a substantial interview — this stops "End & review" from
@@ -228,6 +243,41 @@ const CATALOG = {
     amountUsd: 42,
     minutes: 300,
   },
+  // ── Aria call minutes ──
+  //
+  // A SEPARATE ladder from the interview top-ups above, and priced differently on purpose:
+  // GPT-Live bills a flat $0.05/min (~₦78) for the voice layer no matter who is talking,
+  // where a realtime interview is mostly Aria listening and measured nearer ₦45/min. With
+  // our own coachChatTurn doing the thinking behind it, true cost lands around ₦85/min — so
+  // this ladder runs ₦150 → ₦117 per minute, thinner margins than the interview packs and
+  // the honest consequence of a pricier voice layer.
+  //
+  // purpose "aria_topup" is what routes the grant to ariaCall.secondsRemaining instead of
+  // liveInterview.secondsRemaining. See subscription.grantEntitlement.
+  aria_10: {
+    id: "aria_10",
+    label: "10 Aria call minutes",
+    purpose: "aria_topup",
+    amountNgn: 1500,
+    amountUsd: 2,
+    minutes: 10,
+  },
+  aria_30: {
+    id: "aria_30",
+    label: "30 Aria call minutes",
+    purpose: "aria_topup",
+    amountNgn: 3900,
+    amountUsd: 5,
+    minutes: 30,
+  },
+  aria_60: {
+    id: "aria_60",
+    label: "60 Aria call minutes",
+    purpose: "aria_topup",
+    amountNgn: 7000,
+    amountUsd: 9,
+    minutes: 60,
+  },
   // One-time clean CV download (after the free first download).
   //
   // ₦500 is the NIGERIAN price only. A confidently-foreign buyer is forced onto USD
@@ -392,6 +442,8 @@ const getItem = (planId) => CATALOG[planId] || null;
 module.exports = {
   CATALOG,
   FREE_TASTE_SEC,
+  ARIA_CALL_FREE_TASTE_SEC,
+  ARIA_CALL_MAX_SESSION_SEC,
   MIN_REVIEW_SEC,
   MAX_SESSION_SEC_BY_TIER,
   EST_COST_NGN_PER_MIN,

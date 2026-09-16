@@ -94,6 +94,34 @@ const userSchema = new mongoose.Schema(
         segmentsMinted: { type: Number, default: 0 },
       },
     },
+    // Aria call minutes — the live BUILD calls (roles and projects), metered separately
+    // from the interview above.
+    //
+    // A SECOND BALANCE, deliberately, not a relabelling of liveInterview. The two are
+    // different products bought by different people for different reasons: a student who
+    // buys help describing a job they had should not find those minutes eaten by interview
+    // practice, and the two cost us different amounts per minute, so they have to be
+    // priceable independently. Same shape as liveInterview field-for-field so the
+    // reserve-then-reconcile logic reads identically in both places.
+    //
+    // Every path is declared explicitly. An undeclared path is dropped by strict mode
+    // without an error — a 200 that stores nothing — which this codebase has been caught
+    // by twice (User.phone, targetJob.keywords).
+    ariaCall: {
+      secondsRemaining: { type: Number, default: 0 },
+      periodExpiresAt: { type: Date, default: null },
+      // The first-role taste (lifetime, never reset), capped at ARIA_CALL_FREE_TASTE_SEC.
+      freeTasteUsedSec: { type: Number, default: 0 },
+      activeReservation: {
+        reservationId: { type: String, default: null },
+        reservedSec: { type: Number, default: 0 },
+        startedAt: { type: Date, default: null },
+        mode: { type: String, enum: ["free", "paid", null], default: null },
+        // The OpenAI session this reservation is bound to, so the sideband that closes
+        // it and the reconcile that settles it are talking about the same call.
+        sessionId: { type: String, default: null },
+      },
+    },
     // CV PDF downloads. Free users get one clean download (lifetime taste); after
     // that they buy ₦500 single-download passes or subscribe (paid = unlimited).
     downloads: {

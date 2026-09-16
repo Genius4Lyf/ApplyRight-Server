@@ -197,6 +197,9 @@ app.use("/api/billing", require("./routes/billing.routes"));
 app.use("/api/feedback", require("./routes/feedback.routes"));
 app.use("/api/ai-feedback", require("./routes/aiFeedback.routes"));
 app.use("/api/interview-prep", require("./routes/interviewPrep.routes"));
+// Aria Live — the spoken CV build. Its own mount (and its own minute balance) rather than a
+// branch of interview-prep: they are different products that happen to share a transport.
+app.use("/api/aria-live", require("./routes/ariaLive.routes"));
 app.use("/api/agent", require("./routes/agent.routes"));
 app.use("/api/admin", require("./routes/admin.routes"));
 app.use("/api/system", require("./routes/system.routes"));

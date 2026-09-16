@@ -29,6 +29,18 @@ const envSchema = z.object({
   REALTIME_SPEED: z.coerce.number().positive().optional(), // optional voice speed, e.g. 1.1 (snappier)
   REALTIME_RETENTION_RATIO: z.coerce.number().positive().max(1).default(0.8), // <1.0 prunes old turns to cap per-turn input cost
   REALTIME_POST_INSTRUCTION_TOKENS: z.coerce.number().int().positive().default(4000), // per-response input cap (excl. cached instructions)
+  // Aria Live — the build calls, on OpenAI's GPT-Live (a DIFFERENT endpoint from the
+  // Realtime API above: POST /v1/live/sessions, no ephemeral client secret, our server
+  // does the SDP exchange). The interview stays on gpt-realtime-2.1-mini, which is cheaper
+  // for a conversation that is mostly listening.
+  OPENAI_ARIA_LIVE_API_KEY: z.string().optional(), // dedicated key so build-call spend is trackable apart from interview spend; does NOT fall back (Aria Live 503s if unset)
+  ARIA_LIVE_MODEL: z.string().default("gpt-live-1"),
+  ARIA_LIVE_VOICE: z.string().default("marin"),
+  ARIA_LIVE_MAX_SESSION_SEC: z.coerce.number().int().positive().default(600), // cost guardrail per call
+  // The backend model GPT-Live delegates to. "client" means OUR OWN coachChatTurn does
+  // the thinking, which is the whole point: a spoken build must ask exactly what a typed
+  // build asks. "responses" is here only as an escape hatch.
+  ARIA_LIVE_DELEGATION: z.enum(["client", "responses"]).default("client"),
   ADMOB_SSV_KEYS_URL: z
     .string()
     .url()

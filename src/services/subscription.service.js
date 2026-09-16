@@ -208,16 +208,27 @@ const grantEntitlement = async (payment) => {
       description: `Bought ${item.credits || 0} credits (${item.label || item.id})`,
       status: "completed",
     });
+  } else if (item.purpose === "aria_topup") {
+    // Aria CALL minutes — the spoken CV build, a different balance from the interview.
+    //
+    // An explicit branch, NOT a fall-through to the catch-all below, because the failure
+    // mode is silent and expensive: an Aria pack that landed in liveInterview would top up
+    // interview practice with money paid for build help, and nothing would error. The two
+    // balances exist precisely so that cannot happen.
+    await User.updateOne(
+      { _id: payment.userId },
+      { $inc: { "ariaCall.secondsRemaining": minutesSec } }
+    );
   } else {
-    // Minute top-up: add minutes only, leave tier/expiry untouched.
+    // Interview minute top-up: add minutes only, leave tier/expiry untouched.
     await User.updateOne(
       { _id: payment.userId },
       { $inc: { "liveInterview.secondsRemaining": minutesSec } }
     );
   }
 
-  // Only paid-plan purchases receive an email. Credit packs, download passes, and
-  // interview-minute top-ups are fulfilled silently in-app.
+  // Only paid-plan purchases receive an email. Credit packs, download passes, and both
+  // kinds of minute top-up are fulfilled silently in-app.
   if (item.purpose === "subscription") {
     await sendPlanReceiptSafely(payment, item);
   }
