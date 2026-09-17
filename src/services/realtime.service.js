@@ -32,8 +32,7 @@ const buildTruncation = () => {
     type: "retention_ratio",
     retention_ratio: Number.isFinite(ratio) && ratio > 0 && ratio <= 1 ? ratio : 0.8,
     token_limits: {
-      post_instructions:
-        Number.isFinite(postInstr) && postInstr > 0 ? Math.round(postInstr) : 4000,
+      post_instructions: Number.isFinite(postInstr) && postInstr > 0 ? Math.round(postInstr) : 4000,
     },
   };
 };
@@ -54,7 +53,9 @@ const buildTruncation = () => {
 const VAD_EAGERNESS = ["low", "medium", "high", "auto"];
 
 const buildTurnDetection = () => {
-  const want = String(process.env.REALTIME_VAD_EAGERNESS || "low").trim().toLowerCase();
+  const want = String(process.env.REALTIME_VAD_EAGERNESS || "low")
+    .trim()
+    .toLowerCase();
   if (want === "server_vad") return buildServerVadFallback();
   return {
     type: "semantic_vad",
@@ -109,16 +110,39 @@ const SET_SPEAKER_TOOL = {
   },
 };
 
+// Aria Live: the call's own way to END ITSELF, once the interview is genuinely done and the
+// user has agreed. Same shape and same client dispatch as hand_off_to_next above — fired
+// after her audio has finished playing, so her goodbye is never cut off — because it is the
+// same problem: a conversation deciding for itself that it is over, instead of a stopwatch.
+//
+// Why it matters beyond tidiness: without it the only ways a call ends are the user
+// remembering to press End, or the clock. Either way someone pays for minutes of silence
+// after the useful part is over. Only attached for Aria Live sessions (enableFinishTool).
+const FINISH_TOOL = {
+  type: "function",
+  name: "finish_interview",
+  description:
+    "Call this ONLY after BOTH of these are true: (1) you have recapped what you covered and asked whether there is anything else to add or change, and (2) the user has clearly agreed that you can wrap up. Say a short goodbye first — telling them you are turning it into bullet points — and THEN call this. It ends the call. Never call it on your own judgement alone, never mid-way through something they are saying, and never while they are still adding detail.",
+  parameters: { type: "object", properties: {}, required: [] },
+};
+
 const buildSessionConfig = (
   instructions,
   model,
   voice,
-  { enableHandoff = false, enableSpeakerTool = false, turnDetection } = {}
+  {
+    enableHandoff = false,
+    enableSpeakerTool = false,
+    enableFinishTool = false,
+    turnDetection,
+    speed: speedOverride,
+  } = {}
 ) => {
   // Optional voice playback speed (e.g. 1.1 for a snappier, less-draggy delivery).
-  // Only included when REALTIME_SPEED is set, so we never risk a 400 by default.
+  // Only included when set, so we never risk a 400 by default. A per-session speed (Aria
+  // Live's "speak a bit slower") wins over the environment's REALTIME_SPEED.
   const output = { voice };
-  const speed = Number(process.env.REALTIME_SPEED);
+  const speed = Number(speedOverride ?? process.env.REALTIME_SPEED);
   if (Number.isFinite(speed) && speed > 0) output.speed = speed;
 
   const session = {
@@ -141,6 +165,7 @@ const buildSessionConfig = (
   const tools = [];
   if (enableHandoff) tools.push(HANDOFF_TOOL);
   if (enableSpeakerTool) tools.push(SET_SPEAKER_TOOL);
+  if (enableFinishTool) tools.push(FINISH_TOOL);
   if (tools.length) {
     session.tools = tools;
     session.tool_choice = "auto";
@@ -155,7 +180,7 @@ const buildLegacySessionConfig = (
   instructions,
   model,
   voice,
-  { enableHandoff = false, enableSpeakerTool = false, turnDetection } = {}
+  { enableHandoff = false, enableSpeakerTool = false, enableFinishTool = false, turnDetection } = {}
 ) => {
   const cfg = {
     model,
@@ -171,6 +196,7 @@ const buildLegacySessionConfig = (
   const tools = [];
   if (enableHandoff) tools.push(HANDOFF_TOOL);
   if (enableSpeakerTool) tools.push(SET_SPEAKER_TOOL);
+  if (enableFinishTool) tools.push(FINISH_TOOL);
   if (tools.length) {
     cfg.tools = tools;
     cfg.tool_choice = "auto";
@@ -193,6 +219,8 @@ const mintRealtimeSession = async ({
   maxSessionSec: maxSessionSecOverride,
   enableHandoff = false,
   enableSpeakerTool = false,
+  enableFinishTool = false,
+  speed,
 }) => {
   // Dedicated realtime key so live-interview spend is tracked on its own OpenAI
   // account. Intentionally does NOT fall back to OPENAI_API_KEY — the live voice
@@ -224,7 +252,7 @@ const mintRealtimeSession = async ({
   const post = (body) => axios.post(CLIENT_SECRETS_URL, body, { headers, timeout: 15000 });
 
   const turnDetection = buildTurnDetection();
-  const opts = { enableHandoff, enableSpeakerTool, turnDetection };
+  const opts = { enableHandoff, enableSpeakerTool, enableFinishTool, turnDetection, speed };
 
   // Attempt order on a 400. The middle step matters: without it, a session where
   // semantic_vad is rejected would fall straight through to the LEGACY flat shape,
@@ -284,6 +312,8 @@ const mintRealtimeSession = async ({
 };
 
 module.exports = {
+  FINISH_TOOL,
+  buildSessionConfig,
   mintRealtimeSession,
   RealtimeUnavailableError,
   ALLOWED_VOICES,

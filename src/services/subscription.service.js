@@ -28,6 +28,8 @@ const receiptLinesFor = (item) => {
   } else if (item.purpose === "download") {
     const n = item.downloads || 0;
     lines.push(`${n} clean CV download${n === 1 ? "" : "s"} (no watermark)`);
+  } else if (item.purpose === "aria_topup") {
+    lines.push(`${item.minutes || 0} Aria call minute${item.minutes === 1 ? "" : "s"} added`);
   } else {
     // topup — live interview minutes
     lines.push(`${item.minutes || 0} live interview minute${item.minutes === 1 ? "" : "s"} added`);
@@ -401,4 +403,7 @@ module.exports = {
   downloadStatus,
   consumeDownload,
   refundDownload,
+  // Exported for tests: the receipt's wording is how a buyer learns WHICH minutes they
+  // bought, and the two balances are only useful if that line is right.
+  receiptLinesFor,
 };

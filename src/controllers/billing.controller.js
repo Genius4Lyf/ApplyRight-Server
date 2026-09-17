@@ -10,7 +10,6 @@ const settingsService = require("../services/settings.service");
 const {
   getItem,
   FREE_TASTE_SEC,
-  ARIA_CALL_FREE_TASTE_SEC,
   ARIA_CALL_MAX_SESSION_SEC,
   MIN_REVIEW_SEC,
 } = require("../config/catalog");
@@ -310,10 +309,6 @@ const entitlementFor = (user) => {
   // Aria CALL minutes — the spoken CV build. A separate balance from the interview above,
   // reported separately so each surface can show the one it actually spends.
   const ac = user.ariaCall || {};
-  const ariaFreeTasteRemaining = Math.max(
-    0,
-    ARIA_CALL_FREE_TASTE_SEC - (ac.freeTasteUsedSec || 0)
-  );
   const dl = subscription.downloadStatus(user);
   // Human-readable plan name for the UI. Only meaningful while the subscription is
   // still active (tier !== "free"); an expired plan falls back to no label so the
@@ -331,14 +326,10 @@ const entitlementFor = (user) => {
     minutesRemaining: Math.floor((li.secondsRemaining || 0) / 60),
     secondsRemaining: li.secondsRemaining || 0,
     freeTasteRemainingSec: tier === "free" ? freeTasteRemaining : 0,
-    // The Aria-call balance. Unlike the interview taste above this is NOT gated on the
-    // free tier: the first-role taste is about never having spoken to Aria before, not
-    // about what you pay, and a subscriber who has never made a build call should still
-    // get to find out what one is.
+    // The Aria-call balance. Purchased minutes only — Aria calls have no free taste.
     ariaCall: {
       minutesRemaining: Math.floor((ac.secondsRemaining || 0) / 60),
       secondsRemaining: ac.secondsRemaining || 0,
-      freeTasteRemainingSec: ariaFreeTasteRemaining,
       maxSessionSec: ARIA_CALL_MAX_SESSION_SEC,
     },
     // Credit balances: the resettable per-tier allowance, the persistent wallet,
@@ -371,7 +362,9 @@ exports.createCheckout = async (req, res) => {
       return res.status(400).json({ message: "Unknown plan", code: "UNKNOWN_PLAN" });
     }
     if (item.retired === true) {
-      return res.status(400).json({ message: "This plan is no longer available", code: "PLAN_RETIRED" });
+      return res
+        .status(400)
+        .json({ message: "This plan is no longer available", code: "PLAN_RETIRED" });
     }
 
     const user = await User.findById(req.user.id);

@@ -1,4 +1,5 @@
 const bcrypt = require("bcryptjs");
+const ARIA_CALL = require("../config/ariaCallSettings");
 const User = require("../models/User");
 const Resume = require("../models/Resume");
 const Application = require("../models/Application");
@@ -76,6 +77,24 @@ exports.updateProfile = async (req, res) => {
       }
       if (settings.hideContactSavePrompt !== undefined) {
         updateFields["settings.hideContactSavePrompt"] = settings.hideContactSavePrompt;
+      }
+      if (settings.hideAriaCallTips !== undefined) {
+        updateFields["settings.hideAriaCallTips"] = !!settings.hideAriaCallTips;
+      }
+      // Aria call preferences. Normalised field by field — only a field the client actually
+      // sent is written, and only as a listed value, so a partial update ("just change the
+      // voice") never resets the other three to defaults.
+      if (settings.ariaCall && typeof settings.ariaCall === "object") {
+        const allowed = {
+          depth: ARIA_CALL.DEPTHS,
+          style: ARIA_CALL.STYLES,
+          voice: ARIA_CALL.VOICES,
+          pace: ARIA_CALL.PACES,
+        };
+        for (const [field, values] of Object.entries(allowed)) {
+          const value = settings.ariaCall[field];
+          if (values.includes(value)) updateFields[`settings.ariaCall.${field}`] = value;
+        }
       }
       // Notification preferences — whitelist each key so a client can't write
       // arbitrary fields into the settings subdoc.
@@ -172,7 +191,8 @@ exports.getActivityStats = async (req, res) => {
       }
       if (scores.length) {
         const localBest = Math.max(...scores);
-        bestInterviewScore = bestInterviewScore === null ? localBest : Math.max(bestInterviewScore, localBest);
+        bestInterviewScore =
+          bestInterviewScore === null ? localBest : Math.max(bestInterviewScore, localBest);
       }
 
       const t = a.updatedAt || a.createdAt;
@@ -281,7 +301,9 @@ exports.changeEmail = async (req, res) => {
     res.json(safe);
   } catch (err) {
     if (err.code === 11000) {
-      return res.status(409).json({ message: "That email is already in use.", code: "EMAIL_TAKEN" });
+      return res
+        .status(409)
+        .json({ message: "That email is already in use.", code: "EMAIL_TAKEN" });
     }
     if (err.name === "ValidationError") {
       return res.status(400).json({ message: "Please enter a valid email address." });
@@ -309,12 +331,16 @@ exports.changePassword = async (req, res) => {
 
     const match = await bcrypt.compare(currentPassword, user.password);
     if (!match) {
-      return res.status(401).json({ message: "Current password is incorrect.", code: "BAD_PASSWORD" });
+      return res
+        .status(401)
+        .json({ message: "Current password is incorrect.", code: "BAD_PASSWORD" });
     }
 
     const same = await bcrypt.compare(newPassword, user.password);
     if (same) {
-      return res.status(400).json({ message: "New password must be different from the current one." });
+      return res
+        .status(400)
+        .json({ message: "New password must be different from the current one." });
     }
 
     const salt = await bcrypt.genSalt(10);

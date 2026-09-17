@@ -202,12 +202,13 @@ exports.getDashboardStats = async (req, res, next) => {
         $group: {
           _id: null,
           totalClicks: { $sum: { $cond: [{ $eq: ["$results.clicked", true] }, 1, 0] } },
-          totalSaved: { $sum: { $cond: [{ $eq: ["$results.saved", true] }, 1, 0] } }
-        }
-      }
+          totalSaved: { $sum: { $cond: [{ $eq: ["$results.saved", true] }, 1, 0] } },
+        },
+      },
     ]);
 
-    const jobEngagement = engagementStats.length > 0 ? engagementStats[0] : { totalClicks: 0, totalSaved: 0 };
+    const jobEngagement =
+      engagementStats.length > 0 ? engagementStats[0] : { totalClicks: 0, totalSaved: 0 };
 
     // --- Conversion Funnel ---
     const totalTailors = await Transaction.countDocuments({ type: "cv_tailor" });
@@ -315,6 +316,8 @@ exports.getRevenueStats = async (req, res) => {
 
     // Totals
     const totalRevenue = revenueByPlan.reduce((s, r) => s + r.revenue, 0);
+    // INTERVIEW minute top-ups only. Aria call minutes are a separate purpose and are
+    // reported separately (ariaTopupStats); both are already inside totalRevenue.
     const totalTopupRevenue = revenueByPlan
       .filter((r) => CATALOG[r.planId]?.purpose === "topup")
       .reduce((s, r) => s + r.revenue, 0);
@@ -397,6 +400,30 @@ exports.getRevenueStats = async (req, res) => {
         }
       : { count: 0, revenue: 0, minutes: 0, buyers: 0 };
 
+    // Aria CALL minutes (users buying time to TALK their CV out) — all-time successful.
+    // Deliberately its own line rather than folded into topupStats above: that number is
+    // labelled interview time, and merging two products into it would misreport both.
+    const ariaTopupAgg = await Payment.aggregate([
+      { $match: { status: "successful", purpose: "aria_topup" } },
+      {
+        $group: {
+          _id: null,
+          count: { $sum: 1 },
+          revenue: { $sum: "$amountNgn" },
+          minutes: { $sum: "$minutesGranted" },
+          buyers: { $addToSet: "$userId" },
+        },
+      },
+    ]);
+    const ariaTopupStats = ariaTopupAgg.length
+      ? {
+          count: ariaTopupAgg[0].count,
+          revenue: ariaTopupAgg[0].revenue,
+          minutes: ariaTopupAgg[0].minutes,
+          buyers: ariaTopupAgg[0].buyers.length,
+        }
+      : { count: 0, revenue: 0, minutes: 0, buyers: 0 };
+
     // Subscriptions expiring within the next 7 days (churn-watch / renewal nudge).
     const in7days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     const expiringSoon = await User.countDocuments({
@@ -414,6 +441,7 @@ exports.getRevenueStats = async (req, res) => {
         planPopularity,
         mostPopularPlan,
         topupStats,
+        ariaTopupStats,
         expiringSoon,
         activeSubsByTier,
         activeSubsTotal,
@@ -468,10 +496,7 @@ exports.getAllUsers = async (req, res, next) => {
       filter["subscription.expiresAt"] = { $gt: now };
     } else if (status === "free") {
       and.push({
-        $or: [
-          { "subscription.expiresAt": null },
-          { "subscription.expiresAt": { $lte: now } },
-        ],
+        $or: [{ "subscription.expiresAt": null }, { "subscription.expiresAt": { $lte: now } }],
       });
     }
 
@@ -605,9 +630,7 @@ exports.updateUserInterviewUnlock = async (req, res) => {
   try {
     const { unlock } = req.body;
     if (typeof unlock !== "boolean") {
-      return res
-        .status(400)
-        .json({ success: false, message: "`unlock` must be true or false" });
+      return res.status(400).json({ success: false, message: "`unlock` must be true or false" });
     }
 
     const user = await User.findById(req.params.id);
@@ -1023,11 +1046,7 @@ exports.getEngagementStats = async (req, res) => {
     };
 
     // --- Text-AI cost estimate (list prices × logged tokens → NGN) ---
-    const {
-      NGN_PER_USD,
-      priceForModel,
-      EST_COST_NGN_PER_MIN,
-    } = require("../config/catalog");
+    const { NGN_PER_USD, priceForModel, EST_COST_NGN_PER_MIN } = require("../config/catalog");
     let textTotalUsd = 0;
     const byOperation = textCostRaw
       .map((g) => {
@@ -1063,7 +1082,9 @@ exports.getEngagementStats = async (req, res) => {
 
     // --- Flagship cost check: is the 10cr/turn price backed by real usage yet? ---
     const models = await SettingsService.getModels();
-    const flagshipRows = Object.entries(models).filter(([, m]) => m.tier === "flagship" && m.exposed);
+    const flagshipRows = Object.entries(models).filter(
+      ([, m]) => m.tier === "flagship" && m.exposed
+    );
     const apiModelToRow = {}; // apiModel name -> { modelId, inUsdPer1M, outUsdPer1M }
     flagshipRows.forEach(([modelId, m]) => {
       apiModelToRow[m.apiModel] = { modelId, inUsdPer1M: m.inUsdPer1M, outUsdPer1M: m.outUsdPer1M };
@@ -1184,10 +1205,7 @@ exports.getEngagementStats = async (req, res) => {
         User.countDocuments({
           ...nonAdmin,
           hasEverPurchased: true,
-          $or: [
-            { "subscription.expiresAt": null },
-            { "subscription.expiresAt": { $lte: now } },
-          ],
+          $or: [{ "subscription.expiresAt": null }, { "subscription.expiresAt": { $lte: now } }],
         }),
       ]);
 
@@ -1203,7 +1221,12 @@ exports.getEngagementStats = async (req, res) => {
         flagshipCostCheck,
         retailNgnPerCredit: RETAIL_NGN_PER_CREDIT,
         buildGuard,
-        funnel: { signups, createdCv: createdCvUsers, createdApplication: createdAppUsers, paid: paidEver },
+        funnel: {
+          signups,
+          createdCv: createdCvUsers,
+          createdApplication: createdAppUsers,
+          paid: paidEver,
+        },
         subscriptions: { activePaid, churned },
       },
     });

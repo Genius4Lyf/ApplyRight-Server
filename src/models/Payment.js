@@ -55,8 +55,18 @@ const paymentSchema = new mongoose.Schema(
       index: true,
     },
     purpose: {
+      // MUST list every purpose in config/catalog.js. createCheckout writes this straight
+      // from the catalog item, so a purpose missing here throws a ValidationError that the
+      // controller's catch flattens into "Failed to start checkout" — a 500 with no clue
+      // which field was wrong. "aria_topup" was added to the catalog without this and every
+      // Aria-call purchase failed at the first step. tests/catalogPurposes.test.js now pins
+      // the two lists together.
+      //
+      // "topup" is interview minutes; "aria_topup" is Aria call minutes. They are separate
+      // balances on the user (liveInterview vs ariaCall) and separate lines in the admin
+      // revenue view, so they must stay separate here too.
       type: String,
-      enum: ["subscription", "topup", "download", "credit"],
+      enum: ["subscription", "topup", "aria_topup", "download", "credit"],
       required: true,
     },
     planId: {

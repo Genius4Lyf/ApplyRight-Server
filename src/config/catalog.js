@@ -12,14 +12,9 @@
 // Free tier's one-time live-interview taste (seconds). Lifetime, never resets.
 const FREE_TASTE_SEC = 300; // 5 minutes
 
-// The Aria-call taste: one short spoken build, on the FIRST role. Lifetime, never resets.
-//
-// Two minutes, not five. A build call is a different shape from an interview taste — it is
-// roughly three exchanges, which is enough to feel that talking is easier than typing and
-// deliberately NOT enough to finish a role. It also costs real money on every new account
-// that tries it (GPT-Live bills a flat $0.05/min), so the taste is sized to convert rather
-// than to complete.
-const ARIA_CALL_FREE_TASTE_SEC = 120; // 2 minutes
+// Aria calls have NO free taste (owner's decision, 2026-09-17). Talking to Aria on a call is
+// paid from the first second; the launch video carries the "what is this" job a taste would
+// have. Unlike the interview's FREE_TASTE_SEC above, there is no lifetime allowance to spend.
 
 // Per-call hard cap (seconds) — the Aria-call equivalent of MAX_SESSION_SEC_BY_TIER.
 // Flat rather than tier-split: a call is bounded by what it is FOR (one role, one project),
@@ -245,12 +240,17 @@ const CATALOG = {
   },
   // ── Aria call minutes ──
   //
-  // A SEPARATE ladder from the interview top-ups above, and priced differently on purpose:
-  // GPT-Live bills a flat $0.05/min (~₦78) for the voice layer no matter who is talking,
-  // where a realtime interview is mostly Aria listening and measured nearer ₦45/min. With
-  // our own coachChatTurn doing the thinking behind it, true cost lands around ₦85/min — so
-  // this ladder runs ₦150 → ₦117 per minute, thinner margins than the interview packs and
-  // the honest consequence of a pricier voice layer.
+  // A SEPARATE ladder from the interview top-ups above, because they are separate balances
+  // bought by different people: minutes spent describing a job you had are not minutes spent
+  // rehearsing an interview.
+  //
+  // Same ENGINE as the interview though (gpt-realtime-2.1-mini), so the same ~₦50/min cost
+  // basis — and a build call is even more listening-heavy than an interview, since Aria asks
+  // one short question and the user talks. Priced ₦100 → ₦83/min for 50% → 40% margin, and
+  // strictly descending so "best value" on the last row is literally true.
+  //
+  // This ladder started at ₦150/min when the feature ran on gpt-live-1 at a flat $0.05/min.
+  // Moving to the interview's engine is where the ₦500 came off a 10-minute pack.
   //
   // purpose "aria_topup" is what routes the grant to ariaCall.secondsRemaining instead of
   // liveInterview.secondsRemaining. See subscription.grantEntitlement.
@@ -258,24 +258,24 @@ const CATALOG = {
     id: "aria_10",
     label: "10 Aria call minutes",
     purpose: "aria_topup",
-    amountNgn: 1500,
-    amountUsd: 2,
+    amountNgn: 1000,
+    amountUsd: 1.5,
     minutes: 10,
   },
   aria_30: {
     id: "aria_30",
     label: "30 Aria call minutes",
     purpose: "aria_topup",
-    amountNgn: 3900,
-    amountUsd: 5,
+    amountNgn: 2700,
+    amountUsd: 3.5,
     minutes: 30,
   },
   aria_60: {
     id: "aria_60",
     label: "60 Aria call minutes",
     purpose: "aria_topup",
-    amountNgn: 7000,
-    amountUsd: 9,
+    amountNgn: 5000,
+    amountUsd: 6,
     minutes: 60,
   },
   // One-time clean CV download (after the free first download).
@@ -442,7 +442,6 @@ const getItem = (planId) => CATALOG[planId] || null;
 module.exports = {
   CATALOG,
   FREE_TASTE_SEC,
-  ARIA_CALL_FREE_TASTE_SEC,
   ARIA_CALL_MAX_SESSION_SEC,
   MIN_REVIEW_SEC,
   MAX_SESSION_SEC_BY_TIER,

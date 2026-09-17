@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const ARIA_CALL = require("../config/ariaCallSettings");
 const { validateRegistrationEmail } = require("../utils/emailValidation");
 
 const userSchema = new mongoose.Schema(
@@ -110,12 +111,13 @@ const userSchema = new mongoose.Schema(
     ariaCall: {
       secondsRemaining: { type: Number, default: 0 },
       periodExpiresAt: { type: Date, default: null },
-      // The first-role taste (lifetime, never reset), capped at ARIA_CALL_FREE_TASTE_SEC.
-      freeTasteUsedSec: { type: Number, default: 0 },
       activeReservation: {
         reservationId: { type: String, default: null },
         reservedSec: { type: Number, default: 0 },
         startedAt: { type: Date, default: null },
+        // Only "paid" is ever written now — Aria calls have no free taste. "free" stays in the
+        // enum on purpose: a reservation stored before the taste was removed must not make every
+        // later user.save() on that account fail validation.
         mode: { type: String, enum: ["free", "paid", null], default: null },
         // The OpenAI session this reservation is bound to, so the sideband that closes
         // it and the reconcile that settles it are talking about the same call.
@@ -350,6 +352,38 @@ const userSchema = new mongoose.Schema(
       hideContactSavePrompt: {
         type: Boolean,
         default: false,
+      },
+      // Set only by "Don't show this again" on the tips shown before an Aria call. Until it
+      // is set, the tips appear before the first call of every build session — the moment
+      // someone is about to spend minutes is exactly when "give Aria real detail" pays off.
+      hideAriaCallTips: {
+        type: Boolean,
+        default: false,
+      },
+      // How they like their Aria calls: depth, style, voice, pace. Every path declared
+      // explicitly — an undeclared one is dropped by strict mode with a 200 and no error.
+      // Allowed values live in config/ariaCallSettings.js, the same list the call reads.
+      ariaCall: {
+        depth: {
+          type: String,
+          enum: ARIA_CALL.DEPTHS,
+          default: ARIA_CALL.DEFAULT_CALL_SETTINGS.depth,
+        },
+        style: {
+          type: String,
+          enum: ARIA_CALL.STYLES,
+          default: ARIA_CALL.DEFAULT_CALL_SETTINGS.style,
+        },
+        voice: {
+          type: String,
+          enum: ARIA_CALL.VOICES,
+          default: ARIA_CALL.DEFAULT_CALL_SETTINGS.voice,
+        },
+        pace: {
+          type: String,
+          enum: ARIA_CALL.PACES,
+          default: ARIA_CALL.DEFAULT_CALL_SETTINGS.pace,
+        },
       },
       // Notification preferences (Account hub → Notifications tab). Stored
       // user intent; consulted by the relevant send sites as they get wired up.

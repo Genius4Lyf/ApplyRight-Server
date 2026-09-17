@@ -6179,6 +6179,12 @@ module.exports = {
   HUNT_LEVELS_ADDABLE,
   HUNT_LEVEL_STATUS,
   experienceCoachingBlock,
+  // Aria Live builds a spoken project interview from the SAME funnel the typed one uses.
+  // It was imported there without being exported here, so every project call failed at
+  // mint while experience calls (which never touch it) worked — and the controller test
+  // mocks the whole service, so nothing noticed. tests/ariaLivePrompt.test.js runs the
+  // real builder now.
+  projectFunnel,
   // Exported for the same reason experienceCoachingBlock is: it returns the exact prompt
   // fragment the model is handed, so asserting on that string is a faithful proxy for
   // "what Aria is told about the card in front of the user" without an AI round-trip.
