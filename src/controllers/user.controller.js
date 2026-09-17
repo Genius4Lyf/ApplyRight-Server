@@ -81,6 +81,9 @@ exports.updateProfile = async (req, res) => {
       if (settings.hideAriaCallTips !== undefined) {
         updateFields["settings.hideAriaCallTips"] = !!settings.hideAriaCallTips;
       }
+      if (settings.seenAriaCallIntro !== undefined) {
+        updateFields["settings.seenAriaCallIntro"] = !!settings.seenAriaCallIntro;
+      }
       // Aria call preferences. Normalised field by field — only a field the client actually
       // sent is written, and only as a listed value, so a partial update ("just change the
       // voice") never resets the other three to defaults.

@@ -360,6 +360,15 @@ const userSchema = new mongoose.Schema(
         type: Boolean,
         default: false,
       },
+      // The one-and-only announcement of the voice feature, shown once the first role form is
+      // filled in. Distinct from hideAriaCallTips above: that is an opt-OUT of a brief the user
+      // keeps being given before each call, this is "has this account ever been told calls
+      // exist". Set the moment it is displayed, never unset — nobody should meet a product
+      // announcement twice.
+      seenAriaCallIntro: {
+        type: Boolean,
+        default: false,
+      },
       // How they like their Aria calls: depth, style, voice, pace. Every path declared
       // explicitly — an undeclared one is dropped by strict mode with a 200 and no error.
       // Allowed values live in config/ariaCallSettings.js, the same list the call reads.
