@@ -421,9 +421,7 @@ const normalizeSkills = (skills) => {
  */
 const compareSkills = (candidateSkills, requiredSkills) => {
   const candidateNormalized = normalizeSkills(candidateSkills);
-  const candidateSet = new Set(
-    candidateNormalized.map((s) => s.canonical.toLowerCase())
-  );
+  const candidateSet = new Set(candidateNormalized.map((s) => s.canonical.toLowerCase()));
 
   const matched = [];
   const missing = [];
@@ -465,9 +463,7 @@ const compareSkills = (candidateSkills, requiredSkills) => {
 
     // Fuzzy match against each candidate skill
     let bestFuzzy = { rating: 0, index: -1 };
-    const candidateArr = candidateNormalized.map((s) =>
-      s.canonical.toLowerCase()
-    );
+    const candidateArr = candidateNormalized.map((s) => s.canonical.toLowerCase());
 
     if (candidateArr.length > 0) {
       const result = stringSimilarity.findBestMatch(reqKey, candidateArr);
@@ -483,10 +479,7 @@ const compareSkills = (candidateSkills, requiredSkills) => {
         matchedWith: candidateNormalized.find(
           (s) =>
             s.canonical.toLowerCase() ===
-            candidateArr[
-              stringSimilarity.findBestMatch(reqKey, candidateArr)
-                .bestMatchIndex
-            ]
+            candidateArr[stringSimilarity.findBestMatch(reqKey, candidateArr).bestMatchIndex]
         )?.canonical,
       });
     } else {
@@ -498,24 +491,16 @@ const compareSkills = (candidateSkills, requiredSkills) => {
     }
   }
 
-  const mustHaveTotal = requiredSkills.filter(
-    (s) => s.importance === "must_have"
-  ).length;
-  const mustHaveMatched = matched.filter(
-    (s) => s.importance === "must_have"
-  ).length;
+  const mustHaveTotal = requiredSkills.filter((s) => s.importance === "must_have").length;
+  const mustHaveMatched = matched.filter((s) => s.importance === "must_have").length;
 
   return {
     matched,
     missing,
     matchRate:
-      requiredSkills.length > 0
-        ? Math.round((matched.length / requiredSkills.length) * 100)
-        : 100,
+      requiredSkills.length > 0 ? Math.round((matched.length / requiredSkills.length) * 100) : 100,
     mustHaveMatchRate:
-      mustHaveTotal > 0
-        ? Math.round((mustHaveMatched / mustHaveTotal) * 100)
-        : 100,
+      mustHaveTotal > 0 ? Math.round((mustHaveMatched / mustHaveTotal) * 100) : 100,
   };
 };
 
@@ -543,6 +528,116 @@ const buildSurfaceIndex = () => {
 // Surfaces too ambiguous to scan for in CV prose (e.g. "cv" → Computer Vision
 // would match constantly in a CV builder).
 const AMBIGUOUS_TEXT_SURFACES = new Set(["cv"]);
+
+// Initialisms we will never INVENT, because they are ordinary English words. "Information
+// Technology Support" must not start matching the word "its".
+//
+// Deliberately narrower than AMBIGUOUS_TEXT_SURFACES: this suppresses only spellings WE
+// derived. A name or alias the employer actually wrote is never filtered — if a posting
+// says its own second name for a thing is "ITS", that is their word and it stands.
+const AMBIGUOUS_INITIALISMS = new Set([
+  "its",
+  "and",
+  "the",
+  "for",
+  "are",
+  "was",
+  "has",
+  "had",
+  "can",
+  "all",
+  "out",
+  "our",
+  "one",
+  "two",
+  "new",
+  "now",
+  "but",
+  "not",
+  "you",
+  "use",
+  "way",
+  "day",
+  "set",
+  "get",
+  "run",
+  "top",
+  "key",
+  "own",
+  "end",
+  "add",
+  "any",
+  "how",
+  "may",
+  "old",
+  "see",
+  "too",
+  "who",
+  "why",
+  "yet",
+  "per",
+]);
+
+// Words that carry no weight in an initialism. "Permit to Work" is PTW *with* the "to",
+// so both spellings are generated and each stands on its own.
+const INITIALISM_STOPWORDS = new Set([
+  "and",
+  "or",
+  "of",
+  "the",
+  "for",
+  "to",
+  "in",
+  "on",
+  "with",
+  "a",
+  "an",
+]);
+
+// How separators split a name. Deliberately NOT ".": "node.js" and "c++" are single
+// tokens and must stay that way.
+const SURFACE_SEPARATORS = /[\s\-_/]+/;
+
+/**
+ * Separator-insensitive re-spellings of one surface, plus its initialism(s).
+ *
+ * The SYNONYMS table is software/office vocabulary, so a trade requirement like
+ * "Permit-to-Work" reaches requirementSurfaces with exactly ONE spelling: the hyphenated
+ * one. A CV that says "permit to work" or "PTW" then reads as NOT covered — and Aria asks
+ * about something the user already wrote down, which is the fastest way to feel unheard.
+ *
+ * Derived rather than listed, so it works for every trade instead of the ones we happened
+ * to think of. Generated surfaces are held to a higher bar than supplied ones (3+ chars,
+ * never a common word), because a spelling WE invented that over-matches would mark a
+ * requirement covered when it is not — a lie, where a miss is only a nuisance.
+ *
+ * @param {string} value
+ * @returns {string[]} lowercased surface forms, possibly empty
+ */
+const derivedSurfaces = (value) => {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!raw) return [];
+
+  const tokens = raw
+    .split(SURFACE_SEPARATORS)
+    .map((token) => token.replace(/[^a-z0-9+#.]/g, ""))
+    .filter(Boolean);
+  if (tokens.length < 2) return []; // one word — nothing to re-spell
+
+  const out = [tokens.join(" "), tokens.join("")];
+
+  const initialisms = [tokens, tokens.filter((token) => !INITIALISM_STOPWORDS.has(token))].map(
+    (list) => list.map((token) => token[0]).join("")
+  );
+
+  initialisms.forEach((initialism) => {
+    if (initialism.length >= 3 && !AMBIGUOUS_INITIALISMS.has(initialism)) out.push(initialism);
+  });
+
+  return out;
+};
 
 // Does `lowerText` mention `surface`? Uses alphanumeric boundaries for ALL
 // surfaces so we never report a false "covered" (e.g. "react" must not match
@@ -575,7 +670,9 @@ const requirementSurfaces = (requirement) => {
 
   const idx = buildSurfaceIndex();
   const add = (value) => {
-    const v = String(value || "").trim().toLowerCase();
+    const v = String(value || "")
+      .trim()
+      .toLowerCase();
     if (v) surfaces.add(v);
   };
 
@@ -584,6 +681,11 @@ const requirementSurfaces = (requirement) => {
     const canonicalLower = normalizeSkill(value).canonical.toLowerCase();
     add(canonicalLower);
     if (idx.has(canonicalLower)) for (const s of idx.get(canonicalLower)) add(s);
+    // Spacing/hyphenation variants and the initialism, for BOTH the raw value and its
+    // canonical form — the table only knows one spelling of anything it does know, and
+    // nothing at all about the trades it was never written for.
+    derivedSurfaces(value).forEach(add);
+    derivedSurfaces(canonicalLower).forEach(add);
   };
 
   expand(name);
@@ -636,7 +738,9 @@ const computeKeywordCoverage = (keywords = [], { text = "", skills = [] } = {}) 
   let skillMatched = new Set();
   if (Array.isArray(skills) && skills.length && keywords.length) {
     const cmp = compareSkills(skills, keywords);
-    skillMatched = new Set(cmp.matched.map((m) => m.canonical?.toLowerCase() || m.name.toLowerCase()));
+    skillMatched = new Set(
+      cmp.matched.map((m) => m.canonical?.toLowerCase() || m.name.toLowerCase())
+    );
   }
 
   const results = (keywords || [])
@@ -647,8 +751,7 @@ const computeKeywordCoverage = (keywords = [], { text = "", skills = [] } = {}) 
       const norm = normalizeSkill(name);
       const canonicalLower = norm.canonical.toLowerCase();
 
-      let covered =
-        skillMatched.has(canonicalLower) || skillMatched.has(name.toLowerCase());
+      let covered = skillMatched.has(canonicalLower) || skillMatched.has(name.toLowerCase());
 
       // Free-text fallback, through the shared matcher — so a keyword's JD aliases count
       // here exactly as they do in the scorer and the skills panel.

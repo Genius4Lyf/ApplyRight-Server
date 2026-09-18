@@ -59,7 +59,9 @@ describe("scoreSkills — the earned weight is a subset sum, not a second guess"
   });
 
   it("scores nothing matched as zero and no requirements as the neutral 50", () => {
-    expect(scoreSkills(["Baking"], [{ name: "Kubernetes", importance: "must_have" }]).score).toBe(0);
+    expect(scoreSkills(["Baking"], [{ name: "Kubernetes", importance: "must_have" }]).score).toBe(
+      0
+    );
     expect(scoreSkills(["Kubernetes"], []).score).toBe(50);
   });
 
@@ -75,7 +77,12 @@ describe("scoreSkills — the earned weight is a subset sum, not a second guess"
 });
 
 describe("compareSkills — JD aliases, and ids that map results back", () => {
-  const YARDI = { id: "req_a1", name: "Yardi Voyager", importance: "must_have", aliases: ["Yardi"] };
+  const YARDI = {
+    id: "req_a1",
+    name: "Yardi Voyager",
+    importance: "must_have",
+    aliases: ["Yardi"],
+  };
 
   it("matches on an alias the posting itself used", () => {
     const { matched, missing } = compareSkills(["Yardi"], [YARDI]);
@@ -108,9 +115,9 @@ describe("compareSkills — JD aliases, and ids that map results back", () => {
   });
 
   it("is unaffected by an empty or absent alias list", () => {
-    expect(compareSkills(["Kubernetes"], [{ name: "Kubernetes", aliases: [] }]).matched).toHaveLength(
-      1
-    );
+    expect(
+      compareSkills(["Kubernetes"], [{ name: "Kubernetes", aliases: [] }]).matched
+    ).toHaveLength(1);
     expect(compareSkills(["Kubernetes"], [{ name: "Kubernetes" }]).matched).toHaveLength(1);
   });
 
@@ -152,9 +159,9 @@ describe("mentionsRequirement — the single free-text answer", () => {
     const text = "Ran the reporting in Excel";
     expect(mentionsRequirement("Excel", text)).toBe(true);
     expect(mentionsRequirement({ name: "Excel", importance: "must_have" }, text)).toBe(true);
-    expect(
-      mentionsRequirement({ id: "r1", name: "Excel", type: "tool", aliases: [] }, text)
-    ).toBe(true);
+    expect(mentionsRequirement({ id: "r1", name: "Excel", type: "tool", aliases: [] }, text)).toBe(
+      true
+    );
   });
 
   it("is false for empty text and for a nameless requirement", () => {
@@ -175,6 +182,54 @@ describe("requirementSurfaces", () => {
   it("returns an empty set for a nameless requirement", () => {
     expect(requirementSurfaces({ aliases: ["Yardi"] }).size).toBe(0);
     expect(requirementSurfaces("").size).toBe(0);
+  });
+});
+
+// The SYNONYMS table is software/office vocabulary, so anything outside it arrived with
+// exactly ONE spelling — the one the job description happened to use. A real posting
+// (Operations & Maintenance Technician) proved the cost: a CV saying "permit to work" or
+// "PTW" read as NOT covered, so Aria would ask about something already written down.
+describe("requirementSurfaces — derived spellings, for the trades the table never knew", () => {
+  it("matches a hyphenated requirement written with spaces, or as an initialism", () => {
+    const ptw = { name: "Permit-to-Work", aliases: [] };
+    expect(mentionsRequirement(ptw, "I handled permit-to-work sign-off")).toBe(true);
+    expect(mentionsRequirement(ptw, "I completed permit to work forms daily")).toBe(true);
+    expect(mentionsRequirement(ptw, "I raised the PTW before every isolation")).toBe(true);
+  });
+
+  it("still refuses text that merely shares a word with the requirement", () => {
+    expect(mentionsRequirement({ name: "Permit-to-Work" }, "I worked on permits generally")).toBe(
+      false
+    );
+  });
+
+  it("drops the stopwords to reach the initialism people actually write", () => {
+    const hsse = requirementSurfaces({ name: "Health, Safety, Security and Environmental" });
+    expect(hsse.has("hsse")).toBe(true);
+  });
+
+  it("NEVER invents an initialism that is an ordinary English word", () => {
+    // "Information Technology Support" → "its" would match almost every bullet ever written.
+    const surfaces = requirementSurfaces({ name: "Information Technology Support" });
+    expect(surfaces.has("its")).toBe(false);
+    expect(
+      mentionsRequirement({ name: "Information Technology Support" }, "I reviewed its accuracy")
+    ).toBe(false);
+  });
+
+  it("NEVER invents an initialism shorter than three characters", () => {
+    // "da" would match the word "da"; a two-letter guess is not worth a false 'covered'.
+    expect(requirementSurfaces({ name: "Data Analysis" }).has("da")).toBe(false);
+  });
+
+  it("suppresses only spellings WE derived — an alias the employer wrote still stands", () => {
+    const supplied = { name: "Information Technology Support", aliases: ["ITS"] };
+    expect(requirementSurfaces(supplied).has("its")).toBe(true);
+  });
+
+  it("leaves dotted and punctuated tech names as single tokens", () => {
+    expect(mentionsRequirement("Node.js", "Shipped a Node.js API")).toBe(true);
+    expect(mentionsRequirement("C++", "Optimised C++ hot paths")).toBe(true);
   });
 });
 

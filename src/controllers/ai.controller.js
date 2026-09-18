@@ -635,7 +635,7 @@ const skillReviewGroups = ({
 // the next generation. Survivable while only 5 candidates were ever offered. Not once the
 // role canon can offer twenty.
 const declineSkills = async (req, res) => {
-  const { draftId, declines } = req.body || {};
+  const { draftId, declines, undecline } = req.body || {};
   if (!draftId || draftId === "new") {
     return res.status(400).json({ message: "draftId is required" });
   }
@@ -647,6 +647,36 @@ const declineSkills = async (req, res) => {
     }
 
     const existing = Array.isArray(draft.skillDeclines) ? draft.skillDeclines : [];
+
+    // TAKING A "NO" BACK.
+    //
+    // A decline is honoured everywhere and forever — buildHuntProbe refuses to ask again,
+    // and targetRequirementsForEntry drops it from every entry. That is right while the
+    // answer is hidden, but the interview checklist now SHOWS it, and a visible permanent
+    // state with no way out turns a mis-tap into a requirement the user can never evidence.
+    // Matched on name, the way every reader already matches.
+    if (Array.isArray(undecline) && undecline.length) {
+      const drop = new Set(
+        undecline
+          .map((row) =>
+            String(typeof row === "string" ? row : row?.name || "")
+              .trim()
+              .toLowerCase()
+          )
+          .filter(Boolean)
+      );
+      const kept = existing.filter((row) => !drop.has(String(row?.name || "").toLowerCase()));
+      const removed = existing.length - kept.length;
+      if (removed) {
+        draft.skillDeclines = kept;
+        // Same reason as below: what may be asked about has changed, so a cached
+        // generation is no longer the answer to the current question.
+        draft.skillsGenCache = undefined;
+        await draft.save();
+      }
+      return res.json({ declined: 0, undeclined: removed });
+    }
+
     const seen = new Set(existing.map((row) => String(row?.name || "").toLowerCase()));
     const added = [];
     (Array.isArray(declines) ? declines : []).slice(0, 40).forEach((row) => {

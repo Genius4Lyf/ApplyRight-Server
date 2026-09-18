@@ -718,11 +718,13 @@ EXTRACTION RULES:
 1. "detectedJobTitle": The specific role being advertised. Look for "Position:", "Role:", "Job Title:", or the main heading. Do NOT include the company name.
 2. "detectedCompany": The hiring company. Ignore recruitment agencies and job boards (e.g., "Jobberman", "LinkedIn"). If not found, use null.
 3. "requiredSkills": Skills explicitly listed under "Requirements", "Must have", "Required", or strongly emphasized. Keep each item ATOMIC: a tool, technology, method, certification, domain area, or discrete professional skill — never a whole requirement sentence. Include its type, common aliases, 2-5 short activity signals that would constitute evidence, and the shortest supporting JD phrase.
+   - ALIASES MUST include the standard abbreviation or initialism where one exists ("Permit-to-Work" → "PTW"; "Health, Safety, Security and Environmental" → "HSSE"), plus any other name THIS posting uses for the same thing. These are what let a CV that spells it differently still count.
+   - A DEGREE FIELD OR ACADEMIC DISCIPLINE the posting asks for a qualification IN (e.g. "an OND in Mechanical Engineering") belongs in "requiredEducation", NOT here. Those are alternatives you hold, not work you did, and listing them as skills crowds out the competencies the role is actually testing.
 4. "preferredSkills": Skills listed under "Preferred", "Nice to have", "Bonus", or mentioned casually. Use the same atomic typed shape as requiredSkills.
 5. "requiredYearsExperience": Number of years explicitly required (e.g., "3+ years"). If not stated, use 0.
 6. "requiredEducation": { "degree": "<minimum degree>", "field": "<field if specified>" }. If not stated, use null.
 7. "seniorityLevel": One of "intern", "entry", "mid", "senior", "lead", "manager", "director", "executive". Infer from title and requirements.
-8. "companyType": Infer ONE of "startup", "enterprise", "agency", "nonprofit", "government", "smb", "unknown" from any signals (funding/stage, team size, "fast-paced startup", "Fortune 500", "agency"/"clients", "NGO"/"nonprofit", ".gov"/"public sector"). This field MAY be inferred; if there's no signal, use "unknown".
+8. "companyType": Infer ONE of "startup", "enterprise", "agency", "nonprofit", "government", "smb", "unknown" from any signals (funding/stage, team size, "fast-paced startup", "Fortune 500", "agency"/"clients", "NGO"/"nonprofit", ".gov"/"public sector"). Treat a large established operator as "enterprise" wherever it is in the world — phrases like "leading integrated energy company", "multinational", "group of companies", "listed", or a described footprint across a country or continent are enough. Do not default to "unknown" merely because you do not recognise the employer's name. This field MAY be inferred; use "unknown" only when the posting gives no signal at all.
 9. "industry": A short label if evident (e.g. "fintech", "healthcare"), else null.
 10. "keyResponsibilities": An array of the 3–5 most important responsibilities, each a short string, copied or paraphrased from the JD (never invented). Use [] if none.
 
@@ -763,8 +765,19 @@ Return JSON matching exactly:
  * DraftCV.targetJob.brief. `companyType` is the one inferred field (defaults
  * to "unknown"); everything else mirrors the extraction verbatim.
  */
-const buildRoleBrief = async (jobDescription, { title } = {}, meta = {}) => {
-  const req = await extractJobRequirements(jobDescription, meta);
+const buildRoleBrief = async (jobDescription, { title } = {}, meta = {}) =>
+  roleBriefFromExtraction(await extractJobRequirements(jobDescription, meta), title);
+
+/**
+ * The PURE half of buildRoleBrief: raw extraction → the brief shape stored on
+ * DraftCV.targetJob.brief. Split out so the caps, the type whitelist, the qualification
+ * marking and the `requirements` composition can be tested without an AI round-trip —
+ * every suite that touches buildRoleBrief mocks it, so none of this was ever asserted.
+ *
+ * @param {object} req  extractJobRequirements output
+ * @param {string} [title]  the caller's title, which WINS over the detected one
+ */
+const roleBriefFromExtraction = (req, title) => {
   const cleanList = (value, cap = 8) =>
     (Array.isArray(value) ? value : [])
       .map((item) => String(item || "").trim())
@@ -799,11 +812,41 @@ const buildRoleBrief = async (jobDescription, { title } = {}, meta = {}) => {
       plausibleExperienceTypes: [],
     };
   };
+  // A QUALIFICATION is not a thing you did in a job — it is a thing you hold.
+  //
+  // A real posting (Operations & Maintenance Technician) asked for a diploma "in Electrical
+  // Engineering, Mechanical Engineering, Instrumentation, Electronics or Sciences". The
+  // parser returned all of those as must-have SKILLS, so they filled three of seven slots,
+  // crowded out the actual competencies, and would have had the interview asking a
+  // technician whether they "did Mechanical Engineering" in a role — a question with no
+  // sensible answer. They are alternatives, too: holding one is the whole requirement.
+  //
+  // Marked rather than removed. They stay in the compact arrays so scoring is untouched —
+  // sectionScan's CREDENTIAL_PATTERNS deliberately routes degree words to the education
+  // section, and scoreEducation reads requiredEducation separately. The flag only tells the
+  // INTERVIEW not to chase them, and the checklist how to show them.
+  //
+  // Marked by a deterministic name match against requiredEducation, not by trusting the
+  // model twice: if the posting names it as the field of the qualification it asks for,
+  // that is what it is.
+  const educationText = [req?.requiredEducation?.field, req?.requiredEducation?.degree]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const isQualification = (name) => {
+    const clean = String(name || "")
+      .trim()
+      .toLowerCase();
+    return clean.length > 2 && educationText.includes(clean);
+  };
+  const markQualification = (typed) =>
+    typed && isQualification(typed.name) ? { ...typed, qualification: true } : typed;
+
   const mustHaves = (req?.requiredSkills || [])
-    .map((item) => typedSkill(item, "must_have"))
+    .map((item) => markQualification(typedSkill(item, "must_have")))
     .filter(Boolean);
   const niceToHaves = (req?.preferredSkills || [])
-    .map((item) => typedSkill(item, "nice_to_have"))
+    .map((item) => markQualification(typedSkill(item, "nice_to_have")))
     .filter(Boolean);
   const responsibilities = cleanList(req?.keyResponsibilities, 8);
   const responsibilityRequirements = responsibilities.map((name) => ({
@@ -834,15 +877,20 @@ const buildRoleBrief = async (jobDescription, { title } = {}, meta = {}) => {
     // missing that Aria (reading the typed `requirements` below) already counted as
     // covered: the generic synonym table knows industry-wide skills, only the JD knows
     // that this posting names the same system two different ways.
-    mustHaves: mustHaves.map(({ name, aliases }) => ({
+    // `qualification` rides along so the one free coverage pass the frontend already runs
+    // (useJobCoverage → /ai/keyword-coverage, which is fed from these compact arrays) can
+    // tell a credential apart from a competency without a second join.
+    mustHaves: mustHaves.map(({ name, aliases, qualification }) => ({
       name,
       importance: "must_have",
       aliases: aliases || [],
+      ...(qualification ? { qualification: true } : {}),
     })),
-    niceToHaves: niceToHaves.map(({ name, aliases }) => ({
+    niceToHaves: niceToHaves.map(({ name, aliases, qualification }) => ({
       name,
       importance: "nice_to_have",
       aliases: aliases || [],
+      ...(qualification ? { qualification: true } : {}),
     })),
     responsibilities,
     // The coach consumes this checklist. Responsibilities remain typed separately so
@@ -6144,6 +6192,7 @@ module.exports = {
   analyzeProfile,
   extractJobRequirements,
   buildRoleBrief,
+  roleBriefFromExtraction,
   inferRoleKeywords,
   recommendRoles,
   coachMessage,

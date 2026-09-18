@@ -68,6 +68,11 @@ function decodeEntities(value) {
   }
 }
 
+// How many times we will decode-and-retry when the markup turns out to be entity-encoded.
+// Two covers the double-encoding seen in the wild with room to spare; it exists to bound
+// the recursion, not because a third pass is expected.
+const MAX_UNESCAPE_PASSES = 2;
+
 /**
  * Convert a fragment of job-posting HTML to Markdown.
  *
@@ -76,16 +81,34 @@ function decodeEntities(value) {
  * Markdown is worth far more than one that throws.
  *
  * @param {string} html
+ * @param {number} [unescapePass] internal — see the escaped-twice note below
  * @returns {string} Markdown, or '' when there was nothing to convert
  */
-function htmlToMarkdown(html) {
+function htmlToMarkdown(html, unescapePass = 0) {
   const input = String(html || "").trim();
   if (!input) return "";
 
   // No tags at all — it is already plain text. Normalise its spacing and decode any
   // entities (there is no parser on this path to do it for us), rather than
   // round-tripping through one that would strip nothing.
-  if (!/<[a-z!/]/i.test(input)) return tidy(decodeEntities(input));
+  if (!/<[a-z!/]/i.test(input)) {
+    const decoded = decodeEntities(input);
+
+    // ESCAPED TWICE.
+    //
+    // Some ATSs publish their JSON-LD `description` with the HTML entity-encoded
+    // (`&lt;p&gt;`, `&amp;amp;`). There are then no tags to strip, so this plain-text
+    // branch was taken — and decoding PRODUCED the markup instead of removing it. The
+    // posting reached the user as literal `<p>` and `<img src=...>` in the job-description
+    // box, and reached the Role Brief parser as markup rather than prose.
+    //
+    // So: convert whatever the decode revealed. Capped, because the only thing standing
+    // between a decode-and-retry and an infinite loop is the cap.
+    if (unescapePass < MAX_UNESCAPE_PASSES && /<[a-z!/]/i.test(decoded)) {
+      return htmlToMarkdown(decoded, unescapePass + 1);
+    }
+    return tidy(decoded);
+  }
 
   let $;
   try {

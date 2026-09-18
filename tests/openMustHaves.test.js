@@ -125,4 +125,53 @@ describe("openMustHavesFromDraft — what the role still needs", () => {
 
     expect(names(openMustHavesFromDraft(draftWith(), mixed, 1))).toEqual(["Real Requirement"]);
   });
+
+  // A real posting asked for a diploma "in Electrical Engineering, Mechanical Engineering
+  // or Instrumentation" and the parser returned all three as must-have skills. Left alone,
+  // Aria would ask a technician whether they "did Mechanical Engineering" in a role — a
+  // question with no sensible answer, and three wasted slots out of seven.
+  describe("qualifications are never interview targets", () => {
+    const withQualification = brief([
+      { name: "Mechanical Engineering", importance: "must_have", qualification: true },
+      { name: "Permit-to-Work", importance: "must_have" },
+    ]);
+
+    it("excludes a qualification even though it is uncovered", () => {
+      expect(names(openMustHavesFromDraft(draftWith(), withQualification))).toEqual([
+        "Permit-to-Work",
+      ]);
+    });
+
+    it("returns nothing at all when every must-have is a qualification", () => {
+      const onlyQualifications = brief([
+        { name: "Electrical Engineering", importance: "must_have", qualification: true },
+      ]);
+      expect(openMustHavesFromDraft(draftWith(), onlyQualifications)).toEqual([]);
+    });
+
+    it("leaves briefs saved before the flag existed behaving exactly as they did", () => {
+      const legacy = brief([{ name: "Permit-to-Work", importance: "must_have" }]);
+      expect(names(openMustHavesFromDraft(draftWith(), legacy))).toEqual(["Permit-to-Work"]);
+    });
+  });
+
+  // The matcher now derives spacing and initialism variants, so a requirement written one
+  // way in the posting is covered by a bullet written another way. Without this, Aria
+  // re-asks about something the user has already written down.
+  it("counts a bullet that spells a requirement differently as covered", () => {
+    const ptw = brief([{ name: "Permit-to-Work", importance: "must_have" }]);
+
+    expect(
+      openMustHavesFromDraft(
+        draftWith({ experience: [{ description: "Raised the PTW before every isolation." }] }),
+        ptw
+      )
+    ).toEqual([]);
+    expect(
+      openMustHavesFromDraft(
+        draftWith({ experience: [{ description: "Completed permit to work forms daily." }] }),
+        ptw
+      )
+    ).toEqual([]);
+  });
 });

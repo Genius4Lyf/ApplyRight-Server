@@ -111,8 +111,17 @@ const draftCVSchema = new mongoose.Schema(
         // could only ever match the one canonical name, disagreeing with Aria (who reads
         // the typed `requirements` below) about the same word on the same screen.
         // Additive: briefs saved before this simply have none, and behave as they did.
-        mustHaves: [{ name: String, importance: String, aliases: [String] }],
-        niceToHaves: [{ name: String, importance: String, aliases: [String] }],
+        // `qualification` marks a credential the posting asks you to HOLD (a degree field,
+        // a licence) rather than something you DID in a role. It rides on the compact
+        // arrays for the same reason aliases do — the coverage tracker reads these, and it
+        // is what stops the interview asking someone whether they "did Mechanical
+        // Engineering" at a job. Additive: briefs saved before this simply have none.
+        mustHaves: [
+          { name: String, importance: String, aliases: [String], qualification: Boolean },
+        ],
+        niceToHaves: [
+          { name: String, importance: String, aliases: [String], qualification: Boolean },
+        ],
         responsibilities: [String],
         // Typed requirement checklist used by Aria's role-by-role interview. The
         // legacy mustHaves/niceToHaves arrays remain the scoring contract; this richer
@@ -131,6 +140,10 @@ const draftCVSchema = new mongoose.Schema(
             proofSignals: [String],
             sourceText: String,
             plausibleExperienceTypes: [String],
+            // See the note on mustHaves above. Deliberately a flag and NOT a new `type`:
+            // requirementId hashes the type, so retyping would change every id and silently
+            // strand the requirementChecks and requirementProbes already pointing at them.
+            qualification: Boolean,
           },
         ],
       },

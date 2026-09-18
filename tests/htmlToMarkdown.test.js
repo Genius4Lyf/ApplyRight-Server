@@ -83,3 +83,48 @@ describe("it never throws", () => {
     expect(htmlToMarkdown("<div><p>Unclosed paragraph<ul><li>A")).toContain("Unclosed paragraph");
   });
 });
+
+// ESCAPED TWICE — the bug a live Flair-hosted posting exposed.
+//
+// Its JSON-LD `description` was entity-encoded HTML (`&lt;p&gt;`, `&amp;amp;`). There were
+// no tags to strip, so the plain-text branch was taken and decoding PRODUCED the markup
+// instead of removing it. The posting reached the user as literal `<p>` and
+// `<img src="/api/rich-text-image?...">` in the job-description box — and reached the Role
+// Brief parser as markup rather than prose.
+describe("entity-encoded markup", () => {
+  it("converts the HTML a decode reveals, instead of handing it back as text", () => {
+    const out = htmlToMarkdown("&lt;p&gt;&lt;strong&gt;Job Purpose&lt;/strong&gt;&lt;/p&gt;");
+    expect(out).toBe("**Job Purpose**");
+    expect(out).not.toContain("<p>");
+  });
+
+  it("drops the markup a real posting carried, image tag and all", () => {
+    const out = htmlToMarkdown(
+      "&lt;p&gt;&lt;img src=&quot;/api/rich-text-image?objectName=flair__Job__c&amp;amp;fieldName=x&quot; alt=&quot;image.png&quot;&gt;&lt;/img&gt;&lt;/p&gt;&lt;p&gt;Renaissance is a leading integrated energy company.&lt;/p&gt;"
+    );
+    expect(out).toBe("Renaissance is a leading integrated energy company.");
+    expect(out).not.toContain("&amp;");
+  });
+
+  it("keeps the structure that makes a posting readable", () => {
+    const out = htmlToMarkdown(
+      "&lt;p&gt;&lt;strong&gt;Requirements&lt;/strong&gt;&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Permit-to-Work&lt;/li&gt;&lt;li&gt;HSSE&lt;/li&gt;&lt;/ul&gt;"
+    );
+    expect(out).toContain("**Requirements**");
+    expect(out).toContain("- Permit-to-Work");
+    expect(out).toContain("- HSSE");
+  });
+
+  it("leaves ordinary text that merely contains an ampersand alone", () => {
+    expect(htmlToMarkdown("Operations &amp; Maintenance Technician")).toBe(
+      "Operations & Maintenance Technician"
+    );
+  });
+
+  it("is bounded — it cannot be made to recurse without end", () => {
+    // Triple-encoded: decoded twice, then handed back rather than chased forever.
+    const tripled = "&amp;amp;lt;p&amp;amp;gt;Deep&amp;amp;lt;/p&amp;amp;gt;";
+    expect(() => htmlToMarkdown(tripled)).not.toThrow();
+    expect(htmlToMarkdown(tripled)).toContain("Deep");
+  });
+});
