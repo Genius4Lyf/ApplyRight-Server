@@ -257,7 +257,13 @@ const descriptionFromEvidence = (ledger) => {
 const declinedRequirementKeys = (draft) => {
   const rows = Array.isArray(draft?.skillDeclines) ? draft.skillDeclines : [];
   return new Set(
-    rows.map((row) => String(row?.name || "").trim().toLowerCase()).filter(Boolean)
+    rows
+      .map((row) =>
+        String(row?.name || "")
+          .trim()
+          .toLowerCase()
+      )
+      .filter(Boolean)
   );
 };
 
@@ -774,7 +780,10 @@ const generateBullets = async (req, res) => {
       try {
         noJd = await resolveNoJdContext(draft, meta);
       } catch (noJdErr) {
-        console.error("Coach resolveNoJdContext error (generateBullets, continuing):", noJdErr.message);
+        console.error(
+          "Coach resolveNoJdContext error (generateBullets, continuing):",
+          noJdErr.message
+        );
       }
     }
 
@@ -1366,7 +1375,25 @@ const chat = async (req, res) => {
     .map((m) => ({ who: m.who, text: m.text.trim() }))
     .filter((m) => m.text);
   const last = turns[turns.length - 1];
-  if ((!last || last.who !== "user") && !probeOpensTurn) {
+  // A SPOKEN INTERVIEW DOES NOT END ON THE USER'S WORD.
+  //
+  // This rule was written for typing, where the request IS the user's new turn, so the last
+  // message is theirs by construction. A call is the other way round: Aria asks the questions,
+  // so she is usually the last voice on it — always when the clock runs out mid-question, and
+  // always when the connection drops. The whole transcript is then posted once to be wrapped
+  // up, and this 400'd it before anything else ran. Observed on three real calls: the one that
+  // happened to end on the candidate's answer produced bullets, the two that ended on Aria's
+  // question produced "couldn't generate bullets" — after the minutes had been spent.
+  //
+  // A wrap-up is not a turn awaiting a reply. It asks for a summary of a finished conversation,
+  // so there is nothing for the last message to be. It still has to HAVE the candidate in it —
+  // a recording of Aria talking to herself has nothing to write bullets from.
+  const isStudioWrapUp =
+    studioInterview === true &&
+    !!focus &&
+    Number(buildTurns) >= STUDIO_INTERVIEW_TURN_CAP &&
+    turns.some((t) => t.who === "user");
+  if ((!last || last.who !== "user") && !probeOpensTurn && !isStudioWrapUp) {
     return res.status(400).json({ message: "The last message must be the user's turn." });
   }
   if (last && last.text.length > 800) {

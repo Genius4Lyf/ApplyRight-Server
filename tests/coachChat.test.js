@@ -83,7 +83,12 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       description: "",
     });
 
-    const res = await post({ draftId, currentStepId: "history", focus, messages: buildMsgs("I operated wireline tools downhole") });
+    const res = await post({
+      draftId,
+      currentStepId: "history",
+      focus,
+      messages: buildMsgs("I operated wireline tools downhole"),
+    });
 
     expect(res.statusCode).toBe(200);
     expect(res.body.intent).toBe("building");
@@ -140,7 +145,12 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       description: "Operated wireline tools downhole to log and evaluate well formations.",
     });
 
-    const res = await post({ draftId, currentStepId: "history", focus, messages: buildMsgs("we cut rig time by two days") });
+    const res = await post({
+      draftId,
+      currentStepId: "history",
+      focus,
+      messages: buildMsgs("we cut rig time by two days"),
+    });
 
     expect(res.statusCode).toBe(200);
     expect(res.body.intent).toBe("ready");
@@ -160,7 +170,12 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       description: "",
     });
 
-    const res = await post({ draftId, currentStepId: "history", focus, messages: buildMsgs("what's a good CV summary length?") });
+    const res = await post({
+      draftId,
+      currentStepId: "history",
+      focus,
+      messages: buildMsgs("what's a good CV summary length?"),
+    });
 
     expect(res.statusCode).toBe(200);
     expect(res.body.intent).toBe("answer");
@@ -174,9 +189,18 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
 
   it("focused + ANSWER past the free allowance → charges 1 credit (real spendCredits)", async () => {
     setUser({ credits: 5, ariaChat: { date: today, count: 15 } });
-    aiService.coachChatTurn.mockResolvedValue({ reply: "Keep it to 3–4 lines.", intent: "answer", description: "" });
+    aiService.coachChatTurn.mockResolvedValue({
+      reply: "Keep it to 3–4 lines.",
+      intent: "answer",
+      description: "",
+    });
 
-    const res = await post({ draftId, currentStepId: "history", focus, messages: buildMsgs("how long should my summary be?") });
+    const res = await post({
+      draftId,
+      currentStepId: "history",
+      focus,
+      messages: buildMsgs("how long should my summary be?"),
+    });
 
     expect(res.statusCode).toBe(200);
     expect(res.body.intent).toBe("answer");
@@ -191,9 +215,17 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
   it("no focus → forced 'answer', metered like /coach/ask (free window consumes a chat)", async () => {
     setUser({ credits: 5, ariaChat: { date: today, count: 2 } });
     // Even if the model said 'building', no focus forces 'answer'.
-    aiService.coachChatTurn.mockResolvedValue({ reply: "Lead with a strong verb.", intent: "building", description: "" });
+    aiService.coachChatTurn.mockResolvedValue({
+      reply: "Lead with a strong verb.",
+      intent: "building",
+      description: "",
+    });
 
-    const res = await post({ draftId, currentStepId: "history", messages: buildMsgs("how do I start a bullet?") });
+    const res = await post({
+      draftId,
+      currentStepId: "history",
+      messages: buildMsgs("how do I start a bullet?"),
+    });
 
     expect(res.statusCode).toBe(200);
     expect(res.body.intent).toBe("answer");
@@ -204,9 +236,18 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
 
   it("out of allowance + no credits: focused BUILDING still works FREE", async () => {
     setUser({ credits: 0, ariaChat: { date: today, count: 15 } });
-    aiService.coachChatTurn.mockResolvedValue({ reply: "And what changed because of it?", intent: "building", description: "" });
+    aiService.coachChatTurn.mockResolvedValue({
+      reply: "And what changed because of it?",
+      intent: "building",
+      description: "",
+    });
 
-    const res = await post({ draftId, currentStepId: "history", focus, messages: buildMsgs("I fixed the tool string") });
+    const res = await post({
+      draftId,
+      currentStepId: "history",
+      focus,
+      messages: buildMsgs("I fixed the tool string"),
+    });
 
     expect(res.statusCode).toBe(200);
     expect(res.body.intent).toBe("building");
@@ -217,9 +258,18 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
 
   it("out of allowance + no credits: focused ANSWER → 402 CHAT_LIMIT_REACHED, reply NOT leaked", async () => {
     setUser({ credits: 0, ariaChat: { date: today, count: 15 } });
-    aiService.coachChatTurn.mockResolvedValue({ reply: "SECRET ANSWER", intent: "answer", description: "" });
+    aiService.coachChatTurn.mockResolvedValue({
+      reply: "SECRET ANSWER",
+      intent: "answer",
+      description: "",
+    });
 
-    const res = await post({ draftId, currentStepId: "history", focus, messages: buildMsgs("what font should I use?") });
+    const res = await post({
+      draftId,
+      currentStepId: "history",
+      focus,
+      messages: buildMsgs("what font should I use?"),
+    });
 
     expect(res.statusCode).toBe(402);
     expect(res.body.code).toBe("CHAT_LIMIT_REACHED");
@@ -233,7 +283,10 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       draftId,
       currentStepId: "history",
       focus,
-      messages: [{ who: "user", text: "hi" }, { who: "aria", text: "hey" }],
+      messages: [
+        { who: "user", text: "hi" },
+        { who: "aria", text: "hey" },
+      ],
     });
     expect(res.statusCode).toBe(400);
     expect(aiService.coachChatTurn).not.toHaveBeenCalled();
@@ -247,7 +300,11 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
     const probe = { requirementId: "req_triage", mode: "open" };
 
     it("accepts a probe turn whose window ENDS with Aria", async () => {
-      aiService.coachChatTurn.mockResolvedValue({ reply: "Here's what they mean…", intent: "building", description: "" });
+      aiService.coachChatTurn.mockResolvedValue({
+        reply: "Here's what they mean…",
+        intent: "building",
+        description: "",
+      });
 
       const res = await post({
         draftId,
@@ -261,7 +318,11 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
     });
 
     it("accepts a probe turn with an EMPTY window — the very first thing they tap", async () => {
-      aiService.coachChatTurn.mockResolvedValue({ reply: "Here's what they mean…", intent: "building", description: "" });
+      aiService.coachChatTurn.mockResolvedValue({
+        reply: "Here's what they mean…",
+        intent: "building",
+        description: "",
+      });
 
       const res = await post({ draftId, currentStepId: "skills", probe, messages: [] });
 
@@ -299,14 +360,18 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
 
   describe("career stage threading", () => {
     beforeEach(() => {
-      aiService.coachChatTurn.mockResolvedValue({ reply: "ok", intent: "building", description: "" });
+      aiService.coachChatTurn.mockResolvedValue({
+        reply: "ok",
+        intent: "building",
+        description: "",
+      });
       // Real resolver behaviour: explicit valid stage wins, else infer from the draft.
       aiService.resolveCareerStage.mockImplementation(({ stage, draft }) =>
         ["experienced", "grad", "changer"].includes(stage)
           ? stage
           : (draft?.experience || []).some((e) => e?.title || e?.company)
-          ? "experienced"
-          : "grad"
+            ? "experienced"
+            : "grad"
       );
     });
 
@@ -355,7 +420,11 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
     });
 
     it("threads the resolved model id into coachChatTurn (default when none picked)", async () => {
-      aiService.coachChatTurn.mockResolvedValue({ reply: "hi", intent: "building", description: "" });
+      aiService.coachChatTurn.mockResolvedValue({
+        reply: "hi",
+        intent: "building",
+        description: "",
+      });
       await post({ draftId, currentStepId: "history", focus, messages: buildMsgs("I did X") });
       // The turn RUNS on the selected model — default gpt-4o-mini here — via meta.modelId.
       expect(aiService.coachChatTurn).toHaveBeenCalledWith(
@@ -365,7 +434,11 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
 
     it("a focused BUILD-WITH turn is FREE on the LIGHT model (and bumps the build counter)", async () => {
       setUser({ credits: 5, ariaChat: { date: today, count: 15 } }); // past the free daily pool
-      aiService.coachChatTurn.mockResolvedValue({ reply: "and then?", intent: "building", description: "" });
+      aiService.coachChatTurn.mockResolvedValue({
+        reply: "and then?",
+        intent: "building",
+        description: "",
+      });
 
       const res = await post({
         draftId,
@@ -388,7 +461,11 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
 
     it("the same BUILD-WITH turn on FLAGSHIP charges the flagship cost (10) and still bumps the counter", async () => {
       setUser({ credits: 25, ariaChat: { date: today, count: 0 } }); // free pool untouched
-      aiService.coachChatTurn.mockResolvedValue({ reply: "and then?", intent: "building", description: "" });
+      aiService.coachChatTurn.mockResolvedValue({
+        reply: "and then?",
+        intent: "building",
+        description: "",
+      });
 
       const res = await post({
         draftId,
@@ -413,7 +490,11 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
 
     it("a FLAGSHIP build-with turn the user can't afford is refused BEFORE the AI call", async () => {
       setUser({ credits: 3, ariaChat: { date: today, count: 0 } }); // 3 < 10
-      aiService.coachChatTurn.mockResolvedValue({ reply: "LEAKED", intent: "building", description: "" });
+      aiService.coachChatTurn.mockResolvedValue({
+        reply: "LEAKED",
+        intent: "building",
+        description: "",
+      });
 
       const res = await post({
         draftId,
@@ -435,7 +516,11 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
 
     it("a FLAGSHIP general chat charges on the FIRST message of the day — it never rides the free pool", async () => {
       setUser({ credits: 25, ariaChat: { date: today, count: 0 } }); // pool completely unused
-      aiService.coachChatTurn.mockResolvedValue({ reply: "here you go", intent: "answer", description: "" });
+      aiService.coachChatTurn.mockResolvedValue({
+        reply: "here you go",
+        intent: "answer",
+        description: "",
+      });
 
       const res = await post({
         draftId,
@@ -456,7 +541,11 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
     it("a FLAGSHIP general chat with no credits → 403 INSUFFICIENT_CREDITS, not CHAT_LIMIT_REACHED", async () => {
       // Free pool wide open — this user is NOT out of chats, they just can't afford Pro.
       setUser({ credits: 0, ariaChat: { date: today, count: 0 } });
-      aiService.coachChatTurn.mockResolvedValue({ reply: "SECRET", intent: "answer", description: "" });
+      aiService.coachChatTurn.mockResolvedValue({
+        reply: "SECRET",
+        intent: "answer",
+        description: "",
+      });
 
       const res = await post({
         draftId,
@@ -474,7 +563,11 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
 
     it("a metered general answer on FLAGSHIP charges the flagship cost, even on a paid plan", async () => {
       setUser({ credits: 5, subscription: paidSub, ariaChat: { date: today, count: 15 } });
-      aiService.coachChatTurn.mockResolvedValue({ reply: "here you go", intent: "answer", description: "" });
+      aiService.coachChatTurn.mockResolvedValue({
+        reply: "here you go",
+        intent: "answer",
+        description: "",
+      });
 
       const res = await post({
         draftId,
@@ -491,7 +584,11 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
 
     it("a metered general answer on LIGHT is FREE on an active paid plan", async () => {
       setUser({ credits: 5, subscription: paidSub, ariaChat: { date: today, count: 15 } });
-      aiService.coachChatTurn.mockResolvedValue({ reply: "sure", intent: "answer", description: "" });
+      aiService.coachChatTurn.mockResolvedValue({
+        reply: "sure",
+        intent: "answer",
+        description: "",
+      });
 
       const res = await post({
         draftId,
@@ -504,5 +601,124 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       expect(res.body.charged).toBe(false); // light is included on paid plans
       expect(Transaction.create).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("POST /api/coach/chat — banking a SPOKEN interview", () => {
+  // THE BUG, from three real calls: a spoken interview is posted once at the end to be wrapped
+  // up, and Aria asks the questions, so SHE is normally the last voice on it — always when the
+  // clock stops mid-question, always when the connection drops. The "last message must be the
+  // user's turn" rule was written for typing, where the request IS the user's new turn, and it
+  // 400'd the wrap-up before anything else ran. The one call that happened to end on the
+  // candidate's answer produced bullets; the two that ended on Aria's question produced
+  // "couldn't generate bullets" — after the minutes had been spent.
+  let mockUser;
+
+  const setUser = (over = {}) => {
+    mockUser = {
+      _id: mockUserId,
+      id: mockUserId,
+      email: "candidate@example.com",
+      credits: 5,
+      ariaChat: { date: today, count: 0 },
+      save: jest.fn().mockResolvedValue(true),
+      ...over,
+    };
+    User.findById.mockReturnValue({ select: jest.fn().mockResolvedValue(mockUser) });
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setUser();
+    jwt.verify.mockReturnValue({ id: mockUserId });
+    User.updateOne.mockResolvedValue({ modifiedCount: 1 });
+    Transaction.create.mockResolvedValue({});
+    SystemSettings.findOne.mockResolvedValue({ maintenanceMode: false });
+    DraftCV.findById.mockResolvedValue({
+      userId: mockUserId,
+      experience: [{ _sortId: "sort-1", title: "Wireline Operator", company: "Schlumberger" }],
+      projects: [],
+      skills: [],
+      professionalSummary: "",
+      targetJob: { title: "", description: "" },
+    });
+    aiService.coachChatTurn.mockResolvedValue({
+      reply: "Here's what I heard.",
+      intent: "ready",
+      description: "Ran the unit and kept it up through the operation.",
+    });
+  });
+
+  const post = (body) =>
+    request(app).post("/api/coach/chat").set("Authorization", "Bearer mock-token").send(body);
+
+  // The shape a call actually has: Aria opens, they answer, Aria asks again — and the clock
+  // stops there.
+  const endsOnAria = [
+    { who: "aria", text: "Tell me what you did day to day." },
+    { who: "user", text: "I kept the acquisition unit running through the whole operation." },
+    { who: "aria", text: "Did you ever spot something wrong before anyone else?" },
+  ];
+
+  it("accepts a wrap-up that ends on ARIA, and writes the description", async () => {
+    const res = await post({
+      draftId,
+      currentStepId: "history",
+      focus,
+      messages: endsOnAria,
+      buildTurns: 10,
+      studioInterview: true,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.readyToDraft).toBe(true);
+    expect(res.body.description).toBeTruthy();
+    expect(aiService.coachChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ mustFinish: true })
+    );
+  });
+
+  it("still refuses a TYPED turn that ends on Aria — that rule was right", async () => {
+    const res = await post({
+      draftId,
+      currentStepId: "history",
+      focus,
+      messages: endsOnAria,
+      buildTurns: 3,
+      studioInterview: true,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(aiService.coachChatTurn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a wrap-up with no candidate in it — nothing to write bullets from", async () => {
+    const res = await post({
+      draftId,
+      currentStepId: "history",
+      focus,
+      messages: [
+        { who: "aria", text: "Hello? Can you hear me?" },
+        { who: "aria", text: "I'll wait a moment." },
+      ],
+      buildTurns: 10,
+      studioInterview: true,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(aiService.coachChatTurn).not.toHaveBeenCalled();
+  });
+
+  it("does not let an UNFOCUSED turn skip the rule by claiming a turn count", async () => {
+    const res = await post({
+      draftId,
+      currentStepId: "history",
+      messages: endsOnAria,
+      buildTurns: 10,
+      studioInterview: true,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(aiService.coachChatTurn).not.toHaveBeenCalled();
   });
 });

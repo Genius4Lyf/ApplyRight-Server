@@ -302,3 +302,115 @@ describe("settleReservation — what the call actually cost", () => {
     );
   });
 });
+
+describe("POST /api/aria-live/session — the call is given the conversation so far", () => {
+  // Both halves of the build share one memory: the typed interview already reads the spoken
+  // turns (they are in the same chat window), and this is the other direction. Without it a
+  // second call opens with "tell me what you actually did" and bills the user to repeat
+  // themselves — which is exactly what happened after the first call dropped.
+  const pinned = "sort-1";
+  const stream = [
+    { who: "aria", text: "Which section next?" },
+    { who: "pinrole", sortId: "sort-OLD" },
+    { who: "user", text: "A DIFFERENT role entirely." },
+    { who: "rolerecord", sortId: "sort-OLD" },
+    { who: "pinrole", sortId: pinned },
+    { who: "aria", text: "Tell me what you did day to day." },
+    { who: "user", text: "I kept the acquisition unit running." },
+    { who: "calltips" },
+    { who: "user", text: "This one never sent.", failed: true },
+    { who: "aria", text: "Did you spot anything before anyone else?" },
+  ];
+
+  const withDraft = (draft) =>
+    DraftCV.findOne.mockReturnValue({
+      select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(draft) }),
+    });
+
+  const promptArgs = () => ariaLive.buildAriaLiveInstructions.mock.calls.at(-1)[0];
+
+  beforeEach(() => {
+    asUser({ secondsRemaining: 600 });
+    User.updateOne.mockResolvedValue({ modifiedCount: 1 });
+  });
+
+  it("passes THIS entry's turns, and only the real ones", async () => {
+    withDraft({
+      experience: [{ _sortId: pinned, title: "Wireline Operator" }],
+      coachChats: { studio: stream },
+    });
+
+    await post({ section: "experience", draftId: "60c72b2f9b1d8b2bad6e1a22", sortId: pinned });
+
+    const { priorTurns } = promptArgs();
+    expect(priorTurns.map((t) => t.text)).toEqual([
+      "Tell me what you did day to day.",
+      "I kept the acquisition unit running.",
+      "Did you spot anything before anyone else?",
+    ]);
+    // A turn that never reached the server is not something she was told.
+    expect(JSON.stringify(priorTurns)).not.toContain("never sent");
+    // Nor is another role's conversation.
+    expect(JSON.stringify(priorTurns)).not.toContain("DIFFERENT role");
+  });
+
+  it("picks the entry by sortId, not 'the last one in the list'", async () => {
+    withDraft({
+      experience: [
+        { _sortId: pinned, title: "Wireline Operator" },
+        { _sortId: "sort-9", title: "Something Else" },
+      ],
+      coachChats: { studio: stream },
+    });
+
+    await post({ section: "experience", draftId: "60c72b2f9b1d8b2bad6e1a22", sortId: pinned });
+
+    expect(promptArgs().entryTitle).toBe("Wireline Operator");
+  });
+
+  it("still falls back to the newest entry when no sortId is sent", async () => {
+    withDraft({
+      experience: [
+        { _sortId: "a", title: "Older" },
+        { _sortId: "b", title: "Newest" },
+      ],
+      coachChats: { studio: [] },
+    });
+
+    await post({ section: "experience", draftId: "60c72b2f9b1d8b2bad6e1a22" });
+
+    expect(promptArgs().entryTitle).toBe("Newest");
+    expect(promptArgs().priorTurns).toEqual([]);
+  });
+
+  it("sends no history for an entry that has never been opened", async () => {
+    withDraft({
+      experience: [{ _sortId: "never-pinned", title: "Fresh" }],
+      coachChats: { studio: stream },
+    });
+
+    await post({
+      section: "experience",
+      draftId: "60c72b2f9b1d8b2bad6e1a22",
+      sortId: "never-pinned",
+    });
+
+    expect(promptArgs().priorTurns).toEqual([]);
+  });
+
+  it("starts the call anyway when the transcript cannot be read", async () => {
+    DraftCV.findOne.mockReturnValue({
+      select: jest.fn().mockReturnValue({ lean: jest.fn().mockRejectedValue(new Error("boom")) }),
+    });
+
+    const res = await post({
+      section: "experience",
+      draftId: "60c72b2f9b1d8b2bad6e1a22",
+      sortId: pinned,
+    });
+
+    // A missing memory is a worse call, not a failed one.
+    expect(res.status).toBe(200);
+    expect(promptArgs().priorTurns).toEqual([]);
+  });
+});

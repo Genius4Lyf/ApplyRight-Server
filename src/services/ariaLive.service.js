@@ -143,6 +143,58 @@ const STYLE_REACT = {
  * @param {string} opts.lang        interface language code
  * @returns {string}
  */
+// ── WHAT WAS ALREADY SAID ABOUT THIS ROLE ──
+//
+// A call used to start from nothing every time. So a second call — after the first one dropped,
+// after the minutes ran out, or simply after the person had already typed half the interview —
+// opened with "tell me what you actually did", and made them say all of it again. On a feature
+// billed by the minute that is not just annoying, it is charging someone to repeat themselves.
+//
+// The typed interview never had this problem: coachChatTurn is sent the whole chat window, and
+// the spoken turns live in that same window. This closes the gap in the other direction, so the
+// two halves share one memory whichever way round they happen.
+//
+// Bounded on both axes — a long interview must not crowd out the instructions that govern the
+// call, and the model reads this as context, never as something to read aloud.
+const CONTEXT_TURNS = 24;
+const CONTEXT_CHARS = 320;
+
+const historyBlock = (priorTurns) => {
+  if (!Array.isArray(priorTurns) || !priorTurns.length) return "";
+  const lines = priorTurns
+    // Only the two real speakers. Anything else is a UI marker or a malformed row, and the
+    // `who === "user" ? … : …` below would otherwise quietly file it as something ARIA said —
+    // putting words in her mouth that she would then believe she had asked.
+    .filter((turn) => turn?.who === "user" || turn?.who === "aria")
+    .slice(-CONTEXT_TURNS)
+    .map((turn) => {
+      const text = String(turn.text || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, CONTEXT_CHARS);
+      if (!text) return "";
+      return `${turn.who === "user" ? "THEM" : "YOU"}: ${text}`;
+    })
+    .filter(Boolean);
+  if (!lines.length) return "";
+
+  return `
+WHAT YOU HAVE ALREADY BEEN TOLD — READ THIS BEFORE YOU SPEAK
+You have already talked with this person about this role. The exchange below actually happened,
+whether it was spoken or typed. Treat every word of it as said.
+
+${lines.join("\n")}
+
+RULES FOR THE ABOVE
+- NEVER ask them to repeat anything that is already there. They have said it once; asking again
+  tells them you were not listening, and on a call it costs them minutes to say it twice.
+- Do not summarise it back at length either. One short line to show you remember is plenty.
+- Start from the first thing that is still MISSING — an activity with no detail yet, a result
+  nobody has said, or the hidden work you never got to.
+- If it reads as nearly complete, say so, check whether there is anything to add, and finish.
+`;
+};
+
 const buildAriaLiveInstructions = ({
   section = "experience",
   entryTitle = "",
@@ -152,6 +204,8 @@ const buildAriaLiveInstructions = ({
   lang = "en",
   depth: depthIn,
   style: styleIn,
+  // [{ who: 'user'|'aria', text }] — this entry's interview so far, spoken or typed.
+  priorTurns = [],
 } = {}) => {
   const spoken = LANG_NAMES[lang] || "English";
   // Never trust a raw value into a prompt — unknown settings fall back to the defaults.
@@ -209,6 +263,10 @@ ${projectFunnel(entryType)}`
       })}`
     : "";
 
+  // The interview so far, if there is one. Decides how she opens, too.
+  const history = historyBlock(priorTurns);
+  const resuming = !!history;
+
   return `You are Aria, helping someone describe ${thing} out loud so it can go on their CV.
 Speak ${spoken}, naturally and at an unhurried pace.
 ${STYLE_MANNER[style]}
@@ -239,15 +297,25 @@ wrong trade's questions tells them you were not listening.${
       ? ` If the employer's name does not plainly tell you the industry, do not guess one.`
       : ""
   }
+${history}
 
-HOW TO OPEN
+${
+  resuming
+    ? `HOW TO OPEN — YOU ARE PICKING UP, NOT STARTING
+You have spoken with this person about this role before, and the last call ended before you were
+finished. Say one short sentence that shows you remember where you got to, then ask the next
+question — the first thing still missing from what you have been told. Do NOT re-introduce
+yourself, do NOT explain what you do with their answers again, and above all do NOT ask them to
+tell you what they did from the beginning. They have already done that once.`
+    : `HOW TO OPEN
 Greet them briefly. Say in one sentence that you will ask a few questions and turn their
 answers into bullet points afterwards${
-    quick ? "" : ", and that small details are exactly what you want"
-  }.
+        quick ? "" : ", and that small details are exactly what you want"
+      }.
 Then ask them to tell you, in their own words, what they actually did${
-    entryTitle ? ` as ${entryTitle}` : ""
-  }. Nothing else in the first turn.
+        entryTitle ? ` as ${entryTitle}` : ""
+      }. Nothing else in the first turn.`
+}
 
 ${sequence}
 

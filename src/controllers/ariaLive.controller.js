@@ -38,6 +38,40 @@ const VOICE_SECTIONS = new Set(["experience", "project"]);
 const STALE_GRACE_SEC = 60;
 
 /**
+ * This entry's interview so far, pulled out of the studio transcript.
+ *
+ * The studio keeps ONE stream for the whole build, so the turns about this role sit in it
+ * among target-job talk, section hand-offs and every other entry. `pinrole` is the marker that
+ * opens an entry's interview and it carries the sortId, so the conversation about this role is
+ * everything after the LAST time it was pinned — which is also the right answer when a role has
+ * been opened, left, and come back to.
+ *
+ * Only real turns survive: the stream is full of UI markers (`focus`, `calltips`, `rolerecord`)
+ * that are state, not speech, and a message that failed to send never reached Aria at all.
+ *
+ * @param {Array}  stream  draft.coachChats.studio
+ * @param {string} sortId  the entry being called about
+ * @returns {Array<{who: 'user'|'aria', text: string}>}
+ */
+const entryConversation = (stream, sortId) => {
+  if (!Array.isArray(stream) || !sortId) return [];
+  let from = -1;
+  for (let i = stream.length - 1; i >= 0; i -= 1) {
+    const m = stream[i];
+    if (m?.who === "pinrole" && m?.sortId === sortId) {
+      from = i;
+      break;
+    }
+  }
+  if (from < 0) return [];
+  return stream
+    .slice(from + 1)
+    .filter((m) => (m?.who === "user" || m?.who === "aria") && !m?.failed)
+    .map((m) => ({ who: m.who, text: String(m.text || "").trim() }))
+    .filter((m) => m.text);
+};
+
+/**
  * Settle a reservation. Idempotent and safe to call from either the sideband or the client.
  *
  * Guarded on the reservationId so a double-settle writes nothing: whichever call lands
@@ -103,7 +137,7 @@ const settleReservation = async ({ userId, reservationId, usedSec }) => {
 // @access  Private
 exports.createAriaLiveSession = async (req, res) => {
   try {
-    const { section, draftId, lang, callSettings } = req.body || {};
+    const { section, draftId, lang, callSettings, sortId } = req.body || {};
     // Sent by the client with each call, so a change made seconds before pressing the button
     // applies to THIS call without waiting on the profile save. Normalised to the allow-list:
     // nothing unlisted reaches the prompt or OpenAI.
@@ -190,17 +224,25 @@ exports.createAriaLiveSession = async (req, res) => {
     let entryType = "";
     let careerStage = "";
     let brief = null;
+    let priorTurns = [];
     try {
       if (draftId) {
         const draft = await DraftCV.findOne({ _id: draftId, userId: user._id })
-          .select("experience projects careerStage targetJob.brief")
+          .select("experience projects careerStage targetJob.brief coachChats")
           .lean();
         const list = section === "project" ? draft?.projects : draft?.experience;
-        const entry = Array.isArray(list) ? list[list.length - 1] : null;
+        // BY sortId when the client says which entry, and only then by "the last one".
+        // The fallback is right for a build, where the open entry is always the newest — but
+        // wrong the moment someone reopens an earlier role to add to it, which is exactly the
+        // case this call is about to be given a memory of.
+        const entry =
+          (sortId && (list || []).find((e) => e?._sortId === sortId)) ||
+          (Array.isArray(list) ? list[list.length - 1] : null);
         entryTitle = String(entry?.title || entry?.name || "").slice(0, 80);
         entryType = String(entry?.entryType || "");
         careerStage = String(draft?.careerStage || "");
         brief = draft?.targetJob?.brief || null;
+        priorTurns = entryConversation(draft?.coachChats?.studio, entry?._sortId);
       }
     } catch (err) {
       console.error("[AriaLive] draft lookup failed", err?.message);
@@ -218,6 +260,7 @@ exports.createAriaLiveSession = async (req, res) => {
           lang,
           depth: settings.depth,
           style: settings.style,
+          priorTurns,
         }),
         maxSessionSec: reservedSec,
         voice: settings.voice,
