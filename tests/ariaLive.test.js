@@ -21,6 +21,11 @@ jest.mock("../src/models/User");
 jest.mock("../src/models/Transaction");
 jest.mock("../src/models/DraftCV");
 jest.mock("../src/services/ariaLive.service");
+// The trade-vocabulary lookup. Stubbed so these tests never reach a model.
+jest.mock("../src/services/ai.service", () => ({
+  inferRoleKeywords: jest.fn(),
+  cvDigest: jest.fn(() => ""),
+}));
 jest.mock("jsonwebtoken");
 
 const userId = "60c72b2f9b1d8b2bad6e1a11";
@@ -412,5 +417,94 @@ describe("POST /api/aria-live/session — the call is given the conversation so 
     // A missing memory is a worse call, not a failed one.
     expect(res.status).toBe(200);
     expect(promptArgs().priorTurns).toEqual([]);
+  });
+});
+
+describe("POST /api/aria-live/session — the trade vocabulary comes from THIS entry", () => {
+  const aiService = require("../src/services/ai.service");
+  const draftId = "60c72b2f9b1d8b2bad6e1a22";
+
+  const withDraft = (draft) =>
+    DraftCV.findOne.mockReturnValue({
+      select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(draft) }),
+    });
+
+  const promptArgs = () => ariaLive.buildAriaLiveInstructions.mock.calls.at(-1)[0];
+
+  beforeEach(() => {
+    asUser({ secondsRemaining: 600 });
+    User.updateOne.mockResolvedValue({ modifiedCount: 1 });
+    aiService.inferRoleKeywords.mockReset();
+    aiService.inferRoleKeywords.mockResolvedValue({ keywords: [{ name: "lesson planning" }] });
+  });
+
+  it("asks about the entry being interviewed, NOT the first one on the CV", async () => {
+    // The draft-level cache describes the target job, or failing that whatever the FIRST entry
+    // happens to be. Handing that to an interview about the third entry puts one role's words
+    // into another role's questions — the register bug, arriving as data instead of prose.
+    withDraft({
+      experience: [
+        { _sortId: "s1", title: "Wireline Field Operator" },
+        { _sortId: "s2", title: "Sales Assistant" },
+        { _sortId: "s3", title: "Teaching Assistant" },
+      ],
+      targetJob: {
+        noJd: { roleFamily: "wireline field operator", keywords: [{ name: "well logging" }] },
+      },
+    });
+
+    await post({ section: "experience", draftId, sortId: "s3" });
+
+    expect(aiService.inferRoleKeywords).toHaveBeenCalledWith(
+      "Teaching Assistant",
+      expect.any(Object)
+    );
+    expect(promptArgs().roleFamily ?? promptArgs().noJd.roleFamily).toBe("Teaching Assistant");
+    // The other role's vocabulary must not have travelled with it.
+    expect(JSON.stringify(promptArgs().noJd)).not.toContain("well logging");
+  });
+
+  it("does not infer when a real job description already says what the role wants", async () => {
+    withDraft({
+      experience: [{ _sortId: "s1", title: "Teaching Assistant" }],
+      targetJob: { brief: { mustHaves: [{ name: "classroom support" }] } },
+    });
+
+    await post({ section: "experience", draftId, sortId: "s1" });
+
+    expect(aiService.inferRoleKeywords).not.toHaveBeenCalled();
+    expect(promptArgs().noJd).toBeNull();
+  });
+
+  it("starts the call anyway when the lookup takes too long", async () => {
+    // A call button that hangs is a worse bug than a call that is slightly less fluent.
+    // REAL timers: faking them deadlocks the request, which is itself waiting on one.
+    withDraft({ experience: [{ _sortId: "s1", title: "Teaching Assistant" }], targetJob: {} });
+    aiService.inferRoleKeywords.mockReturnValue(new Promise(() => {}));
+
+    const started = Date.now();
+    const res = await post({ section: "experience", draftId, sortId: "s1" });
+
+    expect(res.status).toBe(200);
+    expect(promptArgs().noJd).toBeNull();
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it("starts the call anyway when the lookup fails outright", async () => {
+    withDraft({ experience: [{ _sortId: "s1", title: "Teaching Assistant" }], targetJob: {} });
+    aiService.inferRoleKeywords.mockRejectedValue(new Error("model down"));
+
+    const res = await post({ section: "experience", draftId, sortId: "s1" });
+
+    expect(res.status).toBe(200);
+    expect(promptArgs().noJd).toBeNull();
+  });
+
+  it("asks for nothing when the entry has no title to ask about", async () => {
+    withDraft({ experience: [{ _sortId: "s1", title: "" }], targetJob: {} });
+
+    await post({ section: "experience", draftId, sortId: "s1" });
+
+    expect(aiService.inferRoleKeywords).not.toHaveBeenCalled();
   });
 });

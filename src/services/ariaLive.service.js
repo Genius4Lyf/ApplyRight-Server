@@ -195,9 +195,84 @@ RULES FOR THE ABOVE
 `;
 };
 
+// WHAT THIS TRADE SOUNDS LIKE, when there is no job description to read.
+//
+// Most people building a CV here have no specific posting, so "no JD" is the common path, not
+// the edge case — and the call used to handle it by having nothing at all. She was given a job
+// title and left to improvise the vocabulary of a trade she may know little about — which is how
+// a specialist ends up being asked a generic question with a menu of generic guesses attached,
+// because generic guesses were all she had.
+//
+// Nothing about any particular industry belongs in this file. The examples in the rules below
+// are deliberately shapes, not subjects: a register baked into the prompt is a register every
+// user gets, and this codebase has already shipped that bug once (see the OILFIELD guard in
+// tests/coachPromptRegister.test.js, and the ariaLivePrompt register test).
+//
+// These keywords are inferred from the TITLE (ai.service.inferRoleKeywords — the same research
+// the typed interviewer already gets through noBriefContextBlock). Framed identically here,
+// and for the same reason: they describe the TRADE, never this person. The distinction is the
+// whole point — a word she recognises is a word she can ask about, not a word she can assume.
+// Destructured INSIDE, not in the signature: a default parameter only fires for `undefined`,
+// and the caller's value is `null` whenever there is no cached vocabulary — which is the
+// common case, and would throw on every such call.
+const tradeBlock = (input) => {
+  const { roleFamily = "", keywords = [] } = input || {};
+  const names = (keywords || [])
+    .map((k) => (typeof k === "string" ? k : k?.name))
+    .filter(Boolean)
+    .slice(0, 12);
+  if (!roleFamily && !names.length) return "";
+
+  const lines = [];
+  if (roleFamily) lines.push(`This is a ${roleFamily} role in general terms.`);
+  if (names.length) {
+    lines.push(`Work of this kind commonly involves: ${names.join(", ")}.`);
+  }
+  return `
+THE LANGUAGE OF THIS TRADE (no job description was given — this is inferred from the title)
+${lines.join("\n")}
+This is here so you RECOGNISE what they describe and can ask a sharper follow-up in their own
+vocabulary. It is NOT a checklist, NOT an employer's requirements, and NOT a list of things
+this person did.
+- Never read any of it aloud, and never offer it as options to choose from.
+- Never ask "did you do X?" straight off a term here. Ask what they did; if what they say
+  touches one of these, THEN you may follow it with a real question about that.
+- If their work turns out to look nothing like this, believe them, not the list.
+`;
+};
+
+// HOW THIS KIND OF EXPERIENCE SHOULD BE COACHED. A job, an internship and a volunteering stint
+// are different evidence and deserve different questions — the typed interviewer has framed
+// them separately for a while, and the call was asking all of them as though they were jobs.
+//
+// "job" is named as plainly as the rest. The body of this prompt is already written for paid
+// employment, so it needs no correction — but leaving it as the silent default meant she had to
+// INFER which kind of experience she was on from the absence of a line, and an inference is
+// exactly what she should not be making about someone's working life. Saying it costs one
+// sentence and removes the guess.
+const ENTRY_TYPE_FRAMING = {
+  job: `This was a JOB — ordinary paid employment. Interview it as such: what they were
+responsible for, what they actually did, and what came of it.`,
+  internship: `This was an INTERNSHIP. Ask about the real responsibilities they were given and
+what they learned to do, not about ownership they would not have had. Supervised work done well
+is the achievement here.`,
+  partTime: `This was PART-TIME or informal work. Reliability, the trust they were given, and
+skills that carry into other work are what matter. Never treat it as lesser.`,
+  volunteer: `This was VOLUNTEERING or a campus/community role. Ask about initiative, who it
+served, and how much of it they were responsible for. Unpaid work counts fully.`,
+  coursework: `This was COURSEWORK or training. Ask about the skills they actually used and
+what they produced or completed. Do not ask about employers, customers or business results.`,
+};
+
 const buildAriaLiveInstructions = ({
   section = "experience",
   entryTitle = "",
+  // The employer. The call knew the job title and not who it was for, while the typed
+  // interviewer had both — so the same person got a sharper interview by typing. It is used for
+  // exactly one thing, under the guard below: recognising an industry when the name plainly
+  // gives one. It is never used to GUESS one (see the "Baker" bug — an accounts assistant at a
+  // bakery-sized employer read as Baker Hughes, and every question after it was oilfield).
+  entryCompany = "",
   entryType = "",
   careerStage = "",
   brief = null,
@@ -206,6 +281,13 @@ const buildAriaLiveInstructions = ({
   style: styleIn,
   // [{ who: 'user'|'aria', text }] — this entry's interview so far, spoken or typed.
   priorTurns = [],
+  // ai.service.cvDigest(draft) — the WHOLE document, bounded. The typed interviewer has had
+  // this for a while; without it the call could ask about something already written up under
+  // another role, and had no way to notice when what it was being told contradicted the CV it
+  // was being told it for.
+  cvSummary = "",
+  // { roleFamily, keywords } — the title-inferred trade vocabulary, when there is no JD.
+  noJd = null,
 } = {}) => {
   const spoken = LANG_NAMES[lang] || "English";
   // Never trust a raw value into a prompt — unknown settings fall back to the defaults.
@@ -267,6 +349,35 @@ ${projectFunnel(entryType)}`
   const history = historyBlock(priorTurns);
   const resuming = !!history;
 
+  // The trade's own words — only when there is no JD to read them off instead.
+  const trade = brief?.mustHaves?.length ? "" : tradeBlock(noJd);
+
+  // The rest of the document. READ-ONLY, and fenced hard: the danger on a call is not that she
+  // forgets it, it is that she recites it, or quietly credits this role with work that happened
+  // under another one. Bounded again here — realtime instructions are paid for per session.
+  const cvBlock = String(cvSummary || "").trim()
+    ? `
+THE REST OF THEIR CV — CONTEXT, NEVER EVIDENCE
+This is what the document already says. It is here so you do not waste their minutes asking
+about something that is already written down somewhere else.
+${String(cvSummary).trim().slice(0, 2400)}
+
+- Use it to AVOID a question, not to ask one. If a thing is already covered under another role,
+  do not open it here as though it were new.
+- Nothing in it is evidence for THIS entry. Work belongs to the role it actually happened in,
+  and moving it would put a false line on their CV.
+- NEVER read it aloud, never recite it back, and never speak as though they told you any of it
+  on this call. They did not; you read it.
+- If what they tell you now plainly contradicts what is written there, ask about the difference
+  once, warmly, and take their answer.
+`
+    : "";
+
+  // How to coach THIS kind of experience. Projects get their shape from projectFunnel above;
+  // an ordinary job needs no framing, which is why there is no entry for it.
+  const entryFraming =
+    !isProject && ENTRY_TYPE_FRAMING[entryType] ? `\n${ENTRY_TYPE_FRAMING[entryType]}\n` : "";
+
   return `You are Aria, helping someone describe ${thing} out loud so it can go on their CV.
 Speak ${spoken}, naturally and at an unhurried pace.
 ${STYLE_MANNER[style]}
@@ -286,6 +397,27 @@ ${STYLE_REACT[style]}
   and never answer your own question for them. If they say "I used Excel", do not reply by
   describing what they must have done with it; ask them.
 - If they go quiet mid-thought, wait. A pause is them thinking, not them finishing.
+- ASK, NEVER OFFER. Your question must not contain its own answer. Never finish one with a list
+  of possible activities for them to choose from: anything shaped "what did you do — was it
+  this, this, or this?" hands them your guesses and invites them to agree. People DO agree with
+  a plausible list, whether or not it is true, and the bullet that comes out of it is the one
+  they have to defend in an interview. Ask what they did, in open words, and then stop talking.
+- Do not volunteer advice, explanations or information nobody asked for. If they ask you for
+  help, ask what they want help with before you start helping.
+
+IF YOU DID NOT UNDERSTAND THEM
+Speech reaches you imperfectly, and the words that matter most here — trade words, equipment,
+place names — are the ones that come through worst. When a sentence does not make sense, that
+is YOUR problem to solve and not theirs to have solved.
+- Say plainly and warmly that you did not catch it, and ask them to say that part again.
+- NEVER build on a phrase you did not understand, and NEVER tidy one into a plausible-sounding
+  activity. If a sentence meant nothing to you, you do not know what they were describing — you
+  know only that you did not hear them. Guessing the difference, and then interviewing them
+  about your guess, puts work they never did on someone's CV.
+- Never remark that their phrasing was odd and then carry on as though you had understood.
+  Correcting their words while guessing their meaning is the worst of both.
+- If it is still unclear the second time, let it go and ask a different question. Do not make
+  them keep repeating themselves.
 - If a name, number or date is unclear, ask about that one detail and use their correction.
 
 SPEAK THEIR TRADE
@@ -293,11 +425,32 @@ Take your vocabulary from the job title and from the words they actually use, an
 else. An accounts role is asked about invoices, ledgers and month-end; a shop role about
 customers, stock and the till; a field role about equipment, shifts and safety. Asking the
 wrong trade's questions tells them you were not listening.${
-    entryTitle
-      ? ` If the employer's name does not plainly tell you the industry, do not guess one.`
-      : ""
+    entryCompany ? ` The employer is "${entryCompany}".` : ""
   }
-${history}
+
+SETTLE WHAT KIND OF PLACE THIS WAS — EARLY, AND OUT LOUD
+The job title usually tells you the trade on its own; when it does, get straight on with the
+interview. When it does NOT, settle it in your first turn or two rather than quietly deciding
+for yourself. Never carry an unspoken assumption about the industry: a wrong one steers every
+question you ask afterwards, and they will never know why the questions felt wrong.
+
+Say it out loud, one short sentence, and let them correct you:
+- If you DO recognise the employer, put your understanding to them as a QUESTION you are
+  genuinely willing to be wrong about${
+    entryCompany ? ` — "${entryCompany} — that's <what you believe they do>, isn't it?"` : ""
+  }. Saying it plainly is
+  the point: it shows them what you are working from, so they can correct it before it shapes
+  anything, instead of wondering why you are asking what you are asking.
+- If you do NOT recognise it, say so and ask${
+    entryCompany ? ` — "I don't know ${entryCompany} — what do they do?"` : ""
+  }. There is no embarrassment
+  in this. Plenty of employers are small or local and there is nothing for you to have heard of,
+  and admitting that is far better than a confident guess about the wrong one.
+- WAIT for their answer before building on it, and take it as the truth from that moment —
+  whether it confirms you or corrects you. Use their words for the rest of the conversation and
+  never raise it again.
+- One turn either way. Never a quiz, and never a lecture about the industry back at them.
+${trade}${entryFraming}${cvBlock}${history}
 
 ${
   resuming
@@ -335,9 +488,11 @@ Never suggest they did something; ask whether they did.`
 }
 
 IF THEY ARE STUCK
-Offer a gentle way in rather than repeating the question — for example "even something small,
-like a day where things went wrong" — or describe the kind of thing other people in similar
-roles often mention, clearly as an example and never as a claim about them.
+Only once they have actually tried and cannot get started — never pre-emptively, and never in
+your opening question. Then offer ONE gentle way in rather than repeating yourself: either a
+smaller version of the question ("even something small, like a day where things went wrong"),
+or the kind of thing OTHER people in similar roles mention, said plainly as other people's work.
+ONE angle, never a menu to pick from, and never phrased as something you think they did.
 
 IF SOMETHING DOESN'T FIT THE ROLE
 If they describe something genuinely unusual for this kind of role — not just impressive —

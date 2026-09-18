@@ -73,6 +73,12 @@ describe("no industry is baked into the prompt", () => {
     "a shift",
     "handover",
     "downtime",
+    // Added with the "ask, never offer" rule: its first draft illustrated the bad question
+    // with one trade's words ("checking permits … coordinating the crew"), which would have
+    // put that register in front of every user of every other trade.
+    "permit",
+    "crew",
+    "site visit",
   ];
 
   it.each(OILFIELD)("does not put %s in front of the model", async (term) => {
@@ -109,13 +115,20 @@ describe("it tells the model whose language to speak", () => {
     expect(systemPrompt()).toContain("Accounting Intern");
   });
 
-  it("warns it off guessing an industry from an ambiguous company name", async () => {
+  it("never lets it settle an industry from an ambiguous company name in silence", async () => {
     // "Baker" was the company in the reported bug — a strong pull toward Baker Hughes,
     // oilfield services, for a user doing accounts at a bakery-sized employer. The prompt
     // used to assert outright that the model knew what the company "typically involves".
+    //
+    // The protection USED to be a flat ban on guessing, which was safe and also useless: a
+    // well-known employer told her nothing. It is now the opposite and stronger — she may say
+    // what she believes, but only OUT LOUD, as a question, before it shapes anything. A wrong
+    // guess is then corrected in one turn instead of steering the whole interview unseen.
     await turn();
     const system = systemPrompt();
-    expect(system).toMatch(/NEVER guess a sector from it/);
+    expect(system).toMatch(/never carry an unspoken assumption about the industry/i);
+    expect(system).toMatch(/genuinely willing to be wrong about/);
+    expect(system).toMatch(/WAIT for their answer before building on it/);
     expect(system).not.toMatch(/what that role and company typically involves/);
   });
 
@@ -188,5 +201,81 @@ describe("Aria never answers her own question in the user's voice", () => {
     await turn();
     expect(systemPrompt()).toMatch(/React in ONE short sentence of your own/);
     expect(systemPrompt()).not.toMatch(/Warmly react, then ask ONE focused follow-up/);
+  });
+});
+
+describe("she interviews, she does not feed them answers", () => {
+  // The same two failures seen on a real call, fixed in both interviewers because the user
+  // can move between typing and talking mid-role and must not meet two different coaches.
+  //
+  // She asked "what were you doing around site visit management — like checking permits,
+  // confirming access, planning the job, or coordinating the crew?" — which is the CV written
+  // for them and offered for agreement. And she built that question on a sentence she had just
+  // admitted she did not understand.
+
+  it("forbids a menu of candidate activities inside the question", async () => {
+    await turn();
+    expect(systemPrompt()).toMatch(/ASK, NEVER OFFER/);
+    expect(systemPrompt()).toMatch(/must not contain its own answer/);
+  });
+
+  it("keeps the sanctioned scaffolds, which are a different thing", async () => {
+    // suggestions/exampleAnswers are labelled, visibly examples, and cannot be mistaken for
+    // something she believes they did. Banning those would have cost a real feature.
+    await turn();
+    expect(systemPrompt()).toMatch(/`suggestions` and `exampleAnswers` are for/);
+    expect(systemPrompt()).toMatch(/suggestionsLabel/);
+  });
+
+  it("tells her to say when she did not understand, rather than tidying it into an activity", async () => {
+    await turn();
+    const system = systemPrompt();
+    expect(system).toMatch(/IF YOU DID NOT UNDERSTAND THEM, SAY SO/);
+    expect(system).toMatch(/NEVER build on a phrase you did not understand/);
+    expect(system).toMatch(/puts work they never did/);
+  });
+
+  it("names speech-to-text, because a call transcript lands in this same interview", async () => {
+    await turn();
+    expect(systemPrompt()).toMatch(/speech-to-text/);
+  });
+
+  it("stops her volunteering help nobody asked for", async () => {
+    await turn();
+    expect(systemPrompt()).toMatch(/DO NOT VOLUNTEER/);
+    expect(systemPrompt()).toMatch(/ask what they want help with/);
+  });
+
+  it("keeps the plausibility check it sits next to", async () => {
+    await turn();
+    expect(systemPrompt()).toMatch(/PLAUSIBILITY CHECK/);
+  });
+});
+
+describe("she says what she thinks the employer is, and lets the user correct it", () => {
+  it("puts her understanding as a question, rather than assuming in silence", async () => {
+    await turn();
+    const system = systemPrompt();
+    expect(system).toMatch(/SETTLE WHAT KIND OF PLACE THIS WAS/);
+    expect(system).toMatch(/genuinely willing to be wrong about/);
+    expect(system).toContain(`"Baker — that's <what you believe they do>, isn't it?"`);
+  });
+
+  it("lets her say she has not heard of them", async () => {
+    await turn();
+    expect(systemPrompt()).toContain('"I don\'t know Baker — what do they do?"');
+  });
+
+  it("waits for the answer and treats it as final", async () => {
+    await turn();
+    expect(systemPrompt()).toMatch(/WAIT for their answer before building on it/);
+    expect(systemPrompt()).toMatch(/never raise it again/);
+  });
+
+  it("offers no empty question when there is no employer named", async () => {
+    await turn({ entryCompany: "" });
+    expect(systemPrompt()).not.toMatch(/isn't it\?/);
+    // The rule itself survives — the title can still fail to tell her.
+    expect(systemPrompt()).toMatch(/SETTLE WHAT KIND OF PLACE THIS WAS/);
   });
 });

@@ -26,6 +26,7 @@ const Transaction = require("../models/Transaction");
 const DraftCV = require("../models/DraftCV");
 const { ARIA_CALL_MAX_SESSION_SEC } = require("../config/catalog");
 const ariaLive = require("../services/ariaLive.service");
+const aiService = require("../services/ai.service");
 const { normalizeCallSettings } = require("../config/ariaCallSettings");
 
 // Sections that can be built by voice. Education, skills and the summary are short factual
@@ -36,6 +37,24 @@ const VOICE_SECTIONS = new Set(["experience", "project"]);
 // How long past its reserved length a reservation may linger before we treat it as dead.
 // Covers the gap between the browser deciding the call is over and it telling us.
 const STALE_GRACE_SEC = 60;
+
+// How long the trade-vocabulary lookup may hold up a call before we start without it. Long
+// enough for a warm cache and a quick model, short enough to disappear inside the WebRTC
+// handshake that follows — the user is watching a "Connecting…" chip either way.
+const TRADE_LOOKUP_MS = 1200;
+
+/**
+ * Resolve a promise, or give up on it.
+ *
+ * Give up, NOT cancel: the work carries on and its result still reaches the cache, so the
+ * deadline costs this call its answer and buys it for the next one. Any failure resolves null
+ * for the same reason a missing brief does — a less fluent call, never a failed one.
+ */
+const withDeadline = (promise, ms) =>
+  Promise.race([
+    Promise.resolve(promise).catch(() => null),
+    new Promise((resolve) => setTimeout(() => resolve(null), ms).unref?.()),
+  ]);
 
 /**
  * This entry's interview so far, pulled out of the studio transcript.
@@ -221,14 +240,19 @@ exports.createAriaLiveSession = async (req, res) => {
     // and hash-cached by the capture step, so it is already there whenever there is a target
     // job at all — and when there isn't, the requirement block simply doesn't render.
     let entryTitle = "";
+    let entryCompany = "";
     let entryType = "";
     let careerStage = "";
     let brief = null;
     let priorTurns = [];
+    let noJd = null;
+    let cvSummary = "";
     try {
       if (draftId) {
         const draft = await DraftCV.findOne({ _id: draftId, userId: user._id })
-          .select("experience projects careerStage targetJob.brief coachChats")
+          .select(
+            "experience projects education skills professionalSummary careerStage targetJob coachChats"
+          )
           .lean();
         const list = section === "project" ? draft?.projects : draft?.experience;
         // BY sortId when the client says which entry, and only then by "the last one".
@@ -239,10 +263,44 @@ exports.createAriaLiveSession = async (req, res) => {
           (sortId && (list || []).find((e) => e?._sortId === sortId)) ||
           (Array.isArray(list) ? list[list.length - 1] : null);
         entryTitle = String(entry?.title || entry?.name || "").slice(0, 80);
+        entryCompany = String(entry?.company || "").slice(0, 80);
         entryType = String(entry?.entryType || "");
         careerStage = String(draft?.careerStage || "");
         brief = draft?.targetJob?.brief || null;
         priorTurns = entryConversation(draft?.coachChats?.studio, entry?._sortId);
+        // The whole document, bounded — the same read-only digest the typed interviewer gets.
+        // Pure string work, no model call, so it costs the call nothing.
+        cvSummary = aiService.cvDigest(draft, draft?.targetJob?.title || "");
+
+        // The title-inferred trade vocabulary — the no-JD counterpart of the brief.
+        //
+        // Most people building a CV here have no job posting, so this is the COMMON path, and
+        // without it the call has a job title and nothing else: generic questions in generic
+        // language, which is exactly what a model produces when it has no vocabulary.
+        //
+        // FROM THIS ENTRY'S OWN TITLE, and nothing else. The draft also carries a cached
+        // keyword set (targetJob.noJd), but that one describes the DRAFT — the target job if
+        // there is one, otherwise whatever the FIRST experience entry happens to be. Feeding it
+        // to an interview about the third entry would put one role's vocabulary into another
+        // role's questions, which is the exact bug tests/coachPromptRegister.test.js exists to
+        // prevent, arriving as data instead of as prose. Per-entry is the only correct grain.
+        //
+        // inferRoleKeywords is extraction-cached by title across all users, so asking per entry
+        // costs nothing extra on a title anyone has used in the last month — and it is raced
+        // against a deadline regardless, because this runs between the tap on the call button
+        // and the session being minted, and this feature has been called sluggish once already.
+        if (entryTitle && !brief?.mustHaves?.length) {
+          const inferred = await withDeadline(
+            aiService.inferRoleKeywords(entryTitle, {
+              userId: String(user._id),
+              operation: "ariaLiveTradeVocabulary",
+            }),
+            TRADE_LOOKUP_MS
+          );
+          if (inferred?.keywords?.length) {
+            noJd = { roleFamily: entryTitle, keywords: inferred.keywords };
+          }
+        }
       }
     } catch (err) {
       console.error("[AriaLive] draft lookup failed", err?.message);
@@ -254,6 +312,7 @@ exports.createAriaLiveSession = async (req, res) => {
         instructions: ariaLive.buildAriaLiveInstructions({
           section,
           entryTitle,
+          entryCompany,
           entryType,
           careerStage,
           brief,
@@ -261,6 +320,8 @@ exports.createAriaLiveSession = async (req, res) => {
           depth: settings.depth,
           style: settings.style,
           priorTurns,
+          noJd,
+          cvSummary,
         }),
         maxSessionSec: reservedSec,
         voice: settings.voice,
