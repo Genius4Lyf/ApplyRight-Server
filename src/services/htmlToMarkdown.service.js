@@ -210,6 +210,11 @@ function tidy(text) {
   return (
     String(text)
       .replace(/\r\n?/g, "\n")
+      // Zero-width and bidi control characters. Invisible on the page, but a spacer div
+      // full of them becomes a line of its own here — a real posting arrived behind a
+      // dozen blank-looking lines of U+200C. They also survive into the AI's input, where
+      // they cost tokens and can split a word the parser needed to read whole.
+      .replace(new RegExp("[\u200B-\u200F\u2028\u2029\u2060\uFEFF]", "g"), "")
       .split("\n")
       // LEADING whitespace is spared: it is a nested list's indent, and squashing it would
       // flatten every sub-bullet back into the parent list.

@@ -222,3 +222,89 @@ describe("pages that give us nothing", () => {
     await expect(scrapeJob("https://x.com/1")).rejects.toThrow("ACCESS_DENIED");
   });
 });
+
+// A STRUCTURED DESCRIPTION CAN BE A PARTIAL POSTING.
+//
+// A live posting (Flair-hosted) published its INTRO as the JSON-LD description — the
+// company, the job purpose, the rotation cycle — and left Responsibilities and
+// Requirements in the page body. At 1,708 characters it cleared the full-description
+// floor comfortably, so nothing looked wrong, and the Role Brief was then built from a
+// posting containing none of the things the employer had actually asked for.
+//
+// The gate is therefore CONTENT, not length.
+describe("a structured description that is only an introduction", () => {
+  const INTRO =
+    "<p>We are a leading integrated energy company.</p>" +
+    "<p><strong>Job Purpose</strong></p>" +
+    "<p>The technician executes safe production operations on wells and facilities.</p>" +
+    // The boilerplate that defeated the first version of this rule: the WORD
+    // "qualifications" in a sentence is not a requirements section.
+    "<p>Please apply ONLY for the role that best aligns with your qualifications, skills and experience.</p>";
+
+  const PAGE_REQUIREMENTS =
+    "<div><p><strong>Requirements</strong></p><ul>" +
+    "<li>Competence in Permit-to-Work and safe isolation practices</li>" +
+    "<li>Understanding of preventive and corrective maintenance</li>" +
+    "</ul></div>";
+
+  // A real posting RENDERS its own description as well as publishing it in JSON-LD, so
+  // the page is a superset of the structured field. That is what makes "the page has more
+  // than we hold" a safe test — it exists to stop a stray fragment replacing a real
+  // description, not to judge which is better.
+  const RENDERED_PAGE = `<div>${INTRO}</div>${PAGE_REQUIREMENTS}`;
+
+  it("reads the page when the structured description names no requirements", async () => {
+    axios.get.mockResolvedValue(
+      page(`${ldJson({ ...POSTING, description: INTRO })}${RENDERED_PAGE}`)
+    );
+
+    const job = await scrapeJob("https://careers.example.com/a2d");
+
+    expect(job.source).toBe("page");
+    expect(job.description).toContain("Permit-to-Work");
+    expect(job.description).toContain("- Understanding of preventive");
+    // The intro is not discarded — the whole page includes it.
+    expect(job.description).toContain("Job Purpose");
+  });
+
+  it("leaves a complete structured description alone", async () => {
+    // POSTING's own description already carries a Requirements heading and a list.
+    axios.get.mockResolvedValue(page(`${ldJson(POSTING)}${RENDERED_PAGE}`));
+
+    const job = await scrapeJob("https://careers.example.com/a2d");
+
+    expect(job.source).toBe("structured");
+    expect(job.description).toContain("CompEx certified");
+  });
+
+  it("does not take the page when the page has nothing more to give", async () => {
+    // Longer, but still no requirements anywhere: a longer blurb is not a better posting.
+    axios.get.mockResolvedValue(
+      page(
+        `${ldJson({ ...POSTING, description: INTRO })}<div>${INTRO}</div><div><p>${"About us. ".repeat(60)}</p></div>`
+      )
+    );
+
+    const job = await scrapeJob("https://careers.example.com/a2d");
+
+    expect(job.source).toBe("structured");
+    expect(job.description).not.toContain("About us.");
+  });
+
+  it("leaves the page's navigation and footer out of the posting", async () => {
+    axios.get.mockResolvedValue(
+      page(
+        `${ldJson({ ...POSTING, description: INTRO })}` +
+          "<nav>Jobs Teams Life at Renaissance</nav>" +
+          RENDERED_PAGE +
+          "<footer>Privacy policy. Cookie settings.</footer>"
+      )
+    );
+
+    const job = await scrapeJob("https://careers.example.com/a2d");
+
+    expect(job.description).toContain("Permit-to-Work");
+    expect(job.description).not.toContain("Cookie settings");
+    expect(job.description).not.toContain("Life at Renaissance");
+  });
+});

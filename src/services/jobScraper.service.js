@@ -22,6 +22,43 @@ const { htmlToMarkdown, decodeEntities } = require("./htmlToMarkdown.service");
 // of characters; the shortest genuine ones still clear this comfortably.
 const FULL_DESCRIPTION_CHARS = 400;
 
+// The hallmarks of a COMPLETE posting: it says what you would do, or what you need to
+// have. A description carrying neither is an INTRODUCTION — the company, the mission, the
+// shift pattern — however long it runs.
+//
+// Length cannot tell those apart, and that is the point. A live posting handed us 1,708
+// characters of intro as its structured description: comfortably past the floor above, so
+// nothing looked wrong, while Responsibilities and Requirements sat in the page body where
+// nothing went looking. The Role Brief was then built from a posting containing none of
+// the things the employer had actually asked for.
+const REQUIREMENT_WORDS =
+  /\b(responsibilit|accountabilit|requirement|qualification|competenc|duties|what you.{0,3}ll do|who we.{0,3}re looking for|skills? (?:and|&) experience|experience required)/i;
+
+// A heading, not a sentence. The word has to stand as its own line.
+//
+// Matching it anywhere in prose is what the first version of this did, and the very
+// posting it was written for defeated it: "apply ONLY for the role that best aligns with
+// your qualifications, skills and experience" is boilerplate in the INTRO, and it made an
+// introduction look like a complete posting. A heading is short; a sentence is not.
+const HEADING_CHARS = 80;
+
+const carriesRequirements = (markdown) => {
+  const text = String(markdown || "");
+  if (!text) return false;
+  // A bullet or numbered list is the near-universal shape of a requirements section.
+  if (/(^|\n)\s*(?:[-*]\s|\d+\.\s)/.test(text)) return true;
+  return text.split("\n").some((raw) => {
+    const line = raw.trim();
+    return line.length > 0 && line.length <= HEADING_CHARS && REQUIREMENT_WORDS.test(line);
+  });
+};
+
+// Page furniture to lift off before reading a whole page as a posting. Removed here, for
+// this one fallback, rather than in htmlToMarkdown's DROP set — a description container
+// can legitimately use <header> and <footer> inside itself, and dropping those everywhere
+// would quietly eat real content on pages that are working fine today.
+const PAGE_FURNITURE = "nav, header, footer, aside";
+
 // A page that answered, but with a challenge instead of a posting.
 const BOT_WALL_PATTERNS = [
   /please verify you('?| a)re? human/i,
@@ -241,6 +278,22 @@ const scrapeJob = async (url) => {
           source = "dom";
         }
         if (description.length >= FULL_DESCRIPTION_CHARS) break;
+      }
+    }
+
+    // ── The whole page, when what we hold is an introduction ──
+    //
+    // Deliberately gated on CONTENT, not length: it fires only when nothing we have names
+    // a responsibility or a requirement, and the result is taken only if the page turns
+    // out to name them. So a posting that is already complete never reaches this, and a
+    // page that has nothing more to give cannot make things worse by being longer.
+    if (!carriesRequirements(description)) {
+      const body = $("body").clone();
+      body.find(PAGE_FURNITURE).remove();
+      const whole = htmlToMarkdown(body.html());
+      if (whole.length > description.length && carriesRequirements(whole)) {
+        description = whole;
+        source = "page";
       }
     }
 
