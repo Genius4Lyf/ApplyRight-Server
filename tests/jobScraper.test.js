@@ -308,3 +308,57 @@ describe("a structured description that is only an introduction", () => {
     expect(job.description).not.toContain("Life at Renaissance");
   });
 });
+
+// THE SCRAPER'S ANSWER HAS TO BE STORABLE.
+//
+// `descriptionSource` is a Mongoose enum on the Job model, and job.controller writes the
+// scraper's `source` straight into it. Adding a new source to the scraper WITHOUT adding
+// it to the enum made Job.create throw — so every import that took the new path failed
+// validation and reached the user as "I couldn't read that page". Nothing caught it,
+// because the scraper's own tests never touch the model and the controller has no test.
+//
+// This is the seam: whatever the scraper can emit, the model must accept.
+describe("every source the scraper can return is storable", () => {
+  const mongoose = require("mongoose");
+  const Job = require("../src/models/Job");
+
+  const storable = (source) =>
+    new Job({
+      userId: new mongoose.Types.ObjectId(),
+      title: "T",
+      company: "C",
+      description: "D",
+      descriptionSource: source,
+    }).validateSync();
+
+  it("accepts each source by name", () => {
+    // Keep in step with the assignments in jobScraper.service.
+    ["structured", "dom", "meta", "page", "typed"].forEach((source) => {
+      expect(storable(source)).toBeUndefined();
+    });
+  });
+
+  it("rejects one that is not a real source, so this test cannot pass vacuously", () => {
+    expect(storable("invented")).toBeDefined();
+  });
+
+  it("stores what a structured read actually returned", async () => {
+    axios.get.mockResolvedValue(page(ldJson(POSTING)));
+    const job = await scrapeJob("https://careers.example.com/a2d");
+    expect(storable(job.source)).toBeUndefined();
+  });
+
+  it("stores what a whole-page read actually returned", async () => {
+    // Long enough to clear the thin-content floor, as a real intro is.
+    const intro = `<p>${"We are a leading integrated energy company advancing energy security. ".repeat(4)}</p>`;
+    axios.get.mockResolvedValue(
+      page(
+        `${ldJson({ ...POSTING, description: intro })}<div>${intro}</div>` +
+          "<div><p><strong>Requirements</strong></p><ul><li>Permit-to-Work competence</li></ul></div>"
+      )
+    );
+    const job = await scrapeJob("https://careers.example.com/a2d");
+    expect(job.source).toBe("page");
+    expect(storable(job.source)).toBeUndefined();
+  });
+});

@@ -34,9 +34,15 @@ const jobSchema = new mongoose.Schema(
       default: "typed",
     },
     // Where the description came from, for diagnosing scrapes that come back thin.
+    //
+    //   page → the whole page, read because the posting's own structured description
+    //          named no responsibilities and no requirements (some ATSs publish only the
+    //          intro there and render the rest). Adding the value to the scraper without
+    //          adding it HERE made every such import fail validation and surface as
+    //          "I couldn't read that page" — a new enum member needs both.
     descriptionSource: {
       type: String,
-      enum: ["structured", "dom", "meta", "typed"],
+      enum: ["structured", "dom", "meta", "page", "typed"],
       default: "typed",
     },
     // What the posting stated about ITSELF, beyond its text — nearly all of it lifted
