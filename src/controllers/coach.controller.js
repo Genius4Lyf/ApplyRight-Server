@@ -203,13 +203,16 @@ const resolveNoJdContext = async (draft, meta) => {
 // engine's own matcher so "covered while building" agrees with the later scan. Empty
 // when there's no brief/must-haves. Must-haves first, then capped.
 const openMustHavesFromDraft = (draft, brief, cap = 6) => {
-  // Qualifications are excluded HERE, at the one door every interview target comes
-  // through. A degree field is something you hold, not something you did in a role, so
-  // "did you do Mechanical Engineering at this job?" is a question with no sensible
-  // answer — and on a real posting three of the seven must-haves were exactly that.
-  // Scoring still sees them: this filters what Aria ASKS about, nothing else.
+  // Qualifications and behavioural traits are excluded HERE, at the one door every
+  // interview target comes through. A degree field is something you hold, not something
+  // you did in a role, so "did you do Mechanical Engineering at this job?" is a question
+  // with no sensible answer — and on a real posting three of the seven must-haves were
+  // exactly that. A behavioural trait fails the same test from the other side: "tell me
+  // about your communication skills" can only produce the vague, undefendable answer this
+  // interview exists to avoid, and it was a must-have on four of nine real postings.
+  // Scoring still sees both: this filters what Aria ASKS about, nothing else.
   const mustHaves = (Array.isArray(brief?.mustHaves) ? brief.mustHaves : []).filter(
-    (item) => !item?.qualification
+    (item) => !item?.qualification && !item?.behavioural
   );
   if (!mustHaves.length) return [];
   const text = [

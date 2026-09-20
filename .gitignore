@@ -3,3 +3,7 @@
 .cache
 logs/
 *.log
+
+# Corpus-harness run artifacts (scripts/jdCorpus.js). Reports are a lab result,
+# not source: regenerate them, never diff them.
+scratchpad/

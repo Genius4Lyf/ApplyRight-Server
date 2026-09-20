@@ -116,11 +116,27 @@ const draftCVSchema = new mongoose.Schema(
         // arrays for the same reason aliases do — the coverage tracker reads these, and it
         // is what stops the interview asking someone whether they "did Mechanical
         // Engineering" at a job. Additive: briefs saved before this simply have none.
+        // `behavioural` is the same idea for the other thing an interview cannot chase: a
+        // soft trait ("communication skills", "attention to detail") that a posting really
+        // does ask for but that nobody can evidence by describing work. Found on four of
+        // nine real postings by the corpus harness. Additive, like the rest.
         mustHaves: [
-          { name: String, importance: String, aliases: [String], qualification: Boolean },
+          {
+            name: String,
+            importance: String,
+            aliases: [String],
+            qualification: Boolean,
+            behavioural: Boolean,
+          },
         ],
         niceToHaves: [
-          { name: String, importance: String, aliases: [String], qualification: Boolean },
+          {
+            name: String,
+            importance: String,
+            aliases: [String],
+            qualification: Boolean,
+            behavioural: Boolean,
+          },
         ],
         responsibilities: [String],
         // Typed requirement checklist used by Aria's role-by-role interview. The
@@ -144,6 +160,7 @@ const draftCVSchema = new mongoose.Schema(
             // requirementId hashes the type, so retyping would change every id and silently
             // strand the requirementChecks and requirementProbes already pointing at them.
             qualification: Boolean,
+            behavioural: Boolean,
           },
         ],
       },

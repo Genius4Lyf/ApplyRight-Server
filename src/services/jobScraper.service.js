@@ -370,4 +370,9 @@ const scrapeJob = async (url) => {
   }
 };
 
-module.exports = { scrapeJob, FULL_DESCRIPTION_CHARS };
+// carriesRequirements is exported for the corpus harness (scripts/jdCorpus.js), which
+// grades a scraped body across many postings. It asks the SAME question the page fallback
+// asks — "does this text actually contain requirements?" — and re-implementing it there
+// would put a second answer to that question in the codebase, which is the mistake the
+// shared matcher comment at skillNormalizer.service.js:600 exists to warn about.
+module.exports = { scrapeJob, carriesRequirements, FULL_DESCRIPTION_CHARS };

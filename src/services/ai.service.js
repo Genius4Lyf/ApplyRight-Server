@@ -719,6 +719,7 @@ EXTRACTION RULES:
 2. "detectedCompany": The hiring company. Ignore recruitment agencies and job boards (e.g., "Jobberman", "LinkedIn"). If not found, use null.
 3. "requiredSkills": Skills explicitly listed under "Requirements", "Must have", "Required", or strongly emphasized. Keep each item ATOMIC: a tool, technology, method, certification, domain area, or discrete professional skill — never a whole requirement sentence. Include its type, common aliases, 2-5 short activity signals that would constitute evidence, and the shortest supporting JD phrase.
    - ALIASES MUST include the standard abbreviation or initialism where one exists ("Permit-to-Work" → "PTW"; "Health, Safety, Security and Environmental" → "HSSE"), plus any other name THIS posting uses for the same thing. These are what let a CV that spells it differently still count.
+   - NEVER a behavioural trait or soft quality — "communication skills", "team player", "attention to detail", "proactive", "problem-solving", "work ethic", "time management". These cannot be evidenced by describing work, so listing them crowds out the competencies the role is actually testing. A NAMED professional skill that happens to contain such a word is fine ("Technical Communication", "Stakeholder Management").
    - A DEGREE FIELD OR ACADEMIC DISCIPLINE the posting asks for a qualification IN (e.g. "an OND in Mechanical Engineering") belongs in "requiredEducation", NOT here. Those are alternatives you hold, not work you did, and listing them as skills crowds out the competencies the role is actually testing.
 4. "preferredSkills": Skills listed under "Preferred", "Nice to have", "Bonus", or mentioned casually. Use the same atomic typed shape as requiredSkills.
 5. "requiredYearsExperience": Number of years explicitly required (e.g., "3+ years"). If not stated, use 0.
@@ -842,11 +843,75 @@ const roleBriefFromExtraction = (req, title) => {
   const markQualification = (typed) =>
     typed && isQualification(typed.name) ? { ...typed, qualification: true } : typed;
 
+  // A BEHAVIOURAL TRAIT is not something you can be interviewed against.
+  //
+  // The corpus harness found "communication skills" as a must-have on four of nine real
+  // postings, plus "attention to detail" and "proactive". Tapping one in the requirement
+  // bar makes Aria ask "tell me about your communication skills" — which produces exactly
+  // the vague, undefendable answer the whole feature exists to prevent.
+  //
+  // Marked, not removed, for the same reason qualifications are: the compact arrays are
+  // the scorer's keyword contract and moving them would shift every fit score. This only
+  // tells the INTERVIEW not to chase them.
+  //
+  // A deterministic filter rather than a prompt rule, because we now know the prompt does
+  // not hold — the alias rule added for the same extractor is ignored on 92% of
+  // requirements. The rule is added to the prompt too, as the cheaper first line.
+  //
+  // Matched on the WHOLE reduced name, never as a substring: "Technical Communication" and
+  // "Stakeholder Management" are real, evidenceable skills and must survive. Only the bare
+  // trait, with the usual padding stripped, is caught.
+  const BEHAVIOURAL = new Set([
+    "communication",
+    "teamwork",
+    "team player",
+    "collaboration",
+    "interpersonal",
+    "problem solving",
+    "problem-solving",
+    "attention to detail",
+    "detail oriented",
+    "detail-oriented",
+    "proactive",
+    "self motivated",
+    "self-motivated",
+    "adaptability",
+    "flexibility",
+    "work ethic",
+    "time management",
+    "integrity",
+    "positive attitude",
+    "willingness to learn",
+    "enthusiasm",
+    "passion",
+    "reliability",
+    "punctuality",
+    "critical thinking",
+    "organizational",
+    "organisational",
+    "multitasking",
+  ]);
+  const BEHAVIOURAL_PADDING =
+    /^(?:strong|excellent|good|effective|great|solid|exceptional)\s+|\s+(?:skills?|abilit(?:y|ies)|mindset|attitude|competenc(?:y|ies))$/g;
+  const isBehavioural = (name) => {
+    const reduced = String(name || "")
+      .trim()
+      .toLowerCase()
+      .replace(BEHAVIOURAL_PADDING, "")
+      .replace(BEHAVIOURAL_PADDING, "") // prefix AND suffix, in either order
+      .trim();
+    return BEHAVIOURAL.has(reduced);
+  };
+  const markBehavioural = (typed) =>
+    typed && isBehavioural(typed.name) ? { ...typed, behavioural: true } : typed;
+
+  const mark = (typed) => markBehavioural(markQualification(typed));
+
   const mustHaves = (req?.requiredSkills || [])
-    .map((item) => markQualification(typedSkill(item, "must_have")))
+    .map((item) => mark(typedSkill(item, "must_have")))
     .filter(Boolean);
   const niceToHaves = (req?.preferredSkills || [])
-    .map((item) => markQualification(typedSkill(item, "nice_to_have")))
+    .map((item) => mark(typedSkill(item, "nice_to_have")))
     .filter(Boolean);
   const responsibilities = cleanList(req?.keyResponsibilities, 8);
   const responsibilityRequirements = responsibilities.map((name) => ({
@@ -880,17 +945,19 @@ const roleBriefFromExtraction = (req, title) => {
     // `qualification` rides along so the one free coverage pass the frontend already runs
     // (useJobCoverage → /ai/keyword-coverage, which is fed from these compact arrays) can
     // tell a credential apart from a competency without a second join.
-    mustHaves: mustHaves.map(({ name, aliases, qualification }) => ({
+    mustHaves: mustHaves.map(({ name, aliases, qualification, behavioural }) => ({
       name,
       importance: "must_have",
       aliases: aliases || [],
       ...(qualification ? { qualification: true } : {}),
+      ...(behavioural ? { behavioural: true } : {}),
     })),
-    niceToHaves: niceToHaves.map(({ name, aliases, qualification }) => ({
+    niceToHaves: niceToHaves.map(({ name, aliases, qualification, behavioural }) => ({
       name,
       importance: "nice_to_have",
       aliases: aliases || [],
       ...(qualification ? { qualification: true } : {}),
+      ...(behavioural ? { behavioural: true } : {}),
     })),
     responsibilities,
     // The coach consumes this checklist. Responsibilities remain typed separately so

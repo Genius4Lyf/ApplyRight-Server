@@ -1,0 +1,80 @@
+{
+  "_comment": [
+    "Ten postings, chosen by FAILURE MODE rather than by variety — one per way the reader",
+    "can break. Every URL was verified live on 2026-09-20; postings expire, so a run that",
+    "reports JOB_NOT_FOUND on one row is a dead link, not a regression. Re-source it.",
+    "",
+    "`expect` is what we BELIEVE should happen, not an assertion. The harness prints",
+    "believed-vs-actual so a surprise is visible; it never fails a run over one.",
+    "",
+    "The two `paste` rows carry real employer text with the formatting damage a human paste",
+    "actually inflicts. The words are the employer's; only the shape was broken."
+  ],
+  "postings": [
+    {
+      "id": "01-greenhouse",
+      "probes": "Greenhouse hosted board — the most common ATS we had never once tested",
+      "url": "https://job-boards.greenhouse.io/reddit/jobs/8089959",
+      "expect": { "source": "dom", "note": "no JSON-LD on the page at all — verified" }
+    },
+    {
+      "id": "02-lever",
+      "probes": "Lever hosted board",
+      "url": "https://jobs.lever.co/palantir/ac978161-6f46-4f6b-ad9e-a258e642751c",
+      "expect": { "source": "structured" }
+    },
+    {
+      "id": "03-ashby",
+      "probes": "Ashby — a React board that still emits JSON-LD; two JobPosting blocks, so findJobPosting has to choose",
+      "url": "https://jobs.ashbyhq.com/vanta/cf4358d4-1f34-40cc-b5b4-31a2e001136f",
+      "expect": { "source": "structured" }
+    },
+    {
+      "id": "04-workday",
+      "probes": "Workday — the enterprise ATS, served as a 14KB shell",
+      "url": "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/India-Bengaluru/Senior-Compute-System-Software-Engineer_JR2025828",
+      "expect": { "source": "structured" }
+    },
+    {
+      "id": "05-flair",
+      "probes": "A SECOND Flair tenant — the double-escaped JSON-LD that produced raw HTML in the JD box",
+      "url": "https://bisedge.careers.flair.hr/positions/a2dP3000001KqoHIAS",
+      "expect": { "source": "structured", "note": "must NOT leak markup" }
+    },
+    {
+      "id": "06-jobberman",
+      "probes": "Jobberman NG — three JobPosting blocks on one page",
+      "url": "https://www.jobberman.com/listings/livestock-officer-2kwng2",
+      "expect": { "source": "structured" }
+    },
+    {
+      "id": "07-myjobmag",
+      "probes": "MyJobMag NG — its single ld+json block is UNPARSEABLE, so this must survive on the DOM/page path",
+      "url": "https://www.myjobmag.com/job/operations-officer-harmony-360-health",
+      "expect": { "source": "dom", "note": "verified: JSON.parse throws on its ld+json" }
+    },
+    {
+      "id": "08-indeed-wall",
+      "probes": "Bot wall. Indeed answers 403 with a captcha page",
+      "url": "https://www.indeed.com/viewjob?jk=d45028562e698652",
+      "expect": {
+        "error": "ACCESS_DENIED",
+        "note": "a CLEAN refusal is the pass; garbage text is the failure"
+      }
+    },
+    {
+      "id": "09-paste-word",
+      "probes": "Pasted from Word: smart quotes, bullet glyphs, non-breaking spaces, tab indents, hard wraps mid-sentence",
+      "paste": "pastes/09-paste-word.txt",
+      "title": "Finance & Admin Officer",
+      "expect": { "source": "typed" }
+    },
+    {
+      "id": "10-paste-linkedin",
+      "probes": "Pasted from LinkedIn: About-the-job preamble, emoji where headings were, bullets flattened to prose, Show more. Also THIN (~600 chars) and names three alternative degree fields — the qualification trap",
+      "paste": "pastes/10-paste-linkedin.txt",
+      "title": "Marketing & Business Development Officer",
+      "expect": { "source": "typed", "note": "expect the degree fields to be the hard part" }
+    }
+  ]
+}

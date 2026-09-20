@@ -639,6 +639,36 @@ const derivedSurfaces = (value) => {
   return out;
 };
 
+// A LINE BREAK IS A SPACE.
+//
+// textMentions already treats a newline as a word boundary, so a one-word surface was
+// never affected. A MULTI-word one was invisible: "microsoft excel" is not a substring of
+// "microsoft\r\nexcel", so a requirement the posting states in full came back missing.
+//
+// Found by running the corpus harness over ten postings — seven of eleven must-haves on a
+// Word-style paste were reported missing from a posting that names every one of them. It
+// is not an edge case: every hard wrap from Word, a PDF or an email breaks at a space, and
+// the SAME matcher reads the CV, so a hard-wrapped résumé was losing credit too.
+//
+// Applied to the haystack in mentionsRequirement (once per call, not once per surface) and
+// to each surface as it is added, so both sides of the comparison are flat. \s covers the
+// non-breaking spaces that arrive with every Word paste.
+//
+// A BLANK line is not a wrap, so it must not flatten. The last line of one paragraph and
+// the first word of the next are not a phrase, and joining them would let this matcher
+// report a requirement covered that nobody wrote — the exact lie textMentions' boundary
+// rule exists to prevent. Blank lines are held out, everything else collapses, and they
+// come back as a newline, which textMentions already treats as a boundary. A bullet
+// boundary needs no such care: the "-", "*" or "•" starting the next line is itself a
+// non-alphanumeric boundary.
+const HARD_STOP = " "; // never occurs in a posting; only ever exists mid-function
+const flattenWhitespace = (value) =>
+  String(value || "")
+    .replace(/\n[^\S\n]*\n\s*/g, HARD_STOP)
+    .replace(/\s+/g, " ")
+    .split(HARD_STOP)
+    .join("\n");
+
 // Does `lowerText` mention `surface`? Uses alphanumeric boundaries for ALL
 // surfaces so we never report a false "covered" (e.g. "react" must not match
 // "reaction", "go" must not match "going"). Treats + # . / as boundaries so
@@ -670,9 +700,7 @@ const requirementSurfaces = (requirement) => {
 
   const idx = buildSurfaceIndex();
   const add = (value) => {
-    const v = String(value || "")
-      .trim()
-      .toLowerCase();
+    const v = flattenWhitespace(value).trim().toLowerCase();
     if (v) surfaces.add(v);
   };
 
@@ -713,7 +741,7 @@ const requirementSurfaces = (requirement) => {
  * @returns {boolean}
  */
 const mentionsRequirement = (requirement, text) => {
-  const lowerText = String(text || "").toLowerCase();
+  const lowerText = flattenWhitespace(String(text || "").toLowerCase());
   if (!lowerText) return false;
   for (const surface of requirementSurfaces(requirement)) {
     if (textMentions(lowerText, surface)) return true;

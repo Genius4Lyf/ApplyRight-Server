@@ -155,6 +155,37 @@ describe("openMustHavesFromDraft — what the role still needs", () => {
     });
   });
 
+  // The same door, for the other thing an interview cannot chase. "Tell me about your
+  // communication skills" can only produce the vague, undefendable answer this interview
+  // exists to avoid — and the corpus harness found one as a must-have on four of nine
+  // real postings, so it is the common case, not the exotic one.
+  describe("behavioural traits are never interview targets", () => {
+    const withTrait = brief([
+      { name: "Communication skills", importance: "must_have", behavioural: true },
+      { name: "Permit-to-Work", importance: "must_have" },
+    ]);
+
+    it("excludes a behavioural trait even though it is uncovered", () => {
+      expect(names(openMustHavesFromDraft(draftWith(), withTrait))).toEqual(["Permit-to-Work"]);
+    });
+
+    it("returns nothing at all when every must-have is one", () => {
+      const onlyTraits = brief([
+        { name: "Attention to Detail", importance: "must_have", behavioural: true },
+      ]);
+      expect(openMustHavesFromDraft(draftWith(), onlyTraits)).toEqual([]);
+    });
+
+    it("excludes a qualification and a trait in the same brief", () => {
+      const both = brief([
+        { name: "Mechanical Engineering", importance: "must_have", qualification: true },
+        { name: "Teamwork", importance: "must_have", behavioural: true },
+        { name: "Root Cause Analysis", importance: "must_have" },
+      ]);
+      expect(names(openMustHavesFromDraft(draftWith(), both))).toEqual(["Root Cause Analysis"]);
+    });
+  });
+
   // The matcher now derives spacing and initialism variants, so a requirement written one
   // way in the posting is covered by a bullet written another way. Without this, Aria
   // re-asks about something the user has already written down.

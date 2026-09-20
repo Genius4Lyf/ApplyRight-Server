@@ -110,6 +110,79 @@ describe("roleBriefFromExtraction", () => {
     });
   });
 
+  // Running ten real postings through the real reader (scripts/jdCorpus.js) found
+  // "communication skills" as a MUST-HAVE on four of nine, plus "attention to detail" and
+  // "proactive". Renaissance leaking none of its twelve behavioural competencies was luck
+  // we verified once, not a property anything enforced.
+  //
+  // Deterministic, not a prompt rule: the alias rule added to this same extractor is
+  // ignored on 92% of requirements, so the prompt is the cheap first line and this is the
+  // one that actually holds.
+  describe("behavioural traits", () => {
+    const withTraits = {
+      requiredSkills: [
+        { name: "Communication skills", type: "skill" },
+        { name: "Attention to Detail", type: "skill" },
+        { name: "proactive", type: "skill" },
+        { name: "Permit-to-Work", type: "method" },
+      ],
+    };
+
+    it("marks a soft trait that cannot be evidenced by describing work", () => {
+      const byName = Object.fromEntries(
+        roleBriefFromExtraction(withTraits).mustHaves.map((m) => [m.name, m])
+      );
+      expect(byName["Communication skills"].behavioural).toBe(true);
+      expect(byName["Attention to Detail"].behavioural).toBe(true);
+      expect(byName.proactive.behavioural).toBe(true);
+    });
+
+    it("leaves a real competency unmarked", () => {
+      const byName = Object.fromEntries(
+        roleBriefFromExtraction(withTraits).mustHaves.map((m) => [m.name, m])
+      );
+      expect(byName["Permit-to-Work"].behavioural).toBeUndefined();
+    });
+
+    // The reason this matches the WHOLE reduced name and never a substring. Both of these
+    // are real, evidenceable skills that happen to contain a trait word, and filtering
+    // them would delete a requirement the user genuinely needs to prove.
+    it("keeps a named professional skill that merely contains a trait word", () => {
+      const brief = roleBriefFromExtraction({
+        requiredSkills: [
+          { name: "Technical Communication", type: "skill" },
+          { name: "Stakeholder Management", type: "skill" },
+        ],
+      });
+      expect(brief.mustHaves.every((m) => !m.behavioural)).toBe(true);
+    });
+
+    it("sees through the padding a posting wraps a trait in", () => {
+      const brief = roleBriefFromExtraction({
+        requiredSkills: [
+          { name: "Strong Communication" },
+          { name: "Excellent interpersonal abilities" },
+          { name: "Teamwork mindset" },
+        ],
+      });
+      expect(brief.mustHaves.every((m) => m.behavioural)).toBe(true);
+    });
+
+    it("marks nice-to-haves too, and the typed requirements list", () => {
+      const brief = roleBriefFromExtraction({
+        preferredSkills: [{ name: "Time management", type: "skill" }],
+      });
+      expect(brief.niceToHaves[0].behavioural).toBe(true);
+      expect(brief.requirements[0].behavioural).toBe(true);
+    });
+
+    it("keeps them IN the compact arrays — scoring must be untouched", () => {
+      // Same contract qualifications hold to. The flag changes what Aria ASKS about, not
+      // what anything scores; removing them here would move every fit score.
+      expect(roleBriefFromExtraction(withTraits).mustHaves).toHaveLength(4);
+    });
+  });
+
   describe("shape and bounds", () => {
     it("composes requirements as must-haves, then nice-to-haves, then responsibilities", () => {
       const { requirements } = roleBriefFromExtraction(EXTRACTION);

@@ -251,3 +251,57 @@ describe("computeKeywordCoverage — now shares the same matcher", () => {
     expect(covered).toBe(0);
   });
 });
+
+// A LINE BREAK IS A SPACE.
+//
+// Found by the corpus harness (scripts/jdCorpus.js) over ten real postings: seven of
+// eleven must-haves on a Word-style paste were reported MISSING from a posting that names
+// every one of them. textMentions already treated a newline as a word boundary, so a
+// one-word requirement was never affected — but "microsoft excel" is not a substring of
+// "microsoft\r\nexcel", so every multi-word requirement went invisible the moment a hard
+// wrap fell between its words.
+//
+// Not an edge case: Word, PDF copy and email all wrap at a space, and the SAME matcher
+// reads the CV — so a hard-wrapped résumé was losing credit for skills it plainly states.
+describe("mentionsRequirement — a hard wrap must not hide a requirement", () => {
+  it("matches a multi-word requirement broken across a line", () => {
+    const posting = "Software: proficiency in Microsoft\r\nExcel (VLOOKUPs).";
+    expect(mentionsRequirement({ name: "Microsoft Excel" }, posting)).toBe(true);
+  });
+
+  it("matches across the non-breaking spaces a Word paste carries", () => {
+    const posting = "Handles accounts payable monthly";
+    expect(mentionsRequirement({ name: "Accounts Payable" }, posting)).toBe(true);
+  });
+
+  it("applies to the JD aliases too, not just the name", () => {
+    const posting = "Issued permit to\nwork certificates";
+    expect(mentionsRequirement({ name: "PTW", aliases: ["Permit to Work"] }, posting)).toBe(true);
+  });
+
+  // The reason flattening is not simply /\s+/ → " ". The last word of one paragraph and
+  // the first of the next are not a phrase, and joining them would report a requirement
+  // covered that nobody wrote — the exact lie the boundary rule exists to prevent.
+  it("does NOT join across a blank line", () => {
+    const posting = "we handle data\n\nScience is our value";
+    expect(mentionsRequirement({ name: "data science" }, posting)).toBe(false);
+  });
+
+  it("does NOT join across a bullet boundary", () => {
+    const posting = "- performs welding\n- safety checks daily";
+    expect(mentionsRequirement({ name: "welding safety" }, posting)).toBe(false);
+  });
+
+  it("still refuses a substring collision after flattening", () => {
+    expect(mentionsRequirement({ name: "Java" }, "Strong JavaScript\nskills")).toBe(false);
+  });
+
+  // The CV side of the same bug, through the endpoint the requirement bar actually reads.
+  it("counts a wrapped bullet on the CV as coverage", () => {
+    const { covered } = computeKeywordCoverage(
+      [{ name: "Root Cause Analysis", importance: "must_have" }],
+      { text: "Led root cause\nanalysis on line stoppages", skills: [] }
+    );
+    expect(covered).toBe(1);
+  });
+});
