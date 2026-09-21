@@ -72,7 +72,8 @@ const value = (name) => {
 const USE_CACHE = flag("cache");
 if (!USE_CACHE) mongoose.set("bufferTimeoutMS", 1);
 
-const { scrapeJob, carriesRequirements } = require("../src/services/jobScraper.service");
+const cheerio = require("cheerio");
+const { scrapeJob, carriesRequirements, REQUEST } = require("../src/services/jobScraper.service");
 const { extractJobRequirements, roleBriefFromExtraction } = require("../src/services/ai.service");
 const {
   mentionsRequirement,
@@ -83,9 +84,6 @@ const ROOT = path.join(__dirname, "jdCorpus");
 const CORPUS = path.join(ROOT, "corpus.json");
 const OUT = value("out") || path.join(__dirname, "..", "scratchpad", "jdCorpus");
 const FIXTURES = path.join(__dirname, "..", "tests", "fixtures", "jd");
-
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 // ── The checks ───────────────────────────────────────────────────────────────
 //
@@ -256,11 +254,31 @@ const checkBehavioural = (brief) => {
 
 // ── Stage 1: get the text ────────────────────────────────────────────────────
 
+// A snapshot is only worth having if it is BYTE-FOR-BYTE the thing the scraper would have
+// received. The first version of this sent only a User-Agent and Workday answered it with a
+// 150-byte JSON redirect stub — a fixture that would have "passed" while testing nothing.
+// It now borrows the scraper's own REQUEST.
+//
+// Then it drops what provably cannot reach the result: <script> that is not
+// application/ld+json, and <style>. cheerio reads ld+json directly, and htmlToMarkdown
+// strips script and style before any text is taken — so this removes weight, not meaning,
+// and takes 1.8 MB of minified bundles down to something worth committing. Proven rather
+// than assumed: tests/jdFixtures.test.js pins each fixture's scrape result, and the
+// trimming was verified to leave every one of them identical.
+const LD_JSON = 'script[type="application/ld+json"]';
+const trimForFixture = (html) => {
+  const $ = cheerio.load(html);
+  $("script").not(LD_JSON).remove();
+  $("style, link[rel='stylesheet'], svg, noscript").remove();
+  return $.html();
+};
+
 const snapshot = async (id, url) => {
   fs.mkdirSync(FIXTURES, { recursive: true });
-  const { data } = await axios.get(url, { headers: { "User-Agent": UA }, timeout: 20000 });
+  const { data } = await axios.get(url, REQUEST);
+  const html = typeof data === "string" ? data : JSON.stringify(data);
   const file = path.join(FIXTURES, `${id}.html`);
-  fs.writeFileSync(file, typeof data === "string" ? data : JSON.stringify(data), "utf8");
+  fs.writeFileSync(file, trimForFixture(html), "utf8");
   return file;
 };
 

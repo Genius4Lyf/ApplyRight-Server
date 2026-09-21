@@ -208,19 +208,27 @@ const COMPANY_SELECTORS = [
  * @throws {Error} ACCESS_DENIED — blocked, timed out, or nothing readable came back.
  *                 JOB_NOT_FOUND — the posting is gone.
  */
+// THE REQUEST, named once.
+//
+// The Accept header is load-bearing, not decoration. Asked without it, Workday answers a
+// 150-byte JSON redirect envelope instead of the posting — which is exactly what the corpus
+// harness snapshotted while it sent only a User-Agent, giving us a fixture that was not
+// what the scraper actually fetches. Exported so the harness asks the identical question;
+// a copy of these headers somewhere else is a fixture waiting to go stale.
+const REQUEST = {
+  headers: {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+  },
+  timeout: 15000,
+  maxRedirects: 5, // Follow shortened URLs (lnkd.in, bit.ly, etc.)
+};
+
 const scrapeJob = async (url) => {
   try {
-    const { data, request } = await axios.get(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      timeout: 15000,
-      maxRedirects: 5, // Follow shortened URLs (lnkd.in, bit.ly, etc.)
-    });
+    const { data, request } = await axios.get(url, REQUEST);
 
     const finalUrl = request?.res?.responseUrl || url;
     const $ = cheerio.load(data);
@@ -375,4 +383,4 @@ const scrapeJob = async (url) => {
 // asks — "does this text actually contain requirements?" — and re-implementing it there
 // would put a second answer to that question in the codebase, which is the mistake the
 // shared matcher comment at skillNormalizer.service.js:600 exists to warn about.
-module.exports = { scrapeJob, carriesRequirements, FULL_DESCRIPTION_CHARS };
+module.exports = { scrapeJob, carriesRequirements, REQUEST, FULL_DESCRIPTION_CHARS };
