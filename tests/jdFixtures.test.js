@@ -207,3 +207,63 @@ describe("pasted postings", () => {
     });
   });
 });
+
+// NOTHING CREDENTIAL-SHAPED IN A FIXTURE.
+//
+// These files are snapshots of OTHER PEOPLE'S pages, committed to a public repository. An
+// early one carried Greenhouse's own browser-side Google API key — inline in a
+// `window.ENV` that every visitor of every Greenhouse job board receives — and GitHub's
+// secret scanner raised an alert on push. Not our credential, nothing of ours to rotate,
+// and still the wrong thing to have in a repo: an alert you have to explain away teaches
+// you to skim the next one.
+//
+// scripts/jdCorpus.js now strips non-ld+json scripts, redacts these same patterns, and
+// refuses to write a file that still matches. This is the check that the FILES ON DISK
+// hold to it, which is the part a future snapshot taken with an older script, or a fixture
+// hand-edited in a hurry, could otherwise slip past.
+describe("fixtures carry no credentials", () => {
+  const PATTERNS = [
+    ["Google API key", /AIza[0-9A-Za-z_-]{35}/],
+    ["OpenAI key", /sk-[A-Za-z0-9]{20,}/],
+    ["GitHub token", /gh[pousr]_[A-Za-z0-9]{36,}/],
+    ["Slack token", /xox[baprs]-[A-Za-z0-9-]{10,}/],
+    ["AWS access key id", /AKIA[0-9A-Z]{16}/],
+    ["Stripe key", /(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/],
+    ["JWT", /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}/],
+    ["private key block", /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+  ];
+
+  const files = [
+    ...fs.readdirSync(FIXTURES).map((f) => path.join(FIXTURES, f)),
+    ...fs.readdirSync(PASTES).map((f) => path.join(PASTES, f)),
+  ];
+
+  it("has fixtures to check at all — a silent empty list would pass forever", () => {
+    expect(files.length).toBeGreaterThan(5);
+  });
+
+  it.each(files)("%s", (file) => {
+    const body = fs.readFileSync(file, "utf8");
+    const hits = PATTERNS.filter(([, re]) => re.test(body)).map(([name]) => name);
+    // Named, never printed: the point is to say WHICH kind was found, not to paste the
+    // value into CI output where it would be leaked a second time.
+    expect(hits).toEqual([]);
+  });
+
+  // The other half of the promise. Scripts are where these live, and the whole reason the
+  // snapshots are small enough to commit.
+  it("keeps no script other than the structured data the scraper reads", () => {
+    fs.readdirSync(FIXTURES)
+      .filter((f) => f.endsWith(".html"))
+      .forEach((f) => {
+        const html = fs.readFileSync(path.join(FIXTURES, f), "utf8");
+        const all = (html.match(/<script\b/gi) || []).length;
+        const ld = (html.match(/application\/ld\+json/gi) || []).length;
+        expect({ file: f, scripts: all, structured: ld }).toEqual({
+          file: f,
+          scripts: ld,
+          structured: ld,
+        });
+      });
+  });
+});

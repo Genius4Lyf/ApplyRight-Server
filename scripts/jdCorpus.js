@@ -266,11 +266,38 @@ const checkBehavioural = (brief) => {
 // than assumed: tests/jdFixtures.test.js pins each fixture's scrape result, and the
 // trimming was verified to leave every one of them identical.
 const LD_JSON = 'script[type="application/ld+json"]';
+// A SNAPSHOT IS SOMEONE ELSE'S PAGE, AND IT IS ABOUT TO BE COMMITTED.
+//
+// The first snapshots here were taken before the trimming existed, and one of them carried
+// Greenhouse's own browser-side Google API key — served in an inline `window.ENV` to every
+// visitor of every Greenhouse job board. GitHub's secret scanner flagged it on push. It was
+// never OUR credential and nothing of ours needed rotating, but it is exactly the kind of
+// thing that should never reach a repository by accident, and an alert you have to explain
+// away is an alert you learn to ignore.
+//
+// Stripping non-ld+json scripts removes it today. This is the second line, for the day a
+// key turns up in an attribute, a data- blob or the JSON-LD itself, where the trimming
+// cannot reach: nothing credential-shaped gets written, whatever it is attached to.
+const SECRET_PATTERNS = [
+  /AIza[0-9A-Za-z_-]{35}/g, // Google
+  /sk-[A-Za-z0-9]{20,}/g, // OpenAI
+  /gh[pousr]_[A-Za-z0-9]{36,}/g, // GitHub
+  /xox[baprs]-[A-Za-z0-9-]{10,}/g, // Slack
+  /AKIA[0-9A-Z]{16}/g, // AWS
+  /(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/g, // Stripe
+  /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}/g, // JWT
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+];
+const REDACTED = "REDACTED_BY_JDCORPUS";
+
+const redactSecrets = (html) =>
+  SECRET_PATTERNS.reduce((out, re) => out.replace(re, REDACTED), html);
+
 const trimForFixture = (html) => {
   const $ = cheerio.load(html);
   $("script").not(LD_JSON).remove();
   $("style, link[rel='stylesheet'], svg, noscript").remove();
-  return $.html();
+  return redactSecrets($.html());
 };
 
 const snapshot = async (id, url) => {
@@ -278,7 +305,22 @@ const snapshot = async (id, url) => {
   const { data } = await axios.get(url, REQUEST);
   const html = typeof data === "string" ? data : JSON.stringify(data);
   const file = path.join(FIXTURES, `${id}.html`);
-  fs.writeFileSync(file, trimForFixture(html), "utf8");
+  const cleaned = trimForFixture(html);
+
+  // Refuse rather than warn. A snapshot that still matches after redaction means a pattern
+  // needs widening, and the one outcome that must not happen is writing it anyway and
+  // finding out from an email.
+  const missed = SECRET_PATTERNS.filter((re) => {
+    re.lastIndex = 0;
+    return re.test(cleaned);
+  });
+  if (missed.length) {
+    throw new Error(
+      `Refusing to write ${id}.html: ${missed.length} credential-shaped string(s) survived redaction.`
+    );
+  }
+
+  fs.writeFileSync(file, cleaned, "utf8");
   return file;
 };
 
