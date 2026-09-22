@@ -940,7 +940,11 @@ const generateApplicationCoverLetter = async (req, res) => {
       sessionModelId: req.body?.model,
       user,
     });
-    const isPro = tier === "flagship";
+    // "Does this pick meter?", not "is it the top tier". Advanced meters too, so it must
+    // take this branch as well: the free daily letter is a LIGHT-model perk, and spending
+    // it on a model that costs real money per call is the one thing the billing rule
+    // forbids. Named for the question it answers, so the next tier cannot quietly opt out.
+    const isMetered = modelSelection.alwaysMeters(tier);
 
     // Free-tier users get one free letter per calendar day; past that (and for
     // paid users) it's the normal credit charge. Checked BEFORE the AI call so a
@@ -950,7 +954,7 @@ const generateApplicationCoverLetter = async (req, res) => {
     // hand out the metered tier for nothing, which is the one thing the billing rule
     // forbids — so a Pro pick always pays.
     const COSTS = await settingsService.getCreditCosts();
-    const clPre = isPro ? { isFree: false, used: 0 } : coverLetterAllowance(user);
+    const clPre = isMetered ? { isFree: false, used: 0 } : coverLetterAllowance(user);
     if (!clPre.isFree) checkCredits(user, cost);
 
     const coverLetter = await aiService.generateCoverLetter(resumeText, jobData.description, {
@@ -958,7 +962,7 @@ const generateApplicationCoverLetter = async (req, res) => {
       applicationId: application._id,
       // Standard stays on the user's resolved text model — the same model this endpoint
       // has always used. Only a Pro pick routes to the chosen model.
-      model: isPro ? modelId : aiService.resolveTextModel(user),
+      model: isMetered ? modelId : aiService.resolveTextModel(user),
       lang: docLang,
     });
 
@@ -967,12 +971,12 @@ const generateApplicationCoverLetter = async (req, res) => {
     if (clPre.isFree) {
       await commitFreeCoverLetter(user, clPre);
       remainingCredits = subscription.availableCredits(user);
-    } else if (isPro) {
+    } else if (isMetered) {
       // Flagship meters through the shared tier charger, and writes its own ledger type
       // so a Pro letter is distinguishable in the admin charts.
       const charge = await modelSelection.chargeForModel(user, cost, tier, {
         type: TRANSACTION_TYPES.GENERATE_COVER_LETTER,
-        description: "Pro cover letter",
+        description: `Cover letter (${tier} model)`,
       });
       if (charge.insufficient) {
         return res.status(402).json({

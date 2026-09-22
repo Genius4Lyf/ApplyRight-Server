@@ -970,7 +970,7 @@ const summary = async (req, res) => {
 
     // PRE-CHECK the balance before spending an AI call the user can't pay for — only when
     // it will actually meter (a paid LIGHT summary is free/unlimited; flagship always meters).
-    const willMeter = tier === "flagship" || !subscription.isPaidActive(user);
+    const willMeter = modelSelection.alwaysMeters(tier) || !subscription.isPaidActive(user);
     if (willMeter && subscription.availableCredits(user) < cost) {
       return res.status(403).json({
         code: "INSUFFICIENT_CREDITS",
@@ -1155,10 +1155,10 @@ const commitChatTurn = async (user, pre, cost, tier = "light") => {
   // modelSelection.service's locked rule. The pool is a LIGHT-model perk; 15 free
   // Sonnet-class turns a day per user is the same blow-out the build-with metering
   // below closes. A charged flagship turn does NOT consume a free-pool slot.
-  if (tier === "flagship") {
+  if (modelSelection.alwaysMeters(tier)) {
     const r = await modelSelection.chargeForModel(user, cost, tier, {
       type: TRANSACTION_TYPES.ARIA_CHAT,
-      description: "Aria chat (Pro model)",
+      description: `Aria chat (${tier} model)`,
     });
     if (r.insufficient) return { insufficient: true };
     await user.save();
@@ -1186,7 +1186,7 @@ const commitChatTurn = async (user, pre, cost, tier = "light") => {
 // LIGHT only past the pool, and never on an active paid plan (unlimited light) — so a
 // paid light user is never wrongly blocked with CHAT_LIMIT_REACHED.
 const turnWillMeter = (user, pre, tier) =>
-  tier === "flagship" || (pre.willCharge && !subscription.isPaidActive(user));
+  modelSelection.alwaysMeters(tier) || (pre.willCharge && !subscription.isPaidActive(user));
 
 // Refuse a turn the user can't pay for. The two tiers fail for DIFFERENT reasons and
 // must not share a message: a LIGHT user has genuinely burned the day's free pool and
@@ -1194,12 +1194,12 @@ const turnWillMeter = (user, pre, tier) =>
 // pool left — Pro simply never rides it — so "you've used today's free chats" is wrong,
 // and it hides the actual way out: switch back to Standard, which is still free.
 const refuseChatTurn = (res, { tier, cost, user, pre, building = false }) => {
-  if (tier === "flagship") {
+  if (modelSelection.alwaysMeters(tier)) {
     return res.status(403).json({
       code: "INSUFFICIENT_CREDITS",
       message: building
-        ? "Building with the Pro model costs credits. Switch to Standard — it's free — or top up."
-        : "The Pro model costs credits per message. Switch to Standard — it's free — or top up.",
+        ? "Building with a paid model costs credits. Switch to Basic — it's free — or top up."
+        : "This model costs credits per message. Switch to Basic — it's free — or top up.",
       required: cost,
       remainingCredits: subscription.availableCredits(user),
       freeRemaining: Math.max(0, FREE_DAILY_CHATS - (pre?.used || 0)),
@@ -1550,7 +1550,7 @@ const chat = async (req, res) => {
 
     // Flagship build-with still METERS (light stays free) — pre-check the balance
     // BEFORE spending an AI call the user can't pay for. See modelSelection.service:8-10.
-    if (focus && tier === "flagship" && subscription.availableCredits(user) < cost) {
+    if (focus && modelSelection.alwaysMeters(tier) && subscription.availableCredits(user) < cost) {
       return refuseChatTurn(res, { tier, cost, user, pre, building: true });
     }
 
@@ -1682,10 +1682,10 @@ const chat = async (req, res) => {
       // Build-with is FREE on the LIGHT model — that's the point of Aria Studio.
       // FLAGSHIP meters even here: an unlimited Sonnet interview is exactly the
       // cost blow-out modelSelection.service is written to prevent.
-      if (tier === "flagship") {
+      if (modelSelection.alwaysMeters(tier)) {
         const r = await modelSelection.chargeForModel(user, cost, tier, {
           type: TRANSACTION_TYPES.ARIA_CHAT,
-          description: "Aria build-with (Pro model)",
+          description: `Aria build-with (${tier} model)`,
         });
         if (r.insufficient) {
           return refuseChatTurn(res, { tier, cost, user, pre, building: true });

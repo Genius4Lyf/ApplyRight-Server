@@ -1,8 +1,17 @@
 const SystemSettings = require("../models/SystemSettings");
 const {
   DEFAULT_CREDIT_COSTS,
+  DEFAULT_ADVANCED_CREDIT_COSTS,
   DEFAULT_FLAGSHIP_CREDIT_COSTS,
 } = require("../config/creditCosts");
+
+// Everything a non-light tier needs to price itself: the sparse delta map layered over
+// the resolved light costs, and the SystemSettings field admins override it through.
+// Keyed by tier so adding a fourth is a row here rather than another cache + branch.
+const TIER_COSTS = Object.freeze({
+  advanced: { deltas: DEFAULT_ADVANCED_CREDIT_COSTS, settingsKey: "advancedCreditCosts" },
+  flagship: { deltas: DEFAULT_FLAGSHIP_CREDIT_COSTS, settingsKey: "flagshipCreditCosts" },
+});
 const { DEFAULT_MODELS } = require("../config/catalog");
 
 // Merge a Mongoose Map (or a plain object, for test mocks) onto a base object. Spreading a
@@ -23,18 +32,17 @@ const mergeOverride = (base, overrideMap) => {
 const CREDIT_COSTS_TTL_MS = 30 * 1000;
 let creditCostsCache = null;
 let creditCostsCachedAt = 0;
-// Parallel short caches for the flagship-tier costs and the model registry — same TTL,
-// same single-instance caveat, invalidated together on any settings write.
-let flagshipCostsCache = null;
-let flagshipCostsCachedAt = 0;
+// Parallel short caches for the per-tier costs and the model registry — same TTL, same
+// single-instance caveat, invalidated together on any settings write. One entry per
+// non-light tier: `{ [tier]: { map, at } }`.
+let tierCostsCache = {};
 let modelsCache = null;
 let modelsCachedAt = 0;
 
 const invalidateCreditCostsCache = () => {
   creditCostsCache = null;
   creditCostsCachedAt = 0;
-  flagshipCostsCache = null;
-  flagshipCostsCachedAt = 0;
+  tierCostsCache = {};
   modelsCache = null;
   modelsCachedAt = 0;
 };
@@ -114,18 +122,21 @@ const SettingsService = {
   // flagship entry inherits its light cost, and the resolver never returns undefined.
   getCreditCostsForTier: async (tier) => {
     const light = await SettingsService.getCreditCosts();
-    if (tier !== "flagship") return light;
+    const spec = TIER_COSTS[tier];
+    // Light, and any tier this build does not know about, is exactly getCreditCosts().
+    // Falling back to the cheapest table is the safe direction for an unknown id: it can
+    // under-charge, where the other direction bills for something nobody chose.
+    if (!spec) return light;
     const nowTs = Date.now();
-    if (flagshipCostsCache && nowTs - flagshipCostsCachedAt < CREDIT_COSTS_TTL_MS) {
-      return flagshipCostsCache;
-    }
+    const cached = tierCostsCache[tier];
+    if (cached && nowTs - cached.at < CREDIT_COSTS_TTL_MS) return cached.map;
     const settings = await SystemSettings.getInstance();
-    // light costs → flagship default deltas → admin flagship overrides (each wins over the
-    // prior), so the flagship map is a complete cost table for every action.
-    const withDeltas = { ...light, ...DEFAULT_FLAGSHIP_CREDIT_COSTS };
-    flagshipCostsCache = mergeOverride(withDeltas, settings && settings.flagshipCreditCosts);
-    flagshipCostsCachedAt = nowTs;
-    return flagshipCostsCache;
+    // light costs → this tier's default deltas → admin overrides (each wins over the
+    // prior), so every tier map is a complete cost table for every action.
+    const withDeltas = { ...light, ...spec.deltas };
+    const map = mergeOverride(withDeltas, settings && settings[spec.settingsKey]);
+    tierCostsCache[tier] = { map, at: nowTs };
+    return map;
   },
 
   // The resolved AI model registry: catalog defaults with any admin per-model overrides

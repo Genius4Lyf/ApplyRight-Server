@@ -24,11 +24,31 @@ describe("model registry (config/catalog)", () => {
     expect(catalog.tierOfModel(catalog.DEFAULT_MODELS, "deepseek-v4-flash")).toBe("light");
   });
 
-  it("has exactly two tiers and NO reasoning/opus models", () => {
+  it("has exactly three tiers and NO opus-class models", () => {
     const tiers = new Set(Object.values(catalog.DEFAULT_MODELS).map((m) => m.tier));
-    expect([...tiers].sort()).toEqual(["flagship", "light"]);
+    expect([...tiers].sort()).toEqual(["advanced", "flagship", "light"]);
+    expect(catalog.MODEL_TIERS).toEqual(["light", "advanced", "flagship"]);
     const ids = Object.keys(catalog.DEFAULT_MODELS).join(" ");
-    expect(ids).not.toMatch(/opus|o1|o3|reason/i);
+    expect(ids).not.toMatch(/opus|o1|o3/i);
+  });
+
+  // THE MIDDLE RUNG, and the one thing about it that must not drift.
+  //
+  // Its whole reason to exist is "better instruction-following than Basic, without
+  // Sonnet's ~14x per turn". Put it in `light` and it becomes free on paid plans, which
+  // is how a metered model empties an API balance; put it in `flagship` and it gets
+  // billed at 10 credits a message, which is the price it was created to avoid.
+  it("keeps gpt-5-mini on the advanced rung, exposed, and metered", () => {
+    const row = catalog.DEFAULT_MODELS["gpt-5-mini"];
+    expect(row.tier).toBe("advanced");
+    expect(row.exposed).toBe(true);
+    expect(catalog.alwaysMeters("advanced")).toBe(true);
+    expect(catalog.alwaysMeters("flagship")).toBe(true);
+    // Light is the only tier a paid plan includes. If this ever returns true, "unlimited
+    // text AI on paid plans" has silently started charging for itself.
+    expect(catalog.alwaysMeters("light")).toBe(false);
+    // An unknown tier bills like light — it can under-charge, never over-charge.
+    expect(catalog.alwaysMeters("premium")).toBe(false);
   });
 
   it("unknown model id resolves to the DEFAULT_MODEL row / light tier", () => {

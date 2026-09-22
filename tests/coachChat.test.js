@@ -7,6 +7,9 @@ const SystemSettings = require("../src/models/SystemSettings");
 const aiService = require("../src/services/ai.service");
 const jwt = require("jsonwebtoken");
 const { DEFAULT_MODELS } = require("../src/config/catalog");
+// Real, unmocked — the per-tier price ladder resolves here exactly as it does at a charge
+// site, so the numbers under test are the ones a user is actually billed.
+const SettingsService = require("../src/services/settings.service");
 
 // Mocks: models + ai.service + jwt. subscription.service is intentionally NOT mocked
 // so the REAL chatAllowance/commitChatTurn/chargeOrSkip run against the mocked User/
@@ -35,6 +38,12 @@ const buildMsgs = (text) => [
 // set changes (as happened when gpt-5 was un-exposed and "gpt-5" was hardcoded here).
 const FLAGSHIP_MODEL = Object.entries(DEFAULT_MODELS).find(
   ([, r]) => r.exposed && r.tier === "flagship"
+)?.[0];
+// The middle rung, derived the same way for the same reason: which model sits on it is an
+// admin/catalog decision, and hardcoding the id here would gut the assertions below the
+// next time it changes.
+const ADVANCED_MODEL = Object.entries(DEFAULT_MODELS).find(
+  ([, r]) => r.exposed && r.tier === "advanced"
 )?.[0];
 
 describe("POST /api/coach/chat — smart per-message charging", () => {
@@ -508,7 +517,7 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       expect(res.body.code).toBe("INSUFFICIENT_CREDITS");
       expect(res.body.required).toBe(10);
       // The message must point at the free way out, not only at topping up.
-      expect(res.body.message).toMatch(/Standard/);
+      expect(res.body.message).toMatch(/Basic/);
       // No API call was spent on a turn that could never be paid for.
       expect(aiService.coachChatTurn).not.toHaveBeenCalled();
       expect(Transaction.create).not.toHaveBeenCalled();
@@ -556,7 +565,7 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
 
       expect(res.statusCode).toBe(403);
       expect(res.body.code).toBe("INSUFFICIENT_CREDITS");
-      expect(res.body.message).toMatch(/Standard/);
+      expect(res.body.message).toMatch(/Basic/);
       expect(res.body.reply).toBeUndefined();
       expect(aiService.coachChatTurn).not.toHaveBeenCalled();
     });
@@ -580,6 +589,47 @@ describe("POST /api/coach/chat — smart per-message charging", () => {
       expect(res.body.charged).toBe(true); // flagship ALWAYS meters, even for paid
       expect(User.updateOne).toHaveBeenCalled();
       expect(Transaction.create).toHaveBeenCalledTimes(1);
+    });
+
+    // THE MIDDLE RUNG IS NOT A PLAN PERK.
+    //
+    // This is the assertion the whole third tier rests on. "Unlimited text AI on paid
+    // plans" has only ever meant the LIGHT model; a reasoning model that costs real money
+    // every turn cannot ride inside it, or a month of heavy use comes out of the API
+    // balance rather than the subscription. The tier existed for one commit as a value in
+    // the catalog while `gateModel` still collapsed anything that was not "flagship" to
+    // light — it looked right in the picker and billed as free. This is what catches that.
+    it("a general answer on ADVANCED meters even on an active paid plan", async () => {
+      setUser({ credits: 5, subscription: paidSub, ariaChat: { date: today, count: 15 } });
+      aiService.coachChatTurn.mockResolvedValue({
+        reply: "here you go",
+        intent: "answer",
+        description: "",
+      });
+
+      const res = await post({
+        draftId,
+        currentStepId: "history",
+        model: ADVANCED_MODEL,
+        messages: buildMsgs("how long should my summary be?"),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.charged).toBe(true);
+      expect(Transaction.create).toHaveBeenCalledTimes(1);
+    });
+
+    // Priced BETWEEN the two, not at either end — the reason to offer it at all.
+    it("charges the advanced rate, not the Basic one and not Pro's", async () => {
+      const light = await SettingsService.getCreditCostsForTier("light");
+      const advanced = await SettingsService.getCreditCostsForTier("advanced");
+      const flagship = await SettingsService.getCreditCostsForTier("flagship");
+
+      expect(advanced.ARIA_CHAT_MESSAGE).toBeGreaterThan(light.ARIA_CHAT_MESSAGE);
+      expect(advanced.ARIA_CHAT_MESSAGE).toBeLessThan(flagship.ARIA_CHAT_MESSAGE);
+      // An action with no advanced delta still resolves — it inherits the light price
+      // rather than coming back undefined and charging nothing.
+      expect(advanced.GENERATE_CV).toBe(light.GENERATE_CV);
     });
 
     it("a metered general answer on LIGHT is FREE on an active paid plan", async () => {

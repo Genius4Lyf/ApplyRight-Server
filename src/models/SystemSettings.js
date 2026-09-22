@@ -28,6 +28,16 @@ const systemSettingsSchema = new mongoose.Schema(
       of: Number,
       default: {},
     },
+    // ADVANCED-tier per-action credit-cost overrides. Identical pattern to
+    // `flagshipCreditCosts` above, one rung down: the resolver layers these over the light
+    // costs + the DEFAULT_ADVANCED_CREDIT_COSTS deltas. Declared here because strict mode
+    // drops undeclared paths on save with a silent 200 — an admin price change would
+    // appear to take and then not exist.
+    advancedCreditCosts: {
+      type: Map,
+      of: Number,
+      default: {},
+    },
     // Admin-editable overrides for the AI model registry (config/catalog.js DEFAULT_MODELS).
     // Keys are model ids; each value is a partial row ({ tier, exposed, inUsdPer1M, ... })
     // merged over the default row — so an admin can flip a model's `exposed`, retune a

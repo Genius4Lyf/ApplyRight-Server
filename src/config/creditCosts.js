@@ -76,6 +76,29 @@ const DEFAULT_CREDIT_COSTS = Object.freeze({
   DUPLICATE_CV: 0,
 });
 
+// ADVANCED-tier credit costs — the middle rung, same sparse-delta shape as FLAGSHIP below.
+//
+// Priced from what the model actually costs to run, not from a round number: gpt-5-mini is
+// about 2x gpt-4o-mini per turn ($0.25/$2.00 per 1M against $0.15/$0.60), where Sonnet is
+// about 14x. So every entry here sits strictly between its light and flagship price,
+// except the two where flagship is already only 2 and there is no room in between.
+//
+// It ALWAYS meters — see `alwaysMeters` in the catalog. That is the point of the tier: a
+// model with a real per-turn cost cannot be inside "unlimited text AI on paid plans"
+// without the API balance paying for it.
+const DEFAULT_ADVANCED_CREDIT_COSTS = Object.freeze({
+  ARIA_CHAT_MESSAGE: 2, // chat: 1 → 2 → 10
+  ANALYSIS: 12, // scan / fit-analysis: 10 → 12 → 15
+  GENERATE_BULLET: 2, // per-bullet: 1 → 2 → 2 (flagship is already 2)
+  REWRITE_ROLE: 2, // whole-role rewrite: 1 → 2 → 2, mirroring GENERATE_BULLET
+  GENERATE_SUMMARY: 4, // summary: 3 → 4 → 5
+  GENERATE_SKILLS: 12, // skills: 10 → 12 → 15
+  GENERATE_COVER_LETTER: 7, // cover letter: 5 → 7 → 10
+  // DRAFT_JD, PROJECT_IDEAS and DUPLICATE_CV are omitted for exactly the reasons given
+  // under the flagship map below — the first two are server-pinned to the Standard model
+  // and can never resolve to this tier, and the third runs no model at all.
+});
+
 // FLAGSHIP-tier credit costs. A model-tier can charge a DIFFERENT credit cost per action:
 // the flagship (Sonnet-class) models cost more to run, so their actions cost more credits.
 // This is a sparse DELTA map — only the actions that differ from LIGHT are listed; every
@@ -113,6 +136,7 @@ const getDefaults = () => ({ ...DEFAULT_CREDIT_COSTS });
 
 module.exports = {
   DEFAULT_CREDIT_COSTS,
+  DEFAULT_ADVANCED_CREDIT_COSTS,
   DEFAULT_FLAGSHIP_CREDIT_COSTS,
   getDefaults,
 };

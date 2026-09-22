@@ -727,6 +727,10 @@ const getConfig = async (req, res) => {
     // model's per-message credit cost. Only EXPOSED models are surfaced (the picker never
     // learns about hidden ones); the DEFAULT_MODEL id is included so the UI can pre-select.
     const flagshipCreditCosts = await SettingsService.getCreditCostsForTier("flagship");
+    // The middle rung ships alongside it, or the picker can only quote two of the three
+    // prices and the Advanced row would silently fall back to the Basic number — quoting
+    // 1 credit for a message that charges 2.
+    const advancedCreditCosts = await SettingsService.getCreditCostsForTier("advanced");
     const allModels = await SettingsService.getModels();
     const { DEFAULT_MODEL } = require("../config/catalog");
     const models = Object.entries(allModels)
@@ -769,7 +773,7 @@ const getConfig = async (req, res) => {
       templates: { freeUntil: settings.templates?.freeUntil || null },
       creditCosts,
       // Model selection (Aria chat/tailoring): the two-tier cost tables + exposed models.
-      aiModels: { models, defaultModel: DEFAULT_MODEL, flagshipCreditCosts },
+      aiModels: { models, defaultModel: DEFAULT_MODEL, flagshipCreditCosts, advancedCreditCosts },
       announcement: settings.announcement,
       geo: { country: geoCountry, currency: currencyForCountry(geoCountry) },
     });

@@ -246,7 +246,7 @@ const draftJd = async (req, res) => {
     // PRE-CHECK the balance before spending an AI call the user can't pay for — only
     // when it will actually meter (a paid LIGHT draft is free/unlimited; flagship
     // always meters).
-    const willMeter = tier === "flagship" || !subscription.isPaidActive(user);
+    const willMeter = modelSelection.alwaysMeters(tier) || !subscription.isPaidActive(user);
     if (willMeter && subscription.availableCredits(user) < cost) {
       return res.status(403).json({
         code: "INSUFFICIENT_CREDITS",
@@ -763,7 +763,7 @@ const scan = async (req, res) => {
 
     // Pre-flight balance check — only when the scan will actually meter (a paid LIGHT
     // scan is free/unlimited; flagship always meters). Does NOT deduct yet.
-    const willMeter = tier === "flagship" || !subscription.isPaidActive(user);
+    const willMeter = modelSelection.alwaysMeters(tier) || !subscription.isPaidActive(user);
     if (willMeter) checkCredits(user, cost);
 
     // Serialize exactly the way the analysis pipeline does.
@@ -1508,7 +1508,7 @@ const rewriteRole = async (req, res) => {
 
     // PRE-CHECK the balance so we never burn an AI call the user cannot pay for. A LIGHT
     // rewrite on an active paid plan is free (the unlimited-text perk), so it skips this.
-    const willMeter = tier === "flagship" || !subscription.isPaidActive(user);
+    const willMeter = modelSelection.alwaysMeters(tier) || !subscription.isPaidActive(user);
     if (willMeter && subscription.availableCredits(user) < cost) {
       return res.status(403).json({
         code: "INSUFFICIENT_CREDITS",

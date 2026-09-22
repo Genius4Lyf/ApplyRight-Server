@@ -841,7 +841,7 @@ const generateSkills = async (req, res) => {
 
     // Verify credits before spending the AI call — only when it will actually meter
     // (a paid LIGHT skills gen is free/unlimited; flagship always meters).
-    const willMeter = tier === "flagship" || !isPaid;
+    const willMeter = modelSelection.alwaysMeters(tier) || !isPaid;
     if (willMeter && subscription.availableCredits(user) < SKILLS_COST) {
       return res.status(403).json({
         message: "Insufficient credits",

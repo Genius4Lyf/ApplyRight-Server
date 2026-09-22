@@ -349,13 +349,24 @@ const DEFAULT_MODELS = Object.freeze({
     outUsdPer1M: 0.6,
     exposed: true,
   },
+  // ADVANCED — the middle rung, and the only model in it. EXPOSED (surfaced as
+  // "Advanced"). Sits between the two for a reason that showed up in real transcripts:
+  // on gpt-4o-mini, a user who pushed back mid-interview ("are you sure you're asking me
+  // the right question?") got the same three suggestions back word for word. That is an
+  // instruction-following ceiling, not a knowledge one, and it is exactly what the next
+  // rung up fixes — without paying Sonnet's ~14x per turn.
+  //
+  // Priced at roughly 2x gpt-4o-mini to run ($0.25/$2.00 against $0.15/$0.60), so it
+  // meters at 2 credits a message against Basic's 1 and Pro's 10. It ALWAYS meters: it
+  // is not included in a paid plan, because "unlimited" on a model that costs real money
+  // per turn is how an API balance disappears.
   "gpt-5-mini": {
     provider: "openai",
     apiModel: "gpt-5-mini",
-    tier: "light",
+    tier: "advanced",
     inUsdPer1M: 0.25,
     outUsdPer1M: 2.0,
-    exposed: false,
+    exposed: true,
   },
   "kimi-k2.5": {
     provider: "moonshot",
@@ -409,15 +420,28 @@ const DEFAULT_MODELS = Object.freeze({
 const DEFAULT_MODEL = "gpt-4o-mini";
 
 // Valid tiers, in ascending cost. Exported so the cost resolver + gating share one list.
-const MODEL_TIERS = ["light", "flagship"];
+//
+// THREE TIERS, TWO BILLING BEHAVIOURS. `light` is the only one included in a paid plan;
+// everything above it meters on every call. That distinction is what `alwaysMeters` below
+// names — before it existed, "always meters" was spelled `tier === "flagship"` in fourteen
+// places, which silently meant a new tier would have been free on paid plans everywhere.
+const MODEL_TIERS = ["light", "advanced", "flagship"];
+
+// Does a turn on this tier ALWAYS charge credits, plan or no plan?
+//
+// Light is the plan perk: unlimited on an active paid plan, free inside the daily pool
+// otherwise. Anything above it is a deliberate upgrade the user reaches for, and an
+// unlimited one would be a cost blow-out — which is the whole reason the tier split
+// exists. Unknown tiers fall through to `false`, matching tierOfModel's own safe default.
+const alwaysMeters = (tier) => tier === "advanced" || tier === "flagship";
 
 // Resolve a model row from a (possibly admin-overridden) models map, defaulting to the
 // DEFAULT_MODEL row for an unknown id so callers always get a usable provider/apiModel.
 const modelFrom = (models, id) =>
   (models && models[id]) || (models && models[DEFAULT_MODEL]) || DEFAULT_MODELS[DEFAULT_MODEL];
 
-// The tier of a model id (light|flagship), defaulting to 'light' for an unknown id — the
-// cheaper, safer assumption for cost/gating.
+// The tier of a model id (light|advanced|flagship), defaulting to 'light' for an unknown
+// id — the cheaper, safer assumption for cost/gating.
 const tierOfModel = (models, id) => {
   const row = models && models[id];
   return row && MODEL_TIERS.includes(row.tier) ? row.tier : "light";
@@ -454,6 +478,7 @@ module.exports = {
   DEFAULT_MODELS,
   DEFAULT_MODEL,
   MODEL_TIERS,
+  alwaysMeters,
   modelFrom,
   tierOfModel,
 };

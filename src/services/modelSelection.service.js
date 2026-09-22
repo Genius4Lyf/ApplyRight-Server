@@ -3,12 +3,13 @@
 // the model's tier. Sits between the controllers and settings.service / ai.service.
 //
 // Locked decisions this enforces:
-//  · Two tiers only — light (default) + flagship. No Opus / reasoning models.
-//  · Both tiers spendable with ANY credits (ad-earned included).
-//  · Flagship ALWAYS meters credits — its (higher) tier cost is charged even on a paid
-//    plan (paid simply draws its allowance first, via spendCredits). Light on a paid plan
-//    draws the allowance too; the "unlimited" feel is the included allowance, not a skip.
-const { DEFAULT_MODEL } = require("../config/catalog");
+//  · Three tiers — light (default), advanced, flagship. No Opus-class models.
+//  · Every tier spendable with ANY credits (ad-earned included).
+//  · ONLY LIGHT is included in a paid plan. Advanced and flagship always meter credits —
+//    their (higher) tier cost is charged even on a paid plan (paid simply draws its
+//    allowance first, via spendCredits). Light on a paid plan draws the allowance too;
+//    the "unlimited" feel is the included allowance, not a skip.
+const { DEFAULT_MODEL, MODEL_TIERS, alwaysMeters } = require("../config/catalog");
 const settingsService = require("./settings.service");
 const subscription = require("./subscription.service");
 
@@ -26,7 +27,14 @@ const gateModel = async (modelId) => {
   if (!row || row.exposed !== true) {
     return { ok: false, modelId, tier: "light", row: null };
   }
-  return { ok: true, modelId, tier: row.tier === "flagship" ? "flagship" : "light", row };
+  // Validated against the tier LIST rather than compared to one name. It used to read
+  // `row.tier === "flagship" ? "flagship" : "light"`, which quietly collapsed every other
+  // value to light — so a third tier would have been added to the catalog, shown in the
+  // picker, and then billed as the free one everywhere. An unrecognised tier still falls
+  // to light, which is the safe direction: it can under-charge, where the other way bills
+  // for something nobody chose.
+  const tier = MODEL_TIERS.includes(row.tier) ? row.tier : "light";
+  return { ok: true, modelId, tier, row };
 };
 
 // The credit cost for (action, tier). Light = today's costs; flagship = the tuned map.
@@ -50,14 +58,15 @@ const resolveForAction = async ({ action, sessionModelId, draft, user }) => {
 };
 
 // Charge for a model-tier action, enforcing the locked billing rule:
-//   FLAGSHIP → ALWAYS meters (spendCredits) — even on a paid plan (paid draws its
-//              allowance first, but it is never free — no unlimited-Sonnet blow-out).
+//   ADVANCED + FLAGSHIP → ALWAYS meter (spendCredits) — even on a paid plan (paid draws
+//              its allowance first, but it is never free — no unlimited-Sonnet blow-out,
+//              and no unlimited reasoning model either).
 //   LIGHT    → FREE on an active paid plan (the "unlimited text AI on paid" perk applies
 //              to light models only); metered from credits for free-tier users.
 // Returns the same shape as subscription.spendCredits: { charged, skipped, insufficient,
 // remainingCredits }. A zero cost skips regardless (spendCredits already short-circuits).
 const chargeForModel = async (user, cost, tier, txMeta = {}) => {
-  if (tier === "flagship") {
+  if (alwaysMeters(tier)) {
     return subscription.spendCredits(user, cost, txMeta);
   }
   // LIGHT: unlimited on an active paid plan.
@@ -78,5 +87,10 @@ module.exports = {
   costForAction,
   resolveForAction,
   chargeForModel,
+  // Re-exported from the catalog so every charge site can ask the billing question
+  // ("does this tier always meter?") through the service it already imports, rather than
+  // spelling it as a comparison against one tier name — which is how a third tier came to
+  // be free on paid plans in fourteen places at once.
+  alwaysMeters,
   DEFAULT_MODEL,
 };
