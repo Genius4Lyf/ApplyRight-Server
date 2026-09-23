@@ -686,6 +686,79 @@ exports.updateUserMaintenanceAccess = async (req, res) => {
   }
 };
 
+// @desc    Grant / adjust a user's CV download passes (support grant — no money
+//          changes hands, so nothing is written to Payment or Transaction and the
+//          revenue charts stay clean). Passes land in the same
+//          `downloads.passRemaining` bucket a ₦500 purchase fills, so
+//          subscription.consumeDownload spends them with no special-casing:
+//          the user simply stops seeing the download paywall until they run out.
+//          Body takes either `grant` (a delta, may be negative to claw back) or
+//          `set` (an absolute balance). Never goes below 0.
+// @route   PUT /api/v1/admin/users/:id/download-passes
+// @access  Private/Admin
+exports.updateUserDownloadPasses = async (req, res) => {
+  try {
+    const hasGrant = req.body.grant !== undefined;
+    const hasSet = req.body.set !== undefined;
+
+    if (hasGrant === hasSet) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Send either `grant` (delta) or `set` (absolute)" });
+    }
+
+    const raw = Number(hasGrant ? req.body.grant : req.body.set);
+    if (!Number.isInteger(raw)) {
+      return res.status(400).json({ success: false, message: "Value must be a whole number" });
+    }
+    // Guard rail: a fat-fingered 1000 here is free-money-for-life on that account.
+    if (Math.abs(raw) > 500) {
+      return res.status(400).json({ success: false, message: "Value must be 500 or less" });
+    }
+    if (hasSet && raw < 0) {
+      return res.status(400).json({ success: false, message: "`set` cannot be negative" });
+    }
+    if (hasGrant && raw === 0) {
+      return res.status(400).json({ success: false, message: "`grant` cannot be zero" });
+    }
+
+    const update = hasGrant
+      ? { $inc: { "downloads.passRemaining": raw } }
+      : { $set: { "downloads.passRemaining": raw } };
+
+    const user = await User.findByIdAndUpdate(req.params.id, update, {
+      new: true,
+      select: "email downloads",
+    });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // A claw-back larger than the balance would leave a negative count, which
+    // consumeDownload's $gte:1 guard would treat as "no pass" but the UI would
+    // show as a debt. Normalise to 0.
+    if ((user.downloads?.passRemaining || 0) < 0) {
+      user.downloads.passRemaining = 0;
+      await user.save();
+    }
+
+    const remaining = user.downloads?.passRemaining || 0;
+
+    res.status(200).json({
+      success: true,
+      data: { _id: user._id, email: user.email, passRemaining: remaining },
+      message: hasGrant
+        ? `${raw > 0 ? "Granted" : "Removed"} ${Math.abs(raw)} download pass${
+            Math.abs(raw) === 1 ? "" : "es"
+          } — ${remaining} left`
+        : `Download passes set to ${remaining}`,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
 // @desc    Delete user
 // @route   DELETE /api/v1/admin/users/:id
 // @access  Private/Admin

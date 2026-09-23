@@ -10,6 +10,7 @@ const {
   updateUserPlan,
   updateUserInterviewUnlock,
   updateUserMaintenanceAccess,
+  updateUserDownloadPasses,
   deleteUser,
   getAllTransactions,
   getUserDetails,
@@ -40,6 +41,8 @@ router.put("/users/:id/tier", admin, updateUserTier);
 router.put("/users/:id/plan", admin, updateUserPlan);
 router.put("/users/:id/interview-unlock", admin, updateUserInterviewUnlock);
 router.put("/users/:id/maintenance-access", admin, updateUserMaintenanceAccess);
+// Support grant: hand a user free CV download passes (or claw them back).
+router.put("/users/:id/download-passes", admin, updateUserDownloadPasses);
 
 // Pre-launch campaign. Read-only status, then the two irreversible bulk actions.
 router.get("/launch/status", admin, launchController.getLaunchStatus);
