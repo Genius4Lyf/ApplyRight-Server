@@ -194,3 +194,62 @@ describe("how long they asked for", () => {
     expect(systemPrompt()).not.toMatch(/let the rest go/i);
   });
 });
+
+// WHAT THIS JOB ASKS FOR, DURING A PROJECT INTERVIEW.
+//
+// Asked whether the requirement checklist belongs on a project at all. It does, and the
+// reason is not a preference — projects ALREADY count toward the ticks. Coverage is
+// computed over experience AND projects on both sides (openMustHavesFromDraft on the
+// server, useJobCoverage in the client), so hiding the list during a project interview
+// would leave a checklist that counts someone's projects while refusing to let them steer
+// one. A requirement could go green BECAUSE of a project the user was never allowed to
+// discuss against it.
+//
+// And for the people it matters most to, a project is the only place: a student or a
+// career changer often has no role that can prove the requirement at all. The grad stage
+// fork exists for exactly that.
+//
+// What WAS wrong was the wording. The guard read "if an area is clearly outside their
+// ROLE, skip it silently" — and "role" is a word the project funnel uses for something
+// else entirely ("your specific role in it"), so on a project turn the instruction could
+// be read as "skip anything outside what you personally did", which is a different rule.
+// Same class of ambiguity as "Before asking another normal question", which produced the
+// two-question turn.
+describe("a project interview and the job's requirements", () => {
+  const project = (over = {}) =>
+    turn({ section: "project", entryTitle: "Final-year build", entryType: "course", ...over });
+
+  it("still raises the list — a project is real evidence", async () => {
+    await project();
+    const prompt = systemPrompt();
+
+    expect(prompt).toMatch(/TARGETING THIS ROLE/);
+    expect(prompt).toMatch(/A PROJECT IS REAL EVIDENCE/);
+    expect(prompt).toMatch(/ONLY place one of these can be shown/);
+  });
+
+  it("tells her most of a job's list will not apply to one", async () => {
+    await project();
+    const prompt = systemPrompt();
+
+    expect(prompt).toMatch(/small and self-contained/);
+    expect(prompt).toMatch(/let the rest go without comment/);
+  });
+
+  // The ambiguity. "their role" means something else inside a project interview.
+  it("does not say 'outside their role' on a project turn", async () => {
+    await project();
+    const prompt = systemPrompt();
+
+    expect(prompt).not.toMatch(/clearly outside their role/);
+    expect(prompt).toMatch(/outside what a project of this kind involves/);
+  });
+
+  it("still says 'their role' on a job", async () => {
+    await turn({ section: "experience" });
+    const prompt = systemPrompt();
+
+    expect(prompt).toMatch(/clearly outside their role/);
+    expect(prompt).not.toMatch(/A PROJECT IS REAL EVIDENCE/);
+  });
+});

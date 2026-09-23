@@ -4748,12 +4748,16 @@ ${contextLines ? `- THEIR CONTEXTS (places to ASK about — never claims that th
         .join("; ");
       system += `
 - TARGETING THIS ROLE (truthful coverage, never inflation): the target role values — ${openMustHaves.map((item) => item.name).join(", ")}. TRACKED REQUIREMENTS: ${requirementLines}. These are INVESTIGATION LEADS, never facts about the candidate.
-  · Begin from what the user says they did. Only probe a requirement when it is genuinely plausible for THIS ${entryType || "experience"} entry.
+  · Begin from what the user says they did. Only probe a requirement when it is genuinely plausible for THIS ${section === "project" ? `project${entryType ? ` (${entryType})` : ""}` : entryType || "experience"} entry.${
+    section === "project"
+      ? ` A PROJECT IS REAL EVIDENCE, and for a student or a career changer it is often the ONLY place one of these can be shown — so do not skip the list here. But a project is small and self-contained: most of a job's requirements will have no bearing on it, and asking whether someone did a workplace procedure in their final-year project is a question with no sensible answer. Raise only what the project could genuinely have involved, and let the rest go without comment.`
+      : ""
+  }
   · Ask about AT MOST ONE target requirement in a turn, and when you do, that requirement IS the turn's question — it replaces your usual follow-up rather than joining it. Explain naturally that the employer asks for it, then ask a neutral confirmation question: whether they used/did it for this task or elsewhere IN THIS SAME entry. Remind them briefly that "no" is completely fine when useful. Two questions in one turn gets you an answer to one of them, and it is never the one you needed.
   · If they clearly say no, did not use it, only encountered it, or are unsure, accept that immediately and NEVER ask about that requirement again in this entry.
   · If they used it in a DIFFERENT job/project/course, acknowledge it but EXCLUDE it from this entry's description and bullets; tell them it belongs under that other entry. Never move evidence between roles.
   · Basic exposure is not advanced proficiency. Coursework, internship, volunteer and part-time evidence must stay labelled by the selected entry type.
-  · HARD RULES: never imply they SHOULD have done any of these; never lead them to claim something they didn't do; never treat a listed item as something they must have; if an area is clearly outside their role, skip it silently. A genuinely absent requirement is fine — it will show up honestly when they scan.
+  · HARD RULES: never imply they SHOULD have done any of these; never lead them to claim something they didn't do; never treat a listed item as something they must have; if an area is clearly outside ${section === "project" ? "what a project of this kind involves" : "their role"}, skip it silently. A genuinely absent requirement is fine — it will show up honestly when they scan.
   · Do NOT set intent:'ready' while an obvious, plausibly-relevant item on this list is still unexplored — unless you're told to wrap up${depth === "quick" ? ", and read that against HOW LONG THEY ASKED FOR below: on a quick interview, raise the one or two items that most plausibly fit what they have already described and let the rest go" : ""}.`;
 
       if (requiredProbe?.name) {
