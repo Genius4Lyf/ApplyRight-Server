@@ -94,3 +94,95 @@ describe("appendStarters", () => {
     expect(hasListItem(out)).toBe(true);
   });
 });
+
+// THE FULL SAMPLES BELONG IN ONE PLACE, AND IT IS NOT THE REPLY.
+//
+// Reported from use, on a Haulage Maintenance Officer role: Aria's reply ended with an
+// "Examples:" heading and both sample answers spelled out, and the panel directly beneath
+// it — "A FULL ANSWER SOUNDS LIKE" — then showed the same two again.
+//
+// The prompt caused it. It said to write the STARTERS into the reply and said nothing
+// whatever about the samples, so the model generalised from one to the other. It now says
+// so explicitly, and this is the net for when that is not enough — which is exactly the
+// lesson of `appendStarters` above, running in the opposite direction.
+//
+// Why it is more than a blemish: the starters are stubs with a "___" in them and cannot be
+// read as a claim. The samples are two polished, complete first-person sentences. The fold
+// they normally sit behind is the whole safety mechanism — spelled into the prose they are
+// first-person sentences in Aria's own voice about work the user never described.
+describe("stripExampleAnswers", () => {
+  const { stripExampleAnswers } = require("../src/utils/ariaStarters");
+
+  const SAMPLES = [
+    "I recorded each client meeting in our CRM and updated action items so the team could see outstanding work.",
+    "I kept an inventory log of all supplies and noted expiry dates daily so the team could reorder in time.",
+  ];
+
+  const replyWith = (tail) =>
+    ["Great — that kept everyone aligned.", "", "What did you handle there?", "", ...tail].join(
+      "\n"
+    );
+
+  it("removes the samples the model wrote into the prose", () => {
+    const out = stripExampleAnswers(
+      replyWith(["Examples:", "", `- "${SAMPLES[0]}"`, `- "${SAMPLES[1]}"`]),
+      SAMPLES
+    );
+
+    expect(out).not.toContain("CRM");
+    expect(out).not.toContain("expiry dates");
+    expect(out).toContain("What did you handle there?");
+  });
+
+  // A heading with its content removed is worse than either: it promises something and
+  // then shows nothing.
+  it("takes the orphaned heading with them", () => {
+    const out = stripExampleAnswers(
+      replyWith(["Examples:", "", `- "${SAMPLES[0]}"`, `- "${SAMPLES[1]}"`]),
+      SAMPLES
+    );
+    // Anchored to the end this passed vacuously: with the strip disabled the heading is
+    // still there, just no longer last. The heading must be GONE, wherever it sat.
+    expect(out).not.toContain("Examples:");
+  });
+
+  it("leaves the starters alone — those are meant to be there", () => {
+    const starters = [
+      '- "I logged maintenance requests in ___"',
+      '- "I updated supervisors via ___"',
+    ];
+    const out = stripExampleAnswers(
+      replyWith(["How you could phrase it:", "", ...starters]),
+      SAMPLES
+    );
+
+    expect(out).toContain("I logged maintenance requests in ___");
+    expect(out).toContain("How you could phrase it:");
+  });
+
+  it("leaves an ordinary reply untouched", () => {
+    const reply = replyWith(["How you could phrase it:", "", '- "I did ___"']);
+    expect(stripExampleAnswers(reply, SAMPLES)).toBe(reply.trim());
+  });
+
+  // EXACT match only. Cutting on a fuzzy one risks taking Aria's real sentence with it,
+  // and a duplicated sample is a blemish where a truncated reply is a broken turn.
+  it("does not cut a paraphrase", () => {
+    const reply = replyWith(["You might mention the log you kept of supplies."]);
+    expect(stripExampleAnswers(reply, SAMPLES)).toContain("the log you kept of supplies");
+  });
+
+  it("ignores a sample too short to match safely", () => {
+    const reply = replyWith(["I did it."]);
+    expect(stripExampleAnswers(reply, ["I did it."])).toContain("I did it.");
+  });
+
+  it("never hands back an empty reply", () => {
+    expect(stripExampleAnswers(SAMPLES[0], SAMPLES)).toBe(SAMPLES[0]);
+  });
+
+  it("copes with nothing to do", () => {
+    expect(stripExampleAnswers("Just a question?", [])).toBe("Just a question?");
+    expect(stripExampleAnswers("", SAMPLES)).toBe("");
+  });
+});

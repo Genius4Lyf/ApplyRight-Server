@@ -279,3 +279,65 @@ describe("she says what she thinks the employer is, and lets the user correct it
     expect(systemPrompt()).toMatch(/SETTLE WHAT KIND OF PLACE THIS WAS/);
   });
 });
+
+// THE SAMPLE ANSWERS BELONG TO THE USER'S TRADE TOO.
+//
+// Reported twice from a Haulage Maintenance Officer interview. Asked "did you perform
+// those facility operations?", with starters already in his own words ("I carried out
+// plant start-up and shut-down ___"), the panel underneath offered:
+//
+//   "I completed the lab's equipment warm-up sequence each morning and logged safety
+//    checks so experiments could start safely."
+//   "I coordinated classroom setup with AV and seating before lectures so sessions began
+//    on time and students could focus."
+//
+// A lab and a classroom, for an oil-and-gas facility question.
+//
+// That was the prompt working as written — samples were required to come from UNRELATED
+// fields so the model copied structure and never subject matter, which is a real
+// anti-fabrication device: an in-trade sample is one a user might simply adopt.
+//
+// It was the wrong trade to make, for a reason the same prompt already concedes: the
+// STARTERS are in the user's own trade and always have been. "Never their subject matter"
+// was therefore not a principle the product held, only an inconsistency — and the cost was
+// that the sample stopped teaching. Someone must translate a classroom into a haulage park
+// before the shape helps them, and most will not.
+//
+// What replaces it as the guard is not the field but the SITUATION: a sample must describe
+// a task the user has not just described, so it shows the shape without handing them their
+// own answer back. The interface carries the rest — the panel is labelled "a full answer
+// sounds like", each line is prefixed "e.g." and italicised, and it closes with "A sample,
+// not your words — say what actually happened."
+describe("the sample answers speak the user's trade", () => {
+  it("requires them to come from the user's own line of work", async () => {
+    await turn();
+    const prompt = systemPrompt();
+
+    expect(prompt).toMatch(/THEY BELONG TO THE USER'S OWN LINE OF WORK/);
+    expect(prompt).toMatch(/Take the vocabulary from the job title/);
+    // The old rule must be gone, not merely contradicted further down.
+    expect(prompt).not.toMatch(/Deliberately from unrelated fields/);
+  });
+
+  // The guard that took over from "different field". Without it, an in-trade sample is a
+  // ready-made answer sitting next to an empty box.
+  it("requires a DIFFERENT situation from the one just described", async () => {
+    await turn();
+    const prompt = systemPrompt();
+
+    expect(prompt).toMatch(/A DIFFERENT SITUATION FROM THE ONE THEY JUST DESCRIBED/);
+    expect(prompt).toMatch(/cannot be adopted wholesale/);
+    expect(prompt).toMatch(/never build it from a detail they did not give/);
+  });
+
+  // The lesson this whole file exists for: a concrete sample sentence in the prompt sets
+  // the register for every trade in the catalogue. The shape is now described as a
+  // skeleton rather than spelled out in one industry's words.
+  it("illustrates the SHAPE without naming a trade to copy", async () => {
+    await turn();
+    const prompt = systemPrompt();
+
+    expect(prompt).toMatch(/<a real, ordinary action>/);
+    expect(prompt).not.toMatch(/reconciled the monthly ledger/);
+  });
+});

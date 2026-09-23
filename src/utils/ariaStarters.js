@@ -57,4 +57,61 @@ function appendStarters(reply, suggestions, label = "") {
   return `${body}\n\n${lead}\n\n${bullets}`;
 }
 
-module.exports = { hasListItem, appendStarters };
+/**
+ * Take the FULL SAMPLE ANSWERS back out of the reply, if the model wrote them in.
+ *
+ * The starters above belong in the prose — they are stubs with a "___" in them and they
+ * cannot be mistaken for a claim. `exampleAnswers` are the opposite: two polished,
+ * complete first-person sentences. The interface renders them folded away behind "a full
+ * answer sounds like", and that fold is the entire safety mechanism — it is what stops
+ * them reading as things Aria believes the user did.
+ *
+ * Reported from use: the reply carried an "Examples:" heading with both samples spelled
+ * out, and the panel underneath then showed the same two again. The prompt was the cause —
+ * it said to write the STARTERS into the reply and said nothing whatever about the
+ * samples, so the model generalised. It says so explicitly now, and this is the net for
+ * when that is not enough, which is the lesson of the starters above in reverse.
+ *
+ * Deliberately EXACT-match, line by line. A paraphrase is left alone: cutting text on a
+ * fuzzy match risks taking Aria's real sentence with it, and a duplicated sample is a
+ * blemish where a truncated reply is a broken turn.
+ *
+ * @param {string} reply the model's markdown reply
+ * @param {string[]} exampleAnswers the samples, as returned in the field
+ * @returns {string}
+ */
+function stripExampleAnswers(reply, exampleAnswers) {
+  const body = String(reply || "");
+  const samples = (Array.isArray(exampleAnswers) ? exampleAnswers : [])
+    .map((s) => String(s || "").trim())
+    // Short enough to collide with an ordinary sentence is short enough to leave alone.
+    .filter((s) => s.length >= 20);
+  if (!samples.length || !body.trim()) return body.trim();
+
+  const norm = (s) =>
+    s.toLowerCase().replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, " ").trim();
+  const needles = samples.map(norm);
+
+  let lines = body.split("\n").filter((line) => {
+    const flat = norm(line);
+    if (!flat) return true;
+    return !needles.some((needle) => flat.includes(needle));
+  });
+
+  // A heading left pointing at nothing. "Examples:" with its examples removed is worse
+  // than either — it tells the user something is there and then shows them nothing.
+  const isOrphanHeading = (line) => /^\s*(?:\*\*)?[^\n]{0,40}:(?:\*\*)?\s*$/.test(line);
+  while (lines.length) {
+    const tail = lines[lines.length - 1];
+    if (!tail.trim()) lines.pop();
+    else if (isOrphanHeading(tail)) lines.pop();
+    else break;
+  }
+
+  const out = lines.join("\n").trim();
+  // Never hand back nothing. If the samples WERE the whole reply, the original is the
+  // lesser evil — an empty bubble is a failed turn.
+  return out || body.trim();
+}
+
+module.exports = { hasListItem, appendStarters, stripExampleAnswers };

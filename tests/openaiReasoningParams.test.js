@@ -108,3 +108,57 @@ describe("every other model is untouched", () => {
     delete process.env.DEEPSEEK_API_KEY;
   });
 });
+
+// THE "DON'T THINK ABOUT IT" FLAG WAS SILENTLY INERT ON THESE MODELS.
+//
+// Reported: on Advanced, bullet generation errored; switching to Basic worked. Chat was
+// fine, which is what made it confusing — the parameter-name fix above had landed.
+//
+// `disableThinking` has always meant "this is a short structured-output task, do not spend
+// the budget working up to it". Anthropic gets thinking:{type:"disabled"}. OpenAI's
+// reasoning models got NOTHING — the flag was read, passed around, and dropped.
+//
+// Bullet generation is where it had to surface: 4,096 tokens, a structured object, and a
+// comment in the generator itself saying truncated JSON is a hard failure. Reasoning ate
+// the budget, the JSON came back cut in half, and the turn 502'd. A chat reply is prose
+// and short, so it survived on the same budget.
+describe("disableThinking reaches the reasoning models too", () => {
+  it("maps it to the lowest reasoning effort", async () => {
+    mockOpenAICreate.mockResolvedValue(
+      respond({ bullets: [{ text: "A bullet", evidenceIds: [] }] })
+    );
+    // generateBulletsFromDescription sets disableThinking: true — the caller this broke.
+    await generateOn("gpt-5-mini");
+
+    expect(body().reasoning_effort).toBe("low");
+  });
+
+  // NO TEST FOR THE OTHER BRANCH, DELIBERATELY. Every caller that routes through the
+  // model picker sets disableThinking today — bullets, chat, summary, skills are all
+  // short structured output — so "full reasoning on a reasoning model" has no live
+  // caller to drive it from. A test would have to invent one, and a test that exercises
+  // a hypothetical proves only that the hypothetical was written down. (The first draft
+  // of this file did exactly that, asserted the wrong thing about coachChatTurn, and
+  // failed.) The gating that DOES have both branches is the model, covered below.
+
+  it("never sends it to a model that would reject it", async () => {
+    mockOpenAICreate.mockResolvedValue(
+      respond({ bullets: [{ text: "A bullet", evidenceIds: [] }] })
+    );
+    await generateOn("gpt-4o-mini");
+
+    expect(body()).not.toHaveProperty("reasoning_effort");
+  });
+
+  // The budget floor and the effort cap are two halves of one fix: the cap stops reasoning
+  // running away, the floor leaves room for what it does spend. Either alone still
+  // truncates a structured object.
+  it("keeps enough headroom for a structured object", async () => {
+    mockOpenAICreate.mockResolvedValue(
+      respond({ bullets: [{ text: "A bullet", evidenceIds: [] }] })
+    );
+    await generateOn("gpt-5-mini");
+
+    expect(body().max_completion_tokens).toBeGreaterThanOrEqual(6000);
+  });
+});

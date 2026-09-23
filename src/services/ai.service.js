@@ -3,7 +3,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const crypto = require("crypto");
 const { DEFAULT_MODELS, DEFAULT_MODEL, modelFrom } = require("../config/catalog");
 const { summarizeDelivery, formatDeliveryForPrompt } = require("./deliveryTelemetry.service");
-const { appendStarters } = require("../utils/ariaStarters");
+const { appendStarters, stripExampleAnswers } = require("../utils/ariaStarters");
 const {
   styleFromRole,
   formatArchetypeForPrompt,
@@ -265,13 +265,25 @@ const persistLog = (entry) => {
 // decision, this is a fact about the endpoint, and an admin can point any tier at any
 // model without a deploy.
 const OPENAI_REASONING_MODEL = /^(?:gpt-5|o[1-9])/i;
-const REASONING_MIN_TOKENS = 4000;
+const REASONING_MIN_TOKENS = 6000;
 
-const openaiSampling = (apiModel, { temperature, maxTokens }) => {
+const openaiSampling = (apiModel, { temperature, maxTokens, disableThinking }) => {
   if (!OPENAI_REASONING_MODEL.test(String(apiModel || ""))) {
     return { temperature, ...(maxTokens ? { max_tokens: maxTokens } : {}) };
   }
-  return { max_completion_tokens: Math.max(maxTokens || 0, REASONING_MIN_TOKENS) };
+  return {
+    max_completion_tokens: Math.max(maxTokens || 0, REASONING_MIN_TOKENS),
+    ...(disableThinking ? { reasoning_effort: "low" } : {}),
+    // `disableThinking` already means "this is a short structured-output task, do not
+    // spend the budget working up to it". Anthropic gets thinking:{type:"disabled"};
+    // OpenAI's equivalent is the lowest reasoning effort, and until now the flag was
+    // SILENTLY INERT on these models — every caller that set it got full reasoning anyway.
+    //
+    // Bullet generation is where that surfaced, and it had to be: 4,096 tokens, a
+    // structured object, and a comment two hundred lines down that says truncated JSON is
+    // a hard failure. Reasoning ate the budget, the object came back cut in half, and the
+    // user got "couldn't generate right now" on Advanced while Basic worked. Reported.
+  };
 };
 
 const callJSON = async ({
@@ -337,7 +349,7 @@ const callJSON = async ({
               { role: "user", content: user },
             ],
         response_format: { type: "json_object" },
-        ...openaiSampling(openaiModel, { temperature, maxTokens }),
+        ...openaiSampling(openaiModel, { temperature, maxTokens, disableThinking }),
       });
       const content = response.choices[0].message.content;
       persistLog({
@@ -394,7 +406,18 @@ const callJSON = async ({
  * Call the active LLM for free-form text output (markdown, plain text).
  * Same system/user split as callJSON; throws AIUnavailableError in mock mode.
  */
-const callText = async ({ system, user, temperature = 0.4, maxTokens, meta = {} }) => {
+// `disableThinking` is accepted here purely so the OpenAI reasoning-model shape can be
+// built from one helper. Nothing calls callText with it today — prose is the one job where
+// reasoning is not obviously wasted — but leaving it undefined in the destructure would be
+// a ReferenceError the moment a caller did.
+const callText = async ({
+  system,
+  user,
+  temperature = 0.4,
+  maxTokens,
+  disableThinking = false,
+  meta = {},
+}) => {
   if (activeProvider === "mock") {
     throw new AIUnavailableError();
   }
@@ -437,7 +460,7 @@ const callText = async ({ system, user, temperature = 0.4, maxTokens, meta = {} 
           { role: "system", content: system },
           { role: "user", content: user },
         ],
-        ...openaiSampling(openaiModel, { temperature, maxTokens }),
+        ...openaiSampling(openaiModel, { temperature, maxTokens, disableThinking }),
       });
       const content = response.choices[0].message.content.trim();
       persistLog({
@@ -622,7 +645,7 @@ const callModel = async (
         ...(json ? { response_format: { type: "json_object" } } : {}),
         // DeepSeek and Moonshot are OpenAI-COMPATIBLE but not OpenAI: their model names
         // never match the reasoning pattern, so they keep the ordinary shape.
-        ...openaiSampling(apiModel, { temperature, maxTokens }),
+        ...openaiSampling(apiModel, { temperature, maxTokens, disableThinking }),
       });
       content = resp.choices[0].message.content;
       truncated = resp.choices[0].finish_reason === "length";
@@ -4701,8 +4724,12 @@ ${contextLines ? `- THEIR CONTEXTS (places to ASK about — never claims that th
 - IF YOU DID NOT UNDERSTAND THEM, SAY SO. A message may reach you garbled — mistyped, half-finished, or mangled by speech-to-text, since this same interview is also conducted by voice. That is YOUR problem to solve, not theirs to have solved. Say plainly and warmly that you did not follow, and ask them to put that part again. NEVER build on a phrase you did not understand, and NEVER tidy one into a plausible-sounding activity: if a sentence meant nothing to you, you do not know what they were describing — you know only that you did not understand them, and guessing the difference then interviewing them about your guess puts work they never did on someone's CV. Never remark that their wording was odd and then carry on as though you had understood it anyway. If a second attempt is still unclear, move to a different question rather than making them repeat themselves.
 - PLAUSIBILITY CHECK (protect them from a wrong bullet): you know, in general terms, what a '${entryTitle}'${entryCompany ? ` at ${entryCompany}` : ""} typically does. If the user describes an activity that would be genuinely ATYPICAL or out of scope for THAT role/title — not merely impressive or unusually detailed — do NOT quietly fold it into the bullets. First, in ONE warm sentence, note it's not what you'd expect for this role and ask them to double-check it's right, so a bullet that doesn't fit the role never lands on their CV. Stay intent:'building'. The MOMENT they confirm or clarify, take their answer as TRUE and continue normally — never re-challenge the same point, never accuse, never refuse, never imply they couldn't have done it. Use this sparingly: only for a real role/activity mismatch.
 - When intent:'building' (you just asked a follow-up), ALSO help an unsure user START their answer. WRITE THE STARTERS INTO \`reply\` as well as returning them in the field: end the reply with your \`suggestionsLabel\` line, then each starter on its own "- " bullet, in quotes. They are the most useful thing the turn produces for someone staring at an empty box, and a field the interface may not show is not help.
+  · THE STARTERS, AND NOTHING ELSE. \`exampleAnswers\` is the one field you must NEVER write into \`reply\` — not under an "Examples:" heading, not as bullets, not in passing. The interface already renders them, folded away behind a label reading "a full answer sounds like", and that folding is the entire safety mechanism: it is what stops two polished first-person sentences being read as things you believe the user did. Spelled into your reply they lose the label, they lose the fold, they break the second-person rule above (they are first-person sentences with no "___" in them), and the user sees the same text twice on one screen. End the reply on the starters and stop.
   · \`suggestions\`: 2-3 SHORT first-person answer STARTERS (≤ 9 words each) for the question you just asked. Each may include a literal "___" where the user's own detail goes. These are SCAFFOLDS/angles to unstick them — NEVER invented achievements, numbers, or claims the user hasn't made. Examples of the SHAPE only — never of the subject matter; each belongs to a different line of work, and yours must belong to the user's: ["I handled the ___ every week", "One thing I sorted out was ", "I was the one who ___ for the team"].
-  · \`exampleAnswers\`: EXACTLY TWO sentences, each showing what a strong answer to that question SOUNDS like — explicitly SAMPLES, never the user's claim. They must differ in ANGLE, not merely in wording: one might show a task done well and the other a problem noticed or a person helped, so that between them they mark out a RANGE rather than one right answer. These are examples of the SHAPE only. Deliberately from unrelated fields, so that you copy the structure and NEVER the subject matter: ["I reconciled the monthly ledger and caught a duplicate payment before it went out.", "I rewrote the team instructions after two people missed the same step."]
+  · \`exampleAnswers\`: EXACTLY TWO sentences, each showing what a strong answer to THE QUESTION YOU JUST ASKED sounds like — explicitly SAMPLES, never the user's claim. They must differ in ANGLE, not merely in wording: one might show a task done well and the other a problem noticed or a person helped, so that between them they mark out a RANGE rather than one right answer.
+    · THEY BELONG TO THE USER'S OWN LINE OF WORK, and to the question on the table. Take the vocabulary from the job title and from the words they have actually used — the same rule your QUESTION follows, for the same reason. Samples from an unrelated field were the old rule and they did not teach: someone asked about facility start-up and shown a sentence about setting up a classroom has to translate twice before the sample helps them, and most people will not bother. Your STARTERS are already in their trade; a sample that is not reads as though you stopped listening.
+    · A DIFFERENT SITUATION FROM THE ONE THEY JUST DESCRIBED. This is what keeps an in-trade sample safe: it shows the SHAPE — a real action, who or what it was for, and what it made possible — on a task they have NOT just told you about, so it cannot be mistaken for your version of their answer and cannot be adopted wholesale. Never attribute it to them, never build it from a detail they did not give, and never let it become the answer they merely agree with.
+    · Examples of the SHAPE only, never of the subject matter, which must be theirs: "<a real, ordinary action> … <who or what it was for> … <what that made possible>".
   · \`suggestionsLabel\`: a SHORT (≤ 6 words) natural lead-in in your voice, specific to the question you just asked, that introduces those starters — e.g. "Ways to show the impact:", "A number you might have:", "A few starting points:", "How you could phrase it:".
 - When the useful activities have enough truthful detail for the requested bullets (real actions plus context, scope, or results where natural), OR you're told to wrap up → intent:'ready'. Put ALL gathered activities into \`description\` as concise FIRST-PERSON sentences for the bullet writer, preserving the user's facts and never inventing.
 - For intent:'ready', make \`reply\` a brief statement that you have enough and are opening the bullet options. Do NOT ask whether they want to keep talking, and do NOT ask them to type "Done".
@@ -4927,7 +4954,11 @@ NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Th
   // walk straight back in through the reply.
   const reply =
     intent === "building"
-      ? appendStarters(String(data?.reply || "").trim(), suggestions, data?.suggestionsLabel)
+      ? appendStarters(
+          stripExampleAnswers(String(data?.reply || "").trim(), exampleAnswers),
+          suggestions,
+          data?.suggestionsLabel
+        )
       : String(data?.reply || "").trim();
 
   return {
