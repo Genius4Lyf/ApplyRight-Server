@@ -1,3 +1,5 @@
+const { textOverlap } = require("./textOverlap");
+
 // MAKING THE ANSWER STARTERS ACTUALLY APPEAR.
 //
 // On every build-with turn the model returns `suggestions` — 2-3 short first-person
@@ -114,4 +116,107 @@ function stripExampleAnswers(reply, exampleAnswers) {
   return out || body.trim();
 }
 
-module.exports = { hasListItem, appendStarters, stripExampleAnswers };
+/**
+ * Drop sample answers that are really the user's own answer, tidied up.
+ *
+ * Reported: the user described diagnosing faults with a multimeter and continuity tester,
+ * replacing the faulty part and re-testing — and the panel underneath then offered, as a
+ * sample of what a strong answer sounds like: "I diagnosed faults with a multimeter and
+ * continuity tester, traced a broken element or switch, replaced the faulty part, and
+ * re-tested the appliance before returning it to the owner."
+ *
+ * Their own answer, handed back as an example of how to answer. It teaches nothing, and it
+ * quietly puts a polished version of their words in front of them to agree with.
+ *
+ * This is the cost of moving samples INTO the user's trade (they used to come from an
+ * unrelated field, which was safe and useless). The prompt asks for a different situation;
+ * this is the net, because a prompt is a request.
+ *
+ * THRESHOLD, measured on the reported case and four plausible same-trade alternatives:
+ *   33%  the echo
+ *    6%  same trade, new situation (wiring a board)
+ *    4%  same trade, new situation (generators)
+ *    2%  same trade, same tools, different task
+ *    0%  same trade, new situation (training juniors)
+ * 0.20 sits far above every legitimate sample and well below the echo.
+ *
+ * @param {string[]} exampleAnswers
+ * @param {{who: string, text: string}[]} messages the turn window
+ * @param {number} [threshold]
+ * @returns {string[]}
+ */
+function dropEchoedSamples(exampleAnswers, messages, threshold = 0.2) {
+  const samples = (Array.isArray(exampleAnswers) ? exampleAnswers : [])
+    .map((s) => String(s || "").trim())
+    .filter(Boolean);
+  if (!samples.length) return [];
+
+  // The last few of THEIR turns. Older ones are not what a sample would be echoing, and
+  // widening the net only costs real samples.
+  const said = (Array.isArray(messages) ? messages : [])
+    .filter((m) => m?.who === "user" && m.text)
+    .slice(-3)
+    .map((m) => String(m.text));
+  if (!said.length) return samples;
+
+  return samples.filter((sample) => !said.some((turn) => textOverlap(sample, turn) >= threshold));
+}
+
+/**
+ * Drop answer starters that are the previous turn's starters again.
+ *
+ * Reported: asked "what tools did you use?", the starters were "I diagnosed faults using
+ * ___" / "I repaired the ___ by replacing the ___". The user answered in full. The NEXT
+ * question was "who did you mainly repair for?" — and the starters came back as "I
+ * diagnosed faults using ___" / "I repaired appliances by replacing ___", which answer the
+ * question before last.
+ *
+ * There is a direct cause, and it is our own doing: the starters are written INTO the
+ * reply (see appendStarters — they were invisible otherwise), so they are sitting in the
+ * transcript the model reads back on the next turn. Given its own bullets a few lines up,
+ * it repeats them. The prompt now says not to; this is the net.
+ *
+ * THRESHOLD, measured on the reported case against three real answers to the new question:
+ *   100%  identical starter, repeated
+ *    67%  "I repaired appliances by replacing ___" vs "I repaired the ___ by replacing ___"
+ *    67%  "I handled repairs for ___" vs "I handled appliance repairs for ___"
+ *    33%  "I mainly repaired for ___" — a genuine answer to the new question
+ *     0%  the other two genuine answers
+ * 0.50 sits in the gap. Dropping ALL of them is an acceptable outcome: no starters is
+ * better than three that answer the previous question.
+ *
+ * @param {string[]} suggestions
+ * @param {{who: string, text: string}[]} messages the turn window
+ * @param {number} [threshold]
+ * @returns {string[]}
+ */
+function dropRepeatedStarters(suggestions, messages, threshold = 0.5) {
+  const items = (Array.isArray(suggestions) ? suggestions : [])
+    .map((s) => String(s || "").trim())
+    .filter(Boolean);
+  if (!items.length) return [];
+
+  const lastAria = (Array.isArray(messages) ? messages : [])
+    .filter((m) => m?.who === "aria" && m.text)
+    .slice(-1)[0];
+  if (!lastAria) return items;
+
+  // The starters as they were written into that reply: quoted list items. Anything else in
+  // her prose is her question, and a starter is allowed to echo the question.
+  const previous = String(lastAria.text)
+    .split("\n")
+    .map((line) => line.match(/^\s{0,3}[-*+]\s+"?(.+?)"?\s*$/))
+    .filter(Boolean)
+    .map((m) => m[1].trim());
+  if (!previous.length) return items;
+
+  return items.filter((item) => !previous.some((old) => textOverlap(item, old) >= threshold));
+}
+
+module.exports = {
+  hasListItem,
+  appendStarters,
+  stripExampleAnswers,
+  dropEchoedSamples,
+  dropRepeatedStarters,
+};

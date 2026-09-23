@@ -3,7 +3,14 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const crypto = require("crypto");
 const { DEFAULT_MODELS, DEFAULT_MODEL, modelFrom } = require("../config/catalog");
 const { summarizeDelivery, formatDeliveryForPrompt } = require("./deliveryTelemetry.service");
-const { appendStarters, stripExampleAnswers } = require("../utils/ariaStarters");
+const {
+  appendStarters,
+  stripExampleAnswers,
+  dropEchoedSamples,
+  dropRepeatedStarters,
+} = require("../utils/ariaStarters");
+// One measure of "how much of this is that", shared with the scaffold guards above.
+const { contentTokens, overlap } = require("../utils/textOverlap");
 const {
   styleFromRole,
   formatArchetypeForPrompt,
@@ -3727,31 +3734,6 @@ const briefContextBlock = (brief, role = "") => {
 // written twice) scored 45–46%, while genuinely distinct bullets about related work
 // topped out at 27%. 0.40 sits in that gap with room on both sides — high enough that a
 // legitimately new bullet is never silently binned, which is the costlier mistake.
-const BULLET_STOPWORDS = new Set(
-  (
-    "a an the and or of to in on for with by at as is was were be been being that this those " +
-    "these it its their our my his her they them from into across during before after every " +
-    "all any so than then when which who what how why not no ensuring supporting helping " +
-    "enabling while per via each other more most such"
-  ).split(" ")
-);
-
-const contentTokens = (text) =>
-  new Set(
-    String(text || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9 ]/g, " ")
-      .split(/\s+/)
-      .filter((word) => word.length > 2 && !BULLET_STOPWORDS.has(word))
-  );
-
-const overlap = (a, b) => {
-  if (!a.size || !b.size) return 0;
-  let shared = 0;
-  for (const token of a) if (b.has(token)) shared += 1;
-  return shared / (a.size + b.size - shared);
-};
-
 const REPEAT_THRESHOLD = 0.4;
 const repeatsExisting = (text, existing) => {
   if (!existing.length) return false;
@@ -4729,9 +4711,10 @@ ${contextLines ? `- THEIR CONTEXTS (places to ASK about — never claims that th
 - PLAUSIBILITY CHECK (protect them from a wrong bullet): you know, in general terms, what a '${entryTitle}'${entryCompany ? ` at ${entryCompany}` : ""} typically does. If the user describes an activity that would be genuinely ATYPICAL or out of scope for THAT role/title — not merely impressive or unusually detailed — do NOT quietly fold it into the bullets. First, in ONE warm sentence, note it's not what you'd expect for this role and ask them to double-check it's right, so a bullet that doesn't fit the role never lands on their CV. Stay intent:'building'. The MOMENT they confirm or clarify, take their answer as TRUE and continue normally — never re-challenge the same point, never accuse, never refuse, never imply they couldn't have done it. Use this sparingly: only for a real role/activity mismatch.
 - When intent:'building' (you just asked a follow-up), ALSO help an unsure user START their answer. WRITE THE STARTERS INTO \`reply\` as well as returning them in the field: end the reply with your \`suggestionsLabel\` line, then each starter on its own "- " bullet, in quotes. They are the most useful thing the turn produces for someone staring at an empty box, and a field the interface may not show is not help.
   · THE STARTERS, AND NOTHING ELSE. \`exampleAnswers\` is the one field you must NEVER write into \`reply\` — not under an "Examples:" heading, not as bullets, not in passing. The interface already renders them, folded away behind a label reading "a full answer sounds like", and that folding is the entire safety mechanism: it is what stops two polished first-person sentences being read as things you believe the user did. Spelled into your reply they lose the label, they lose the fold, they break the second-person rule above (they are first-person sentences with no "___" in them), and the user sees the same text twice on one screen. End the reply on the starters and stop.
-  · \`suggestions\`: 2-3 SHORT first-person answer STARTERS (≤ 9 words each) for the question you just asked. Each may include a literal "___" where the user's own detail goes. These are SCAFFOLDS/angles to unstick them — NEVER invented achievements, numbers, or claims the user hasn't made. Examples of the SHAPE only — never of the subject matter; each belongs to a different line of work, and yours must belong to the user's: ["I handled the ___ every week", "One thing I sorted out was ", "I was the one who ___ for the team"].
+  · \`suggestions\`: 2-3 SHORT first-person answer STARTERS (≤ 9 words each) for THE QUESTION YOU JUST ASKED — the one in this reply, not the one before it. Your own previous starters are sitting a few lines up in this conversation, because you wrote them into your last reply. Do NOT reach for them again. When you ask who the work was for and offer "I diagnosed faults using ___" — the opening you offered for the PREVIOUS question — you have handed them a scaffold for a question that is already answered, and the one they now face has none. Each may include a literal "___" where the user's own detail goes. These are SCAFFOLDS/angles to unstick them — NEVER invented achievements, numbers, or claims the user hasn't made. Examples of the SHAPE only — never of the subject matter; each belongs to a different line of work, and yours must belong to the user's: ["I handled the ___ every week", "One thing I sorted out was ", "I was the one who ___ for the team"].
   · \`exampleAnswers\`: EXACTLY TWO sentences, each showing what a strong answer to THE QUESTION YOU JUST ASKED sounds like — explicitly SAMPLES, never the user's claim. They must differ in ANGLE, not merely in wording: one might show a task done well and the other a problem noticed or a person helped, so that between them they mark out a RANGE rather than one right answer.
     · THEY BELONG TO THE USER'S OWN LINE OF WORK, and to the question on the table. Take the vocabulary from the job title and from the words they have actually used — the same rule your QUESTION follows, for the same reason. Samples from an unrelated field were the old rule and they did not teach: someone asked about facility start-up and shown a sentence about setting up a classroom has to translate twice before the sample helps them, and most people will not bother. Your STARTERS are already in their trade; a sample that is not reads as though you stopped listening.
+    · NEVER THEIR OWN ANSWER, TIDIED. This is the trap of keeping samples in their trade: the nearest strong answer in their field is the one they have just given you, and rewriting it into a neater sentence and labelling it "a full answer sounds like" teaches them nothing while handing them a polished version of their own words to agree with. If your sample is recognisably the work they just described — same task, same tools, same outcome — it is the wrong sample.
     · A DIFFERENT SITUATION FROM THE ONE THEY JUST DESCRIBED. This is what keeps an in-trade sample safe: it shows the SHAPE — a real action, who or what it was for, and what it made possible — on a task they have NOT just told you about, so it cannot be mistaken for your version of their answer and cannot be adopted wholesale. Never attribute it to them, never build it from a detail they did not give, and never let it become the answer they merely agree with.
     · Examples of the SHAPE only, never of the subject matter, which must be theirs: "<a real, ordinary action> … <who or what it was for> … <what that made possible>".
   · \`suggestionsLabel\`: a SHORT (≤ 6 words) natural lead-in in your voice, specific to the question you just asked, that introduces those starters — e.g. "Ways to show the impact:", "A number you might have:", "A few starting points:", "How you could phrase it:".
@@ -4937,6 +4920,13 @@ NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Th
   // Two is the design, and the cap is load-bearing: more would turn a hint into a reading
   // task, and this is a help affordance, not a list of options to choose between.
   exampleAnswers = exampleAnswers.slice(0, 2);
+  // A SAMPLE MUST NOT BE THEIR OWN ANSWER, TIDIED. The cost of moving samples into the
+  // user's own trade: the nearest strong answer in their field is the one they just gave.
+  exampleAnswers = dropEchoedSamples(exampleAnswers, messages);
+  // AND STARTERS MUST BE FOR THE QUESTION JUST ASKED. They are written into the reply, so
+  // the previous turn's are sitting in the transcript for the model to copy — which is
+  // exactly what it did.
+  suggestions = dropRepeatedStarters(suggestions, messages);
   // Grad-stage samples must show scope/scale, never a number (the model doesn't always
   // honour this) — a real user got "increasing monthly revenue by 20%" invented out of
   // nothing. Drop the offending sample and keep the other: one good sample beats one good

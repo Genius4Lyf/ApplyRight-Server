@@ -186,3 +186,137 @@ describe("stripExampleAnswers", () => {
     expect(stripExampleAnswers("", SAMPLES)).toBe("");
   });
 });
+
+// THE SCAFFOLDS MUST BE FOR THE QUESTION ON THE TABLE.
+//
+// Reported from an Electrical & Electronic apprenticeship interview, both in one turn.
+//
+// Asked "what tools or tests did you use?", the starters were "I diagnosed faults using
+// ___" / "I repaired the ___ by replacing the ___". He answered in full — multimeter,
+// continuity tester, traced the fault, replaced the part, re-tested. The NEXT question was
+// "who did you mainly repair appliances for?" — and the scaffolds came back as:
+//
+//   starters : "I diagnosed faults using ___", "I repaired appliances by replacing ___"
+//   sample   : "I diagnosed faults with a multimeter and continuity tester, traced a
+//               broken element or switch, replaced the faulty part, and re-tested the
+//               appliance before returning it to the owner."
+//
+// The starters answer the question before last. The sample is HIS OWN ANSWER, tidied, and
+// offered back as an example of how to answer.
+//
+// Both have causes in our own decisions, not the model's whim:
+//   · the starters are written INTO the reply (appendStarters — they were invisible
+//     otherwise), so the previous turn's are in the transcript for the model to copy;
+//   · samples were moved into the user's own trade, and the nearest strong answer in
+//     someone's field is the one they have just given you.
+//
+// Thresholds below are measured, not guessed. See the helpers for the tables.
+describe("scaffold echo guards", () => {
+  const { dropEchoedSamples, dropRepeatedStarters } = require("../src/utils/ariaStarters");
+
+  const SAID =
+    "I diagnosed faults using a multimeter and a continuity tester, checking for continuity " +
+    "across the element, the switch and the cord to find where the circuit was broken. Once I " +
+    "traced the fault, I repaired the appliance by replacing the faulty part, then tested it " +
+    "again before handing it back to the owner.";
+
+  const PREVIOUS_ARIA =
+    "For the appliance repairs: what tools or tests did you use?\n\n" +
+    "A few starting points:\n\n" +
+    '- "I diagnosed faults using ___"\n' +
+    '- "I repaired the ___ by replacing the ___"\n' +
+    '- "I handled appliance repairs for ___"';
+
+  const MESSAGES = [
+    { who: "aria", text: PREVIOUS_ARIA },
+    { who: "user", text: SAID },
+  ];
+
+  describe("dropEchoedSamples", () => {
+    it("drops the sample that is their own answer reworded", () => {
+      const kept = dropEchoedSamples(
+        [
+          "I diagnosed faults with a multimeter and continuity tester, traced a broken element or switch, replaced the faulty part, and re-tested the appliance before returning it to the owner.",
+          "I repaired fans and generators for neighbours and small local clients, rewinding motors and replacing worn parts so devices worked reliably for daily use.",
+        ],
+        MESSAGES
+      );
+
+      expect(kept).toHaveLength(1);
+      expect(kept[0]).toMatch(/fans and generators/);
+    });
+
+    // The whole point of keeping samples in-trade. A guard that also removed these would
+    // have handed the decision back to the unrelated-field rule it replaced.
+    it.each([
+      [
+        "a new situation in the same trade",
+        "I wired a new distribution board for a small shop and labelled every circuit so the owner could isolate a fault.",
+      ],
+      [
+        "the same tools on a different task",
+        "I used a multimeter to check standby draw on shop freezers each month and reported the ones losing efficiency.",
+      ],
+      [
+        "work with people rather than parts",
+        "I showed two younger apprentices how to test a socket safely before they touched anything live.",
+      ],
+    ])("keeps %s", (_label, sample) => {
+      expect(dropEchoedSamples([sample], MESSAGES)).toEqual([sample]);
+    });
+
+    it("has nothing to compare against before they have said anything", () => {
+      const samples = ["I did a thing that was quite specific and worth describing here."];
+      expect(dropEchoedSamples(samples, [{ who: "aria", text: "Tell me?" }])).toEqual(samples);
+    });
+
+    it("copes with nothing to do", () => {
+      expect(dropEchoedSamples([], MESSAGES)).toEqual([]);
+      expect(dropEchoedSamples(null, null)).toEqual([]);
+    });
+  });
+
+  describe("dropRepeatedStarters", () => {
+    it("drops the previous turn's starters, reworded or not", () => {
+      const kept = dropRepeatedStarters(
+        [
+          "I diagnosed faults using ___", // identical
+          "I repaired appliances by replacing ___", // reworded
+          "Most of my work came from ___", // genuinely for the new question
+        ],
+        MESSAGES
+      );
+
+      expect(kept).toEqual(["Most of my work came from ___"]);
+    });
+
+    // No starters is better than three that answer the question before last — the reply
+    // still carries the question itself.
+    it("is willing to drop all of them", () => {
+      expect(
+        dropRepeatedStarters(
+          ["I diagnosed faults using ___", "I handled appliance repairs for ___"],
+          MESSAGES
+        )
+      ).toEqual([]);
+    });
+
+    it("leaves them alone on the first turn, when there is nothing to repeat", () => {
+      const fresh = ["I handled the ___ every week"];
+      expect(dropRepeatedStarters(fresh, [{ who: "user", text: SAID }])).toEqual(fresh);
+    });
+
+    // Her prose is not a starter list. A starter is allowed to echo the QUESTION — that is
+    // what makes it a scaffold for it.
+    it("reads only her bulleted starters, not her question", () => {
+      const asked = [{ who: "aria", text: "Who did you mainly repair appliances for?" }];
+      const starters = ["I mainly repaired appliances for ___"];
+      expect(dropRepeatedStarters(starters, asked)).toEqual(starters);
+    });
+
+    it("copes with nothing to do", () => {
+      expect(dropRepeatedStarters([], MESSAGES)).toEqual([]);
+      expect(dropRepeatedStarters(null, null)).toEqual([]);
+    });
+  });
+});
