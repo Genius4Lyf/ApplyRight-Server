@@ -3664,12 +3664,62 @@ const briefContextBlock = (brief, role = "") => {
 // uses ONLY facts in the description/evidence, never invents numbers/tools/certs/scope.
 // When returnDetails=true, each bullet also cites the verified interview evidence ids
 // that support it. Throws AIUnavailableError when no AI is configured.
+// ── IS THIS BULLET ONE THE ENTRY ALREADY HAS? ───────────────────────────────
+//
+// Compared on CONTENT words — the verbs and nouns that carry the claim — with the
+// connective tissue every CV bullet shares thrown away first. Without that, any two
+// bullets about the same job look similar merely for being about a job.
+//
+// The threshold is measured, not guessed. Across a real 40-bullet role, confirmed
+// restatements ("Performed preventive and first-line maintenance on wireline units…",
+// written twice) scored 45–46%, while genuinely distinct bullets about related work
+// topped out at 27%. 0.40 sits in that gap with room on both sides — high enough that a
+// legitimately new bullet is never silently binned, which is the costlier mistake.
+const BULLET_STOPWORDS = new Set(
+  (
+    "a an the and or of to in on for with by at as is was were be been being that this those " +
+    "these it its their our my his her they them from into across during before after every " +
+    "all any so than then when which who what how why not no ensuring supporting helping " +
+    "enabling while per via each other more most such"
+  ).split(" ")
+);
+
+const contentTokens = (text) =>
+  new Set(
+    String(text || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, " ")
+      .split(/\s+/)
+      .filter((word) => word.length > 2 && !BULLET_STOPWORDS.has(word))
+  );
+
+const overlap = (a, b) => {
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  for (const token of a) if (b.has(token)) shared += 1;
+  return shared / (a.size + b.size - shared);
+};
+
+const REPEAT_THRESHOLD = 0.4;
+const repeatsExisting = (text, existing) => {
+  if (!existing.length) return false;
+  const tokens = contentTokens(text);
+  return existing.some((line) => overlap(tokens, contentTokens(line)) >= REPEAT_THRESHOLD);
+};
+
 const generateBulletsFromDescription = async (description, count, options = {}) => {
   const model = options.model || MODEL; // tier-based (resolveTextModel)
   const brief = options.brief || null;
   const role = options.role || "this role";
   const n = Math.max(1, Math.min(8, parseInt(count, 10) || 1));
   const desc = String(description || "").trim();
+  // The bullets this entry already carries. Bounded here as well as by the caller, and
+  // each line trimmed, because they go into a prompt: a role with a very long history
+  // must not crowd out the interview material the bullets are supposed to come from.
+  const existingBullets = (Array.isArray(options.existingBullets) ? options.existingBullets : [])
+    .map((line) => String(line || "").trim())
+    .filter(Boolean)
+    .slice(0, 24);
   const evidence = Array.isArray(options.evidenceLedger?.evidence)
     ? options.evidenceLedger.evidence
     : [];
@@ -3722,11 +3772,31 @@ const generateBulletsFromDescription = async (description, count, options = {}) 
   // bullets from a prior pass — passed back to the model so a backfill retry covers a
   // different facet instead of re-writing what was already produced.
   const runGeneration = async (want, avoidTexts, operation) => {
-    const avoidBlock = avoidTexts?.length
-      ? `\nALREADY WRITTEN (do not repeat these — cover a different facet):\n${avoidTexts
+    // TWO KINDS OF "DO NOT WRITE THIS AGAIN", kept apart because they are not the same
+    // fact and the model treats them differently.
+    //
+    // ON THE CV ALREADY — the new half. Applying bullets is a checkpoint rather than an
+    // ending: the user keeps talking about the same role, and the coach's transcript
+    // restarts at the fresh pin, so a second round used to arrive with no idea what the
+    // first had produced. Measured on a real CV — 40 bullets on one role, of which #33–#38
+    // are near-copies of #9–#16 and the same expired-certification catch is told three
+    // times. No stronger model fixes that; nothing can avoid repeating what it never saw.
+    //
+    // ALREADY WRITTEN — the original: bullets accepted earlier in THIS generation, so a
+    // backfill retry covers a different facet instead of re-writing them. They are not on
+    // the CV yet, which is why they do not share the heading above.
+    const onCvBlock = existingBullets.length
+      ? `\nALREADY ON THIS ${options.section === "project" ? "PROJECT" : "ROLE"} (on their CV from an earlier round — do not repeat or rephrase any of these):\n${existingBullets
           .map((t) => `- ${t}`)
           .join("\n")}\n`
       : "";
+    const avoidBlock = `${onCvBlock}${
+      avoidTexts?.length
+        ? `\nALREADY WRITTEN (do not repeat these — cover a different facet):\n${avoidTexts
+            .map((t) => `- ${t}`)
+            .join("\n")}\n`
+        : ""
+    }`;
 
     const user = `ROLE: "${role}"
 
@@ -3780,6 +3850,24 @@ OUTPUT STRICT JSON: { "bullets": [{ "text": "<bullet>", "evidenceIds": ["ev_..."
   // return (and, upstream, charge for) fewer than requested.
   const enforceCitations = evidence.length > 0;
   let details = await runGeneration(n, null, "coachGenerateBullets");
+  // THE BACKSTOP, because an instruction is not a guarantee.
+  //
+  // Telling the model what the role already says stops most repeats; it does not stop all
+  // of them, and a duplicate that slips through is charged for and lands on the CV. This
+  // drops a bullet that is substantially the same text as one already there, BEFORE the
+  // shortfall check below — so the backfill pass naturally tops the count back up with a
+  // different facet, and the caller charges for what was actually delivered.
+  //
+  // Deliberately limited: it catches restatement, not retelling. Two bullets describing
+  // the same expired-certification catch in genuinely different words share too few terms
+  // to trip any threshold safe enough to run unattended. Those are the prompt's job.
+  const beforeDedupe = details.length;
+  details = details.filter((item) => !repeatsExisting(item.text, existingBullets));
+  if (details.length < beforeDedupe) {
+    console.warn(
+      `coachGenerateBullets: dropped ${beforeDedupe - details.length} bullet(s) already on this entry`
+    );
+  }
   if (enforceCitations) {
     details = details.filter((item) => item.evidenceIds.length);
   }
@@ -4407,6 +4495,14 @@ const coachChatTurn = async ({
   entryCompany,
   entryType,
   section,
+  // WHAT THIS ENTRY ALREADY SAYS, when the interview is focused on it.
+  //
+  // A second round on the same role opens on a blank transcript — StudioChat pushes a
+  // fresh `pinrole` after bullets are applied and the coach reads only messages after the
+  // newest one. The CV digest that came with it compresses the WHOLE role to 140
+  // characters, which on a role with forty bullets is about one line. So Aria genuinely
+  // could not see what she had already covered, and asked for it again.
+  entryBullets = [],
   stage,
   stepLabel,
   // The card on screen (bounded by utils/screenContext), so a question about what the
@@ -4480,6 +4576,22 @@ Every turn, classify the user's latest message into ONE intent and act according
   // experience: internship / part-time / volunteering / coursework; project: course |
   // personal | work — so this wording is simply WRONG for a project. Gated to non-project
   // turns; a project is framed by the project branch below instead.
+  // WHAT IS ALREADY ON THIS ENTRY, said once at the top of the focus block.
+  //
+  // The point is not to stop her exploring — it is to stop her opening a SECOND round by
+  // asking for the thing round one already produced. Framed as "already covered", not as
+  // "do not mention", because a new detail about a covered activity is exactly what a
+  // second round is for; what is wasteful is asking the whole question again.
+  const coveredLines = (Array.isArray(entryBullets) ? entryBullets : [])
+    .map((line) => String(line || "").trim())
+    .filter(Boolean)
+    .slice(0, 20);
+  const coveredBlock = coveredLines.length
+    ? `\n- ALREADY ON THIS ENTRY — these are on their CV from an earlier round of this same interview, so they are covered. Do NOT open by asking for any of them again, and never ask a question they answer. Go after what is NOT here yet; if the user themselves returns to one of these, take the NEW detail and build on it rather than starting the topic over:\n${coveredLines
+        .map((line) => `  · ${line}`)
+        .join("\n")}`
+    : "";
+
   const experienceEntryTypeLine =
     section === "project"
       ? ""
@@ -4545,7 +4657,7 @@ ${contextLines ? `- THEIR CONTEXTS (places to ASK about — never claims that th
     }
   } else if (focus) {
     system += `
-- FOCUS: you are gathering truthful material for several strong bullets for their ${section} entry titled '${entryTitle}'${entryCompany ? ` at ${entryCompany}` : ""}. You know, in general terms, what that role typically involves — use it to ask SPECIFIC, informed follow-ups, not generic filler.
+- FOCUS: you are gathering truthful material for several strong bullets for their ${section} entry titled '${entryTitle}'${entryCompany ? ` at ${entryCompany}` : ""}. You know, in general terms, what that role typically involves — use it to ask SPECIFIC, informed follow-ups, not generic filler.${coveredBlock}
 - SPEAK THEIR TRADE. Take your vocabulary from the job title above and from the words the user has actually used, and from nothing else. An accounts role is asked about ledgers, invoices and month-end; a teaching role about lessons, pupils and marking; a field role about equipment, shifts and safety. Asking an accounts assistant what their work "helped the team complete safely or reliably" is the wrong question in the wrong language, and it tells the user you were not listening.${entryCompany ? ` The employer is '${entryCompany}'.` : ""}${experienceEntryTypeLine}
 - The user may give ONE activity or SEVERAL activities separated by full stops, commas, or list items. If there are several, remember every distinct activity from the conversation, choose the first one that still needs useful detail, and explore it with ONE focused question at a time. Then move to the next unresolved activity. Do not ask them to repeat the list and do not collapse several activities into one vague thread.
 - YOUR REPLY IS YOUR OWN VOICE, SPEAKING TO THEM. Write it in the second person ("you"). NEVER compose a sentence beginning "I ..." about their work anywhere in \`reply\` — not as a warm reaction, not as a recap, not as a draft. The only first-person lines allowed in \`reply\` are the quoted starter bullets under your \`suggestionsLabel\`, which are visibly unfinished scaffolds with a "___" in them. Concretely: when someone answers "I used Microsoft Excel", you must NOT reply "Using Microsoft Excel, I organized invoice data by categorizing purchases and ensuring accuracy in records. This helped the finance team track expenses." You have just answered your own question in their voice, out of details they never gave you — and they will believe that is what they told you. React to what they said; never restate it as them.

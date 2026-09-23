@@ -530,6 +530,17 @@ const selectRequiredRequirementProbe = (requirements, turns = [], buildTurns = 0
   );
 };
 
+// The bullets an entry already carries, as clean lines. `description` is one string with
+// a bullet per line and a leading glyph that varies (•, -, *) depending on what wrote it.
+// Capped: a role that has collected thirty of these is exactly the role this matters most
+// for, and also the one whose full list would crowd out the prompt it is being added to.
+const bulletsOf = (entry, cap = 24) =>
+  String(entry?.description || "")
+    .split("\n")
+    .map((line) => line.replace(/^[\s•\-*]+/, "").trim())
+    .filter(Boolean)
+    .slice(0, cap);
+
 const cleanEvidenceList = (value, cap = 8) =>
   (Array.isArray(value) ? value : [])
     .map((item) => String(item || "").trim())
@@ -547,6 +558,109 @@ const normalizedEvidenceText = (value) =>
 // Evidence is accepted only when the model supplies a quote copied from a real USER
 // turn. The model may summarize the claim, but it cannot create an unattached fact and
 // have that fact reach the bullet writer.
+// ── A FIGURE HAS TO HAVE BEEN SAID ──────────────────────────────────────────
+//
+// The verifier below checked the sourceQuote and stopped there. The `tools` and `metrics`
+// riding alongside it passed through untouched — and those two are exactly what
+// generateBulletsFromDescription puts in the writer's prompt, under the headings
+// "CONFIRMED TOOLS" and "USER-STATED METRICS". Neither word was true of them. Confirmed by
+// direct call: a real quote carrying metrics ["cut downtime by 18%"] and tools ["Power BI"]
+// came back with both intact, though neither appeared anywhere in the conversation.
+//
+// That is the shortest route a fabricated number has onto a finished CV, and it widens the
+// longer an interview runs.
+//
+// THE RULE, chosen over the stricter same-sentence one: the figure must appear SOMEWHERE
+// in what the candidate typed, not necessarily in the sentence being cited. Anything
+// conjured from nothing is still caught, while Aria's own rephrasing survives — she
+// routinely lifts a number out of the turn it was said in and into a tidier claim, and
+// same-sentence matching would have thrown away the real achievement with the invented one.
+const NUMBER_WORDS = Object.freeze({
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90,
+  hundred: 100,
+  thousand: 1000,
+  million: 1000000,
+});
+
+const FIGURE = /\d[\d,]*(?:\.\d+)?/g;
+// "1,200" and "1200.0" are the same figure as "1200". Compared in one canonical form so a
+// thousands separator or a trailing zero cannot make a real number look invented.
+const canonicalFigure = (value) => String(value).replace(/,/g, "").replace(/\.0+$/, "");
+
+// Every figure the candidate used, in digits — including the ones they spelled out, since
+// "about eighteen percent" and "18%" are the same claim.
+const figuresSaid = (texts) => {
+  const found = new Set();
+  texts.forEach((text) => {
+    const lower = String(text || "").toLowerCase();
+    (lower.match(FIGURE) || []).forEach((n) => found.add(canonicalFigure(n)));
+    const words = lower.split(/[^a-z]+/).filter(Boolean);
+    words.forEach((word, i) => {
+      const n = NUMBER_WORDS[word];
+      if (n === undefined) return;
+      found.add(String(n));
+      // One compound, "twenty five" / "twenty-five" (both split to the same two words).
+      // Anything longer is rarer in speech than the false rejections parsing it would cost.
+      const next = NUMBER_WORDS[words[i + 1]];
+      if (n >= 20 && n <= 90 && n % 10 === 0 && next !== undefined && next < 10) {
+        found.add(String(n + next));
+      }
+    });
+  });
+  return found;
+};
+
+// A metric with NO figure in it is prose, not a claim about size ("reduced downtime"), so
+// there is nothing to check and nothing to fabricate. One with figures must have all of
+// them accounted for: "6-hourly checks across 30 wells" is not supported by a candidate
+// who only ever said six.
+const metricWasSaid = (metric, said) => {
+  const figures = String(metric).match(FIGURE);
+  if (!figures) return true;
+  return figures.every((n) => said.has(canonicalFigure(n)));
+};
+
+// A tool is a NAME, so it has to have been named. Matched squashed as well as plain, so
+// "Power BI", "PowerBI" and "power-bi" are one thing — per turn rather than against the
+// joined transcript, or the end of one answer and the start of the next could combine into
+// a tool nobody mentioned.
+const squash = (value) => normalizedEvidenceText(value).replace(/[^a-z0-9]/g, "");
+const toolWasSaid = (tool, userTurns) => {
+  const plain = normalizedEvidenceText(tool);
+  const tight = squash(tool);
+  if (!plain || !tight) return false;
+  return userTurns.some(
+    (turn) => turn.normalized.includes(plain) || squash(turn.text).includes(tight)
+  );
+};
+
 const verifiedInterviewEvidence = (rawEvidence, turns, requirements = []) => {
   const userTurns = (turns || [])
     .filter((m) => m?.who === "user" && m.text)
@@ -555,6 +669,9 @@ const verifiedInterviewEvidence = (rawEvidence, turns, requirements = []) => {
       text: String(m.text).trim(),
       normalized: normalizedEvidenceText(m.text),
     }));
+  // Every figure the candidate used anywhere in this window, computed once rather than per
+  // evidence item. This is the "somewhere in the conversation" half of the rule above.
+  const saidFigures = figuresSaid(userTurns.map((turn) => turn.text));
   const requirementsById = new Map(
     (requirements || []).map((requirement) => [requirement?.id, requirement]).filter(([id]) => id)
   );
@@ -575,7 +692,12 @@ const verifiedInterviewEvidence = (rawEvidence, turns, requirements = []) => {
       seen.add(key);
       const id = `ev_${crypto.createHash("sha1").update(key).digest("hex").slice(0, 12)}`;
       const skills = cleanEvidenceList(item?.skills, 10);
-      const tools = cleanEvidenceList(item?.tools, 10);
+      // Filtered BEFORE evidenceText is built below, so an unsaid tool cannot go on to
+      // satisfy a requirement either — the same word would otherwise tick "Power BI" on
+      // the checklist on the strength of the model having typed it.
+      const tools = cleanEvidenceList(item?.tools, 10).filter((tool) =>
+        toolWasSaid(tool, userTurns)
+      );
       const evidenceText = normalizedEvidenceText([quote, claim, ...skills, ...tools].join(" "));
       const supportedRequirementIds = cleanEvidenceList(item?.requirementIds, 8).filter(
         (idValue) => {
@@ -601,8 +723,14 @@ const verifiedInterviewEvidence = (rawEvidence, turns, requirements = []) => {
         sourceTurn: source.index,
         skills,
         tools,
+        // `outcomes` and `skills` are deliberately NOT filtered: neither reaches the
+        // bullet writer's prompt (only the quote, the claim, tools and metrics do), so
+        // neither can put a number or a product name into a finished bullet. Filtering
+        // them would strip legitimate paraphrase for no gain in truthfulness.
         outcomes: cleanEvidenceList(item?.outcomes, 6),
-        metrics: cleanEvidenceList(item?.metrics, 6),
+        metrics: cleanEvidenceList(item?.metrics, 6).filter((metric) =>
+          metricWasSaid(metric, saidFigures)
+        ),
         requirementIds: supportedRequirementIds,
       };
     })
@@ -842,6 +970,19 @@ const generateBullets = async (req, res) => {
     let bulletDetails;
     try {
       bulletDetails = await aiService.generateBulletsFromDescription(desc, n, {
+        // WHAT THIS ROLE ALREADY CLAIMS.
+        //
+        // Applying bullets is a checkpoint, not an ending: the user carries on talking
+        // about the same role, and the coach's transcript restarts at the fresh `pinrole`
+        // marker — so round two arrives with no idea what round one produced. The writer
+        // then received a description, an evidence ledger and nothing at all saying "this
+        // role already says you handed equipment off for FIT checks."
+        //
+        // Measured on a real CV: a Wireline Field Operator role with 40 applied bullets
+        // where #33–#38 are near-copies of #9–#16, plus the same expired-certification
+        // catch told three times. No better model fixes that — nothing can avoid
+        // repeating what it cannot see.
+        existingBullets: bulletsOf(entry),
         brief,
         role: entry.title || (section === "experience" ? "this role" : "this project"),
         section,
@@ -1565,6 +1706,12 @@ const chat = async (req, res) => {
         entryTitle: entry?.title || "this role",
         entryCompany: (entry?.company || "").trim(),
         entryType: entry?.entryType || "",
+        // What this entry ALREADY says. The coach's transcript restarts at the newest
+        // `pinrole`, so a second round on the same role opens blank; the CV digest that
+        // travels with it squeezes the whole role into 140 characters, which on a role
+        // with forty bullets is one truncated line. Without this she re-asks what she
+        // already has — observed, and the direct cause of duplicate bullets.
+        entryBullets: focus ? bulletsOf(entry) : [],
         section: focus?.section || "",
         // Career stage forks the experience coaching: explicit chip choice wins; else
         // inferred from the draft (real job → experienced, else entry-level 'grad').
@@ -1819,14 +1966,45 @@ const chat = async (req, res) => {
       // those away the moment the user re-interviewed the role — silently un-proving a
       // requirement they had already been asked for separately and confirmed.
       //
-      // So: this interview owns its own findings and replaces them, and anything the hunt
-      // banked here rides along. Both write sites derive `id` the same way (sha1 of the
-      // normalised quote + claim), so a hunt item the interview re-found is not duplicated.
+      // That reasoning holds for EVERY earlier finding, not only the hunt's.
+      //
+      // A round used to replace the bucket and keep only the hunt items, so the moment the
+      // user applied bullets and carried on — which the flow explicitly invites — round
+      // one's verified evidence vanished. With it went the reason under each tick on "what
+      // this job asks for": a requirement stayed covered by the CV text while the "from
+      // what you told me" line that justified it quietly disappeared, and a confirmed
+      // check whose evidence was gone stopped resolving at all.
+      //
+      // So: fresh findings WIN on collision (a re-told answer keeps its newest wording),
+      // and everything earlier rides along behind them. Both write sites derive `id` the
+      // same way (sha1 of the normalised quote + claim), so the same answer found twice is
+      // one entry, not two. Capped, because this now accumulates across rounds and the
+      // whole bucket goes into a prompt.
       const prior = current[focus.sortId] || {};
       const freshIds = new Set(evidenceLedger.evidence.map((e) => e.id));
-      const bankedByHunt = (prior.evidence || []).filter((e) => e?.fromHunt && !freshIds.has(e.id));
-      if (bankedByHunt.length) {
-        evidenceLedger.evidence = [...evidenceLedger.evidence, ...bankedByHunt];
+      const carried = (prior.evidence || []).filter((e) => e?.id && !freshIds.has(e.id));
+      if (carried.length) {
+        evidenceLedger.evidence = [...evidenceLedger.evidence, ...carried].slice(0, 40);
+      }
+      // The checks follow the evidence, for the same reason and with the same rule: a
+      // requirement confirmed in an earlier round stays confirmed unless THIS round has
+      // something newer to say about it. Dropped if its evidence did not survive the cap,
+      // so a check can never point at an id that is no longer there.
+      const keptEvidenceIds = new Set(evidenceLedger.evidence.map((e) => e.id));
+      const freshCheckIds = new Set(
+        (evidenceLedger.requirementChecks || []).map((c) => c.requirementId)
+      );
+      const carriedChecks = (prior.requirementChecks || []).filter(
+        (check) =>
+          check?.requirementId &&
+          !freshCheckIds.has(check.requirementId) &&
+          (!check.evidenceId || keptEvidenceIds.has(check.evidenceId))
+      );
+      if (carriedChecks.length) {
+        evidenceLedger.requirementChecks = [
+          ...(evidenceLedger.requirementChecks || []),
+          ...carriedChecks,
+        ];
       }
       draft.coachEvidence = { ...current, [focus.sortId]: evidenceLedger };
       if (typeof draft.markModified === "function") draft.markModified("coachEvidence");

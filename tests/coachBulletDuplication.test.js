@@ -107,36 +107,44 @@ beforeEach(() => {
 });
 
 describe("the bullet writer and the bullets the role already has", () => {
-  it("is never told what this role already claims", async () => {
-    await post();
-
-    const [description, , options] = aiService.generateBulletsFromDescription.mock.calls[0];
-    const everythingItSees = JSON.stringify({ description, options });
-
-    // The precondition: those bullets really are on the entry, one lookup away.
-    expect(draft.experience[0].description).toContain("FIT checks");
-    // And none of them reach the writer, under any key.
-    expect(everythingItSees).not.toContain("verified ready before the next job");
-    expect(everythingItSees).not.toContain("Equipment Readiness team");
-    expect(everythingItSees).not.toContain("doghouses");
-  });
-
-  it("carries no instruction to avoid repeating them", async () => {
+  it("is told, line by line, what this role already claims", async () => {
     await post();
 
     const options = aiService.generateBulletsFromDescription.mock.calls[0][2];
-    // Any future fix will add a key for this. Named here so the absence is a decision on
-    // the record rather than an oversight nobody wrote down.
-    expect(options.existingBullets).toBeUndefined();
-    expect(options.avoid).toBeUndefined();
+
+    // The precondition: those bullets really are on the entry, one lookup away — and now
+    // they are also in front of the thing writing the next ones.
+    expect(draft.experience[0].description).toContain("FIT checks");
+    expect(options.existingBullets).toEqual([
+      expect.stringContaining("FIT checks"),
+      expect.stringContaining("Equipment Readiness team"),
+      expect.stringContaining("doghouses"),
+    ]);
   });
 
-  // The other half of the same blindness, on the interview side: each round REPLACES the
-  // role's verified notes rather than adding to them, so what round one proved is not
-  // there for round two to build on either.
-  it("keeps only the most recent round's evidence on the entry", async () => {
-    // The route above does not write evidence; this pins the SHAPE the writer reads from,
-    // which is a single bucket per sortId rather than an accumulating list.
+  it("hands them over as clean lines, not as one blob with bullet glyphs", async () => {
+    await post();
+
+    const { existingBullets } = aiService.generateBulletsFromDescription.mock.calls[0][2];
+    expect(existingBullets).toHaveLength(3);
+    // The leading glyph varies by whatever wrote the entry (•, -, *) and is furniture, not
+    // content — left on, it is three characters of noise at the head of every line and a
+    // token the duplicate check would have to learn to ignore.
+    existingBullets.forEach((line) => expect(line).not.toMatch(/^[\s•\-*]/));
+  });
+
+  it("sends nothing at all for an entry that has no bullets yet", async () => {
+    draft.experience[0].description = "";
+    await post();
+
+    const { existingBullets } = aiService.generateBulletsFromDescription.mock.calls[0][2];
+    expect(existingBullets).toEqual([]);
+  });
+
+  // The ledger the writer reads from is still ONE bucket per entry — what changed is that
+  // a later round now merges into it rather than replacing it (see
+  // coachInterviewClose.test.js, "carries earlier rounds' evidence forward").
+  it("still reads one evidence bucket per entry", async () => {
     const bucket = draft.coachEvidence[SORT_ID];
     expect(Array.isArray(bucket.evidence)).toBe(true);
     expect(Object.keys(draft.coachEvidence)).toEqual([SORT_ID]);

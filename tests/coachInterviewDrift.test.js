@@ -202,3 +202,64 @@ describe("nothing can be banked that the user did not say", () => {
     ).toEqual([]);
   });
 });
+
+// SHE CAN SEE WHAT THE LAST ROUND PRODUCED.
+//
+// The window above bounds the CONVERSATION; it says nothing about the CV. A second round
+// on the same role opens on a blank transcript (StudioChat pushes a fresh `pinrole` after
+// bullets are applied), and the CV digest travelling with it compresses the whole role to
+// 140 characters — about one truncated line on a role with forty bullets. So Aria asked
+// again for what she already had, and the writer, told the same nothing, wrote it again.
+describe("what a focused interview knows about the entry itself", () => {
+  const withBullets = (description) =>
+    setDraft({
+      experience: [{ _sortId: "sort-1", title: "Wireline Operator", company: "SLB", description }],
+    });
+
+  it("hands over the bullets this entry already carries", async () => {
+    withBullets(
+      "• Handed off serviced equipment to specialists for FIT checks\n" +
+        "• Reported equipment faults through the company system"
+    );
+
+    await post(longThread(2));
+
+    expect(aiService.coachChatTurn.mock.calls[0][0].entryBullets).toEqual([
+      "Handed off serviced equipment to specialists for FIT checks",
+      "Reported equipment faults through the company system",
+    ]);
+  });
+
+  it("strips the bullet glyph, which is furniture rather than content", async () => {
+    withBullets("- dash style\n* star style\n• dot style");
+
+    await post(longThread(2));
+
+    expect(aiService.coachChatTurn.mock.calls[0][0].entryBullets).toEqual([
+      "dash style",
+      "star style",
+      "dot style",
+    ]);
+  });
+
+  it("sends none for an entry with nothing on it yet", async () => {
+    withBullets("");
+
+    await post(longThread(2));
+
+    expect(aiService.coachChatTurn.mock.calls[0][0].entryBullets).toEqual([]);
+  });
+
+  // Only a FOCUSED turn is about one entry. A general chat question has no entry to be
+  // about, and pushing one role's bullets into it would narrow an open question.
+  it("sends none on an unfocused turn", async () => {
+    withBullets("• Handed off serviced equipment for FIT checks");
+
+    await request(app)
+      .post("/api/coach/chat")
+      .set("Authorization", "Bearer token")
+      .send({ draftId, messages: longThread(2), currentStepId: "history" });
+
+    expect(aiService.coachChatTurn.mock.calls[0][0].entryBullets).toEqual([]);
+  });
+});

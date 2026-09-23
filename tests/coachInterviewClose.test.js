@@ -195,7 +195,16 @@ describe("re-interviewing a role keeps what the hunt banked there", () => {
     expect(draft.coachEvidence["sort-1"].evidence).toHaveLength(1);
   });
 
-  it("replaces stale interview evidence rather than piling it up", async () => {
+  // REVERSED, DELIBERATELY. This used to pin "a round replaces the bucket", on the reading
+  // that an interview owns its own findings. The flow then changed underneath it: applying
+  // bullets is a checkpoint, the user carries on with the SAME role, and every later round
+  // was wiping the one before. What went with it was not noise — it was the reason under
+  // each tick on "what this job asks for" ("from what you told me"), and any confirmed
+  // check whose evidence had vanished stopped resolving at all.
+  //
+  // So earlier findings are carried, with THIS round winning on collision, capped at 40.
+  // Piling up is still the thing to avoid; the cap is what avoids it now, not amnesia.
+  it("carries earlier rounds' evidence forward instead of wiping it", async () => {
     setDraft({
       coachEvidence: {
         "sort-1": {
@@ -218,8 +227,73 @@ describe("re-interviewing a role keeps what the hunt banked there", () => {
     await post({ buildTurns: 3 });
 
     const claims = draft.coachEvidence["sort-1"].evidence.map((e) => e.claim);
-    expect(claims).not.toContain("Something from an earlier round");
     expect(claims).toContain("Ran cased-hole logging on thirty wells");
+    expect(claims).toContain("Something from an earlier round");
+    // This round's findings lead; the earlier ones sit behind them.
+    expect(claims[0]).toBe("Ran cased-hole logging on thirty wells");
+  });
+
+  // The cap is what stops "carried forward" becoming "grows without bound" — the whole
+  // bucket goes into the writer's prompt, so a role interviewed a dozen times must not
+  // drag every answer it ever gave into every future generation.
+  it("caps the carried ledger so it cannot grow without bound", async () => {
+    setDraft({
+      coachEvidence: {
+        "sort-1": {
+          evidence: Array.from({ length: 60 }, (_, i) => ({
+            id: `ev_old${String(i).padStart(7, "0")}`,
+            claim: `Earlier finding ${i}`,
+            sourceQuote: "x",
+          })),
+          requirementChecks: [],
+        },
+      },
+    });
+
+    aiService.coachChatTurn.mockResolvedValue({
+      reply: "Got it.",
+      intent: "ready",
+      description: "Ran logging.",
+      evidence: [{ claim: "Ran cased-hole logging on thirty wells", sourceQuote: SAID }],
+      requirementChecks: [],
+    });
+
+    await post({ buildTurns: 3 });
+
+    const kept = draft.coachEvidence["sort-1"].evidence;
+    expect(kept).toHaveLength(40);
+    // The newest survives the cap — it is at the front, so trimming takes the oldest.
+    expect(kept[0].claim).toBe("Ran cased-hole logging on thirty wells");
+  });
+
+  // A check pointing at evidence that did not survive the cap would never resolve, so it
+  // is dropped with it rather than left dangling on the checklist.
+  it("drops a carried check whose evidence did not survive", async () => {
+    setDraft({
+      coachEvidence: {
+        "sort-1": {
+          evidence: [{ id: "ev_gone0000001", claim: "Old", sourceQuote: "x" }],
+          requirementChecks: [
+            { requirementId: "req_kept", status: "confirmed", evidenceId: null },
+            { requirementId: "req_dangling", status: "confirmed", evidenceId: "ev_missing00001" },
+          ],
+        },
+      },
+    });
+
+    aiService.coachChatTurn.mockResolvedValue({
+      reply: "Got it.",
+      intent: "ready",
+      description: "Ran logging.",
+      evidence: [{ claim: "Ran cased-hole logging on thirty wells", sourceQuote: SAID }],
+      requirementChecks: [],
+    });
+
+    await post({ buildTurns: 3 });
+
+    const ids = (draft.coachEvidence["sort-1"].requirementChecks || []).map((c) => c.requirementId);
+    expect(ids).toContain("req_kept");
+    expect(ids).not.toContain("req_dangling");
   });
 });
 
