@@ -15,6 +15,8 @@ const modelSelection = require("../services/modelSelection.service");
 const { coachState } = require("../services/atsCoach.service");
 const skillNormalizer = require("../services/skillNormalizer.service");
 const { TRANSACTION_TYPES } = require("../config/transactionTypes");
+// The SAME depth/style the call settings use — one control, two surfaces.
+const { normalizeCallSettings } = require("../config/ariaCallSettings");
 
 // The valid Role-Brief company types (mirrors DraftCV.targetJob.brief.companyType
 // and ai.service's framing map). Used to validate the infer+confirm chip.
@@ -1501,6 +1503,18 @@ const askAria = async (req, res) => {
 // model is forced to wrap up to a draft so the conversation always converges.
 const INTERVIEW_TURN_CAP = 6;
 const STUDIO_INTERVIEW_TURN_CAP = 10;
+// THE SAME "THOROUGH OR QUICK" THE USER ALREADY CHOSE FOR CALLS.
+//
+// Reported: "I was being interviewed a lot." Not a bug — the prompt says not to wrap up
+// while a plausibly relevant requirement is unexplored, and a model that follows
+// instructions more literally keeps going for longer. But ten turns is a long time to be
+// asked questions, and which side of that trade someone wants is not ours to guess.
+//
+// The setting already existed and was already on screen: the chip under the composer
+// reads "Thorough · Direct", it is saved on the account, and until now it governed CALLS
+// ONLY. Someone could set it, watch it sit there through a typed interview, and wonder
+// what it was for. This is that control finally meaning what it says.
+const STUDIO_INTERVIEW_TURN_CAP_QUICK = 6;
 
 // @desc    Aria's UNIFIED chat — ONE front door. Focus-aware + intent-classified on
 //          the CHEAP base model: a focused 'building'/'ready' turn is FREE (build-with);
@@ -1610,7 +1624,14 @@ const chat = async (req, res) => {
     });
 
     // The per-interview turn cap only bounds focused BUILDING (forces a draft).
-    const turnCap = studioInterview === true ? STUDIO_INTERVIEW_TURN_CAP : INTERVIEW_TURN_CAP;
+    //
+    // Normalised, never trusted: `depth` arrives in the request body and an unlisted value
+    // falls back to the default rather than reaching a prompt or lengthening an interview
+    // someone did not ask to lengthen.
+    const { depth } = normalizeCallSettings({ depth: req.body?.depth });
+    const studioCap =
+      depth === "quick" ? STUDIO_INTERVIEW_TURN_CAP_QUICK : STUDIO_INTERVIEW_TURN_CAP;
+    const turnCap = studioInterview === true ? studioCap : INTERVIEW_TURN_CAP;
     const mustFinish = !!focus && Number(buildTurns) >= turnCap;
 
     // Route the turn through the selected model (multi-provider dispatcher).
@@ -1760,6 +1781,10 @@ const chat = async (req, res) => {
       result = await aiService.coachChatTurn({
         messages: window,
         focus: !!focus,
+        // Thorough or quick — already normalised above, and the same choice that shapes a
+        // CALL. The cap alone would only gag her at the tenth turn; this is what makes a
+        // quick interview actually feel quick rather than abruptly cut off.
+        depth,
         entryTitle: entry?.title || "this role",
         entryCompany: (entry?.company || "").trim(),
         entryType: entry?.entryType || "",

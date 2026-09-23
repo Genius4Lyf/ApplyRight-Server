@@ -4546,6 +4546,10 @@ const coachChatTurn = async ({
   entryTitle,
   entryCompany,
   entryType,
+  // 'thorough' | 'quick' — the SAME account setting that shapes a call, finally shaping
+  // the typed interview too. The controller normalises it; anything unrecognised reads as
+  // the default, so this can only ever be one of the two.
+  depth = "thorough",
   section,
   // WHAT THIS ENTRY ALREADY SAYS, when the interview is focused on it.
   //
@@ -4731,6 +4735,11 @@ ${contextLines ? `- THEIR CONTEXTS (places to ASK about — never claims that th
     · A DIFFERENT SITUATION FROM THE ONE THEY JUST DESCRIBED. This is what keeps an in-trade sample safe: it shows the SHAPE — a real action, who or what it was for, and what it made possible — on a task they have NOT just told you about, so it cannot be mistaken for your version of their answer and cannot be adopted wholesale. Never attribute it to them, never build it from a detail they did not give, and never let it become the answer they merely agree with.
     · Examples of the SHAPE only, never of the subject matter, which must be theirs: "<a real, ordinary action> … <who or what it was for> … <what that made possible>".
   · \`suggestionsLabel\`: a SHORT (≤ 6 words) natural lead-in in your voice, specific to the question you just asked, that introduces those starters — e.g. "Ways to show the impact:", "A number you might have:", "A few starting points:", "How you could phrase it:".
+- HOW LONG THEY ASKED FOR. This is the user's own setting, not a hint: ${
+      depth === "quick"
+        ? `they chose a QUICK interview. For each activity they raise, get the real action and — where it comes naturally — what changed because of it, then MOVE ON. Do not go hunting for detail they have not raised, and do not work through the hidden-work angles. You have enough once each activity they mentioned has its action and, where natural, a result: usually three to five of your questions. Do not pad it. Stopping while they still have more to say is the POINT of this setting — they can start another round on the same role whenever they like.`
+        : `they chose a THOROUGH interview. Work through each activity properly and dig for the things people do not count as achievements, one angle at a time. Most roles need six or more of your questions. Do not stop early because they answer briefly — brief people need more questions, not fewer.`
+    }
 - When the useful activities have enough truthful detail for the requested bullets (real actions plus context, scope, or results where natural), OR you're told to wrap up → intent:'ready'. Put ALL gathered activities into \`description\` as concise FIRST-PERSON sentences for the bullet writer, preserving the user's facts and never inventing.
 - For intent:'ready', make \`reply\` a brief statement that you have enough and are opening the bullet options. Do NOT ask whether they want to keep talking, and do NOT ask them to type "Done".
 - For intent:'ready', return an \`evidence\` array containing the distinct user-backed facts you relied on. Every item MUST have: \`claim\` (a concise first-person fact), \`sourceQuote\` (an EXACT contiguous quote copied from ONE user message), \`skills\`, \`tools\`, \`outcomes\`, \`metrics\`, and \`requirementIds\`. Never manufacture or paraphrase sourceQuote. A requirement id may appear only when that exact evidence supports it.
@@ -4762,7 +4771,7 @@ ${contextLines ? `- THEIR CONTEXTS (places to ASK about — never claims that th
   · If they used it in a DIFFERENT job/project/course, acknowledge it but EXCLUDE it from this entry's description and bullets; tell them it belongs under that other entry. Never move evidence between roles.
   · Basic exposure is not advanced proficiency. Coursework, internship, volunteer and part-time evidence must stay labelled by the selected entry type.
   · HARD RULES: never imply they SHOULD have done any of these; never lead them to claim something they didn't do; never treat a listed item as something they must have; if an area is clearly outside their role, skip it silently. A genuinely absent requirement is fine — it will show up honestly when they scan.
-  · Do NOT set intent:'ready' while an obvious, plausibly-relevant item on this list is still unexplored — unless you're told to wrap up.`;
+  · Do NOT set intent:'ready' while an obvious, plausibly-relevant item on this list is still unexplored — unless you're told to wrap up${depth === "quick" ? ", and read that against HOW LONG THEY ASKED FOR below: on a quick interview, raise the one or two items that most plausibly fit what they have already described and let the rest go" : ""}.`;
 
       if (requiredProbe?.name) {
         system += `

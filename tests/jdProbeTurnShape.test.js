@@ -147,3 +147,50 @@ describe("the general rule behind it, which applies on every focused turn", () =
     }
   );
 });
+
+// THE DEPTH SETTING HAS TO REACH THE PROMPT, not just the cap.
+//
+// A cap alone gags her mid-flow at turn six: she conducts a ten-turn interview and gets
+// cut off four questions early, which is worse than either setting. The prompt is what
+// makes her AIM to be done by then — so a quick interview reads as finished rather than
+// interrupted.
+describe("how long they asked for", () => {
+  it("tells her plainly when they chose quick", async () => {
+    await turn({ depth: "quick" });
+    const prompt = systemPrompt();
+
+    expect(prompt).toMatch(/they chose a QUICK interview/i);
+    expect(prompt).toMatch(/three to five/i);
+    expect(prompt).toMatch(/Do not pad it/i);
+    // The reassurance that makes stopping early acceptable rather than a loss — without
+    // it, "stop sooner" reads as "get less out of them".
+    expect(prompt).toMatch(/another round on the same role/i);
+  });
+
+  it("tells her the opposite when they chose thorough", async () => {
+    await turn({ depth: "thorough" });
+    const prompt = systemPrompt();
+
+    expect(prompt).toMatch(/they chose a THOROUGH interview/i);
+    expect(prompt).toMatch(/brief people need more questions, not fewer/i);
+    expect(prompt).not.toMatch(/they chose a QUICK interview/i);
+  });
+
+  it("is thorough when nothing was chosen", async () => {
+    await turn();
+    expect(systemPrompt()).toMatch(/they chose a THOROUGH interview/i);
+  });
+
+  // The requirement-chasing rule is what made a thorough interview long in the first
+  // place, so on quick it has to be softened in the same breath — otherwise the two
+  // instructions contradict each other and she follows whichever she read last.
+  it("softens the requirement chase on a quick interview", async () => {
+    await turn({ depth: "quick", requiredProbe: REQUIREMENT });
+    expect(systemPrompt()).toMatch(/let the rest go/i);
+  });
+
+  it("leaves the requirement chase alone on a thorough one", async () => {
+    await turn({ depth: "thorough", requiredProbe: REQUIREMENT });
+    expect(systemPrompt()).not.toMatch(/let the rest go/i);
+  });
+});

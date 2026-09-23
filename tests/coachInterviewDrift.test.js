@@ -263,3 +263,58 @@ describe("what a focused interview knows about the entry itself", () => {
     expect(aiService.coachChatTurn.mock.calls[0][0].entryBullets).toEqual([]);
   });
 });
+
+// HOW LONG THE INTERVIEW RUNS IS THE USER'S CHOICE.
+//
+// Reported: "I was being interviewed a lot." Not a defect — the prompt says not to wrap up
+// while a plausibly relevant requirement is unexplored, and a model that follows
+// instructions more literally keeps going for longer. But ten turns is a long time to be
+// asked questions, and which side of that trade someone wants is not ours to guess.
+//
+// The setting already existed and was already ON SCREEN: the chip under the composer reads
+// "Thorough · Direct", it is saved on the account, and it governed CALLS ONLY. Someone
+// could set it, watch it sit there through an entire typed interview, and reasonably
+// wonder what it was for. This is that control finally meaning what it says.
+//
+// TWO halves, and the second is what makes it feel different rather than merely shorter:
+// the cap stops the interview, the PROMPT changes how she conducts it. A cap alone gags
+// her mid-flow at turn six; the prompt makes her aim to be finished by then.
+describe("thorough or quick, as the user set it", () => {
+  const ask = (body) => post(longThread(3), body);
+  const sent = () => aiService.coachChatTurn.mock.calls[0][0];
+
+  it("passes the choice through to the interviewer", async () => {
+    await ask({ depth: "quick" });
+    expect(sent().depth).toBe("quick");
+  });
+
+  it("defaults to thorough, which is what it has always been", async () => {
+    await ask({});
+    expect(sent().depth).toBe("thorough");
+  });
+
+  // Never trusted from the client: an unlisted value must not reach a prompt, and must not
+  // lengthen an interview nobody asked to lengthen.
+  it("falls back to thorough on a value it does not recognise", async () => {
+    await ask({ depth: "exhaustive" });
+    expect(sent().depth).toBe("thorough");
+  });
+
+  // The cap is the backstop. `mustFinish` is what the server sets when the cap is reached,
+  // and it forces a draft out of whatever is there — so the two depths have to hit it at
+  // different turn counts or the setting is decoration.
+  it("wraps a quick interview up at six turns", async () => {
+    await ask({ depth: "quick", buildTurns: 6 });
+    expect(sent().mustFinish).toBe(true);
+  });
+
+  it("lets a thorough interview keep going at six", async () => {
+    await ask({ depth: "thorough", buildTurns: 6 });
+    expect(sent().mustFinish).toBe(false);
+  });
+
+  it("still stops a thorough interview at ten", async () => {
+    await ask({ depth: "thorough", buildTurns: 10 });
+    expect(sent().mustFinish).toBe(true);
+  });
+});
