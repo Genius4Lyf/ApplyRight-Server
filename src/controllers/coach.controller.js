@@ -314,6 +314,25 @@ const huntContextsForDraft = (draft) => {
 const HUNT_MODES = ["build", "open"];
 const huntMode = (value) => (HUNT_MODES.includes(value) ? value : "open");
 
+// One typed requirement, resolved by id, or null when it must not be raised at all.
+//
+// The decline check is the whole point of routing through a helper rather than reading
+// `brief.requirements` inline: a clear "no" is honoured everywhere and permanently, and a
+// new entry point that forgot it would be the way a refused requirement comes back.
+const askableRequirement = (draft, brief, requirementId) => {
+  const typed = Array.isArray(brief?.requirements) ? brief.requirements : [];
+  const requirement = typed.find((item) => item?.id === requirementId);
+  if (!requirement?.name) return null;
+  if (declinedRequirementKeys(draft).has(String(requirement.name).toLowerCase())) return null;
+  return {
+    id: requirement.id,
+    name: requirement.name,
+    type: requirement.type || "skill",
+    aliases: Array.isArray(requirement.aliases) ? requirement.aliases : [],
+    proofSignals: Array.isArray(requirement.proofSignals) ? requirement.proofSignals : [],
+  };
+};
+
 // Build the probe payload for ONE requirement, or null when it must not be asked.
 const buildHuntProbe = (draft, brief, requirementId, mode = "open") => {
   const typed = Array.isArray(brief?.requirements) ? brief.requirements : [];
@@ -1644,17 +1663,55 @@ const chat = async (req, res) => {
     // The role's still-uncovered must-haves, narrowed to three candidates ranked by
     // signals in THIS entry and THIS conversation. The model must still skip anything
     // implausible; ranking is guidance, never evidence.
-    const openMustHaves = focus ? targetRequirementsForEntry(draft, brief, entry, window, 3) : [];
-    const requiredProbe =
-      focus && !mustFinish
+    let openMustHaves = focus ? targetRequirementsForEntry(draft, brief, entry, window, 3) : [];
+
+    // ── "I DID THIS HERE TOO" ────────────────────────────────────────────────
+    //
+    // The user has tapped a requirement that is ALREADY covered — proved at some other
+    // entry — and wants it raised against the one they are building now. Real need: a CV
+    // is read role by role, and a requirement proved only at a 2019 job leaves the most
+    // recent role, the one a recruiter reads first, silent on it.
+    //
+    // Deliberately NOT the cross-history hunt below, which would be the obvious reuse and
+    // is wrong twice over. That path files evidence under whichever entry the USER names
+    // (its own comment: "usually NOT the entry this conversation started from"), and on a
+    // clear no it writes a CV-WIDE decline that silences the requirement on every surface.
+    // So tapping this and then saying "actually, not at this job" would delete a
+    // requirement the user genuinely holds elsewhere. Nothing about that is recoverable
+    // from the UI.
+    //
+    // Instead it becomes a forced, entry-scoped confirmation: the same mechanism the
+    // interview already uses to raise a JD requirement, aimed by the user rather than by
+    // the ranker. Evidence banks under THIS entry through the ordinary path, and a "no"
+    // silences nothing — it is one question about one job, not a verdict on their career.
+    const alsoHere =
+      focus && probeRequest?.scope === "entry"
+        ? askableRequirement(draft, brief, probeRequest.requirementId)
+        : null;
+    if (alsoHere) {
+      // Prepended rather than replacing the list: it leads the turn, and being IN the list
+      // is also what lets verifiedInterviewEvidence link what they say back to this
+      // requirement. Without that the answer banks with no connection to it, the role
+      // gets no credit on the checklist, and the tick keeps naming the older job.
+      openMustHaves = [
+        { name: alsoHere.name, importance: "must_have", id: alsoHere.id, type: alsoHere.type },
+        ...openMustHaves.filter((item) => item?.id !== alsoHere.id),
+      ];
+    }
+
+    const requiredProbe = alsoHere
+      ? { ...alsoHere, alreadyCovered: true }
+      : focus && !mustFinish
         ? selectRequiredRequirementProbe(openMustHaves, window, buildTurns)
         : null;
 
     // The CROSS-HISTORY HUNT for one requirement. Null when the id is unknown or the user
-    // has already declined it — buildHuntProbe refuses rather than asking again.
-    const probe = probeRequest?.requirementId
-      ? buildHuntProbe(draft, brief, probeRequest.requirementId, probeRequest.mode)
-      : null;
+    // has already declined it — buildHuntProbe refuses rather than asking again. Skipped
+    // entirely for an entry-scoped tap, which must never reach the decline-writing path.
+    const probe =
+      probeRequest?.requirementId && !alsoHere
+        ? buildHuntProbe(draft, brief, probeRequest.requirementId, probeRequest.mode)
+        : null;
 
     // NO focus → every turn is a general answer (metered like /coach/ask). Pre-check
     // the balance BEFORE spending an AI call the user can't pay for — but only when the

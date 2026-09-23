@@ -4711,6 +4711,21 @@ ${contextLines ? `- THEIR CONTEXTS (places to ASK about — never claims that th
       if (requiredProbe?.name) {
         system += `
 - VISIBLE JD CONFIRMATION — REQUIRED THIS TURN: the selected requirement is "${requiredProbe.name}" (${requiredProbe.id || "untracked"}). Before asking another normal impact/detail question, explicitly tell the user—in their language—that this item appears in the job description and may relate to what they just described. Then ask ONE neutral question to confirm whether they actually used/did/encountered it in THIS entry. Include a brief "no is completely fine" reassurance. Use the exact requirement name so the user can recognise what the employer asked for. Stay intent:'building'. Do not claim they have it, do not supply the answer, and do not ask about any second requirement.`;
+        // THE USER ASKED FOR THIS ONE, about an entry where it is not yet recorded.
+        //
+        // Two things change, and both are about not insulting them. It is already on their
+        // CV, so opening as though it were new makes them re-explain something they have
+        // told her — the exact complaint this whole interview has been fixed for twice.
+        // And the "no" exit has to be LOUDER here than anywhere else: naming a requirement
+        // and asking "did you do it here too?" is the closest this prompt ever comes to
+        // the leading question it otherwise bans, and the only thing making it safe is
+        // that the user pressed it and that declining costs them nothing.
+        if (requiredProbe.alreadyCovered) {
+          system += `
+- THEY ASKED FOR THIS ONE, AND THEY ALREADY HAVE IT ELSEWHERE. "${requiredProbe.name}" is already evidenced somewhere else on their CV — they have just asked you to look at whether it also belongs to THIS entry. So: do NOT introduce it as something new, do NOT re-explain why the employer wants it at length, and do NOT congratulate them for having it. One short sentence acknowledging it is already on their CV from another entry, then ONE open question about what it looked like HERE — what they actually did, in this job, in their words.
+- MAKE "NOT HERE" THE EASIEST ANSWER IN THE ROOM. Say plainly, in the same breath as the question, that it is completely fine if this was not part of this particular job — that it stays on their CV either way and nothing is lost. They pressed a button asking to be asked; that is not the same as claiming they did it, and if you make agreement the comfortable answer you will get a bullet they cannot defend in an interview. Never suggest the answer. Never imply the role would be stronger if they said yes.
+- If they say it was not part of this entry, accept it in one line, drop it for good, and carry on with whatever else they were describing. Do NOT treat that as a "no" about the requirement itself — they have it elsewhere, and nothing about their CV changes.`;
+        }
       }
     }
 
