@@ -1,0 +1,149 @@
+// WHAT A JD-CONFIRMATION TURN IS ALLOWED TO LOOK LIKE.
+//
+// Reported from a live interview, all three in ONE reply:
+//
+//   "The job description lists **Executing routine and minor non-routine production
+//    operations and first-line maintenance** — did you perform or encounter that type of
+//    maintenance work in this internship? No is completely fine.
+//
+//    That sounds like you coordinated parts procurement so mechanics could finish repairs
+//    and return trucks to service.
+//
+//    When you worked with procurement, what specific tasks did you handle (raising
+//    requisitions, tracking deliveries, prioritising requests, or escalating delays), and
+//    who did this directly help?"
+//
+//   1. TWO questions in one turn. The user answers one, and it is never the one you needed.
+//   2. THE ORDER INVERTED — the job description first, their actual answer acknowledged
+//      afterwards, which reads as having waited for them to stop talking.
+//   3. A CANDIDATE LIST INSIDE THE QUESTION. The prompt already banned "was it this, this,
+//      or this?"; the bracketed form is the same leading question with quieter
+//      punctuation, and it walked straight through. The same three options then appeared
+//      again underneath as scaffolds, which is where they were supposed to live.
+//
+// None of it was a hallucination. (1) and (2) came from the block's own opening words —
+// "Before asking another normal impact/detail question" was written to mean INSTEAD OF and
+// reads as "first, then the other one". These pin the rewrite.
+process.env.OPENAI_API_KEY = "k-openai";
+delete process.env.GEMINI_API_KEY;
+delete process.env.ANTHROPIC_API_KEY;
+
+const mockOpenAICreate = jest.fn();
+jest.mock("openai", () =>
+  jest.fn().mockImplementation(() => ({ chat: { completions: { create: mockOpenAICreate } } }))
+);
+jest.mock("../src/models/AICallLog", () => ({ create: jest.fn().mockResolvedValue({}) }));
+
+const ai = require("../src/services/ai.service");
+
+const PAYLOAD = {
+  reply: "What did you do there?",
+  intent: "building",
+  description: "",
+  suggestions: [],
+  exampleAnswers: [],
+  evidence: [],
+  requirementChecks: [],
+};
+
+const REQUIREMENT = {
+  id: "req_firstline",
+  name: "Executing routine and minor non-routine production operations",
+  type: "responsibility",
+  importance: "must_have",
+  aliases: [],
+  proofSignals: [],
+};
+
+const turn = (over = {}) =>
+  ai.coachChatTurn({
+    messages: [{ who: "user", text: "I chased the spare parts with procurement" }],
+    currentStepId: "history",
+    focus: { section: "experience", sortId: "s1" },
+    section: "experience",
+    entryTitle: "Haulage Maintenance Officer",
+    entryCompany: "Matrix",
+    openMustHaves: [REQUIREMENT],
+    ...over,
+  });
+
+const systemPrompt = () => mockOpenAICreate.mock.calls[0][0].messages[0].content;
+
+beforeEach(() => {
+  mockOpenAICreate.mockReset();
+  mockOpenAICreate.mockResolvedValue({
+    choices: [{ message: { content: JSON.stringify(PAYLOAD) }, finish_reason: "stop" }],
+    usage: {},
+  });
+});
+
+describe("the forced JD-confirmation turn", () => {
+  const probeTurn = () => turn({ requiredProbe: REQUIREMENT });
+
+  it("says the JD question REPLACES the normal follow-up, not joins it", async () => {
+    await probeTurn();
+    const prompt = systemPrompt();
+
+    expect(prompt).toMatch(/ONLY question/i);
+    expect(prompt).toMatch(/REPLACES your normal follow-up/i);
+    // The phrasing that caused it. "Before asking another normal impact/detail question"
+    // was meant as "instead of" and read as "first, then that one as well".
+    expect(prompt).not.toMatch(/Before asking another normal impact\/detail question/i);
+  });
+
+  it("caps the whole reply at one question mark", async () => {
+    await probeTurn();
+    expect(systemPrompt()).toMatch(/ONE QUESTION MARK IN THE WHOLE REPLY/i);
+  });
+
+  it("puts their answer first and the job description second", async () => {
+    await probeTurn();
+    const prompt = systemPrompt();
+
+    expect(prompt).toMatch(/react to what they JUST said first/i);
+    // And says WHY, so it is not read as a stylistic preference and dropped.
+    expect(prompt).toMatch(/waiting for them to stop talking/i);
+  });
+
+  it("bans a bracketed candidate list, not just the obvious one", async () => {
+    await probeTurn();
+    const prompt = systemPrompt();
+
+    expect(prompt).toMatch(/NO CANDIDATE LIST INSIDE THE QUESTION/i);
+    expect(prompt).toMatch(/parenthetical/i);
+    // Points at where examples ARE allowed, so the rule removes a habit instead of a tool.
+    expect(prompt).toMatch(/scaffolds/i);
+  });
+
+  it("keeps the no-is-completely-fine exit it always had", async () => {
+    await probeTurn();
+    expect(systemPrompt()).toMatch(/no is completely fine/i);
+  });
+});
+
+describe("the general rule behind it, which applies on every focused turn", () => {
+  it("names the bracketed form as the same offence", async () => {
+    await turn();
+    const prompt = systemPrompt();
+
+    expect(prompt).toMatch(/BRACKETED list is the same offence/i);
+    expect(prompt).toMatch(/was it this, this, or this/i);
+  });
+
+  it("says a requirement question replaces the usual follow-up", async () => {
+    await turn();
+    expect(systemPrompt()).toMatch(/replaces your usual follow-up rather than joining it/i);
+  });
+
+  // The ban-list from coachPromptRegister.test.js: every word put in front of the model
+  // sets the register for whatever trade the user is actually in. The example that
+  // illustrates the bracketed-list rule is deliberately office vocabulary, and must not
+  // drift into one industry's words.
+  it.each(["wells", "rigged up", "offshore", "downtime", "crew", "permit"])(
+    "still puts no %s in front of the model",
+    async (term) => {
+      await turn({ requiredProbe: REQUIREMENT });
+      expect(systemPrompt().toLowerCase()).not.toContain(term.toLowerCase());
+    }
+  );
+});
