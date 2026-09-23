@@ -8,6 +8,7 @@ const {
   stripExampleAnswers,
   dropEchoedSamples,
   dropRepeatedStarters,
+  promoteInlineSamples,
 } = require("../utils/ariaStarters");
 // One measure of "how much of this is that", shared with the scaffold guards above.
 const { contentTokens, overlap } = require("../utils/textOverlap");
@@ -272,14 +273,24 @@ const persistLog = (entry) => {
 // decision, this is a fact about the endpoint, and an admin can point any tier at any
 // model without a deploy.
 const OPENAI_REASONING_MODEL = /^(?:gpt-5|o[1-9])/i;
-const REASONING_MIN_TOKENS = 6000;
+// ADDED TO the caller's budget, not a floor under it.
+//
+// This was `Math.max(maxTokens, 6000)` and that is the wrong shape. Reasoning tokens are
+// ADDITIONAL to the visible answer — they do not replace it — so a caller that asked for
+// 8,192 because its JSON is genuinely that large (skills, with groups, evidence and
+// talking points) got no extra room at all, while one asking for 1,200 got 4,800 it did
+// not need. A flat floor answers "is 6,000 enough?" differently for every caller, which is
+// how the bullet generator came to truncate in production.
+//
+// Capping is free: max_completion_tokens bounds generation, it does not reserve or bill.
+const REASONING_HEADROOM = 4000;
 
 const openaiSampling = (apiModel, { temperature, maxTokens, disableThinking }) => {
   if (!OPENAI_REASONING_MODEL.test(String(apiModel || ""))) {
     return { temperature, ...(maxTokens ? { max_tokens: maxTokens } : {}) };
   }
   return {
-    max_completion_tokens: Math.max(maxTokens || 0, REASONING_MIN_TOKENS),
+    max_completion_tokens: (maxTokens || 2000) + REASONING_HEADROOM,
     ...(disableThinking ? { reasoning_effort: "low" } : {}),
     // `disableThinking` already means "this is a short structured-output task, do not
     // spend the budget working up to it". Anthropic gets thinking:{type:"disabled"};
@@ -4911,6 +4922,8 @@ NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Th
   });
 
   const intent = ["answer", "building", "ready"].includes(data?.intent) ? data.intent : "building";
+  // The reply as it will be sent, after the scaffolds have been pulled out of it.
+  let replyText = String(data?.reply || "").trim();
   // Answer scaffolds — only meaningful while building; coerce/whitelist defensively.
   let suggestions = Array.isArray(data?.suggestions)
     ? data.suggestions.map((s) => String(s || "").trim()).filter(Boolean)
@@ -4924,6 +4937,19 @@ NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Th
   // Two is the design, and the cap is load-bearing: more would turn a hint into a reading
   // task, and this is a help affordance, not a list of options to choose between.
   exampleAnswers = exampleAnswers.slice(0, 2);
+  // SAMPLES LEFT LOOSE IN THE PROSE, RESCUED INTO THE FIELD.
+  //
+  // Seen on a project interview: two finished first-person sentences run together at the
+  // end of the message, the field empty, and therefore no "a full answer sounds like"
+  // panel at all — unlabelled, unfolded, and indistinguishable from Aria asserting the
+  // user did those things. Stripping them would lose them; this puts them where they were
+  // always meant to go. Runs BEFORE the guards below so a rescued sample faces the same
+  // echo check as one the model returned properly.
+  {
+    const rescued = promoteInlineSamples(String(data?.reply || ""), exampleAnswers);
+    replyText = rescued.reply;
+    exampleAnswers = rescued.exampleAnswers;
+  }
   // A SAMPLE MUST NOT BE THEIR OWN ANSWER, TIDIED. The cost of moving samples into the
   // user's own trade: the nearest strong answer in their field is the one they just gave.
   exampleAnswers = dropEchoedSamples(exampleAnswers, messages);
@@ -4958,11 +4984,11 @@ NON-NEGOTIABLE ENTRY-LEVEL CHECK: This user selected student/recent graduate. Th
   const reply =
     intent === "building"
       ? appendStarters(
-          stripExampleAnswers(String(data?.reply || "").trim(), exampleAnswers),
+          stripExampleAnswers(replyText, exampleAnswers),
           suggestions,
           data?.suggestionsLabel
         )
-      : String(data?.reply || "").trim();
+      : replyText;
 
   return {
     reply,

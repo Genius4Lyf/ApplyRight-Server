@@ -449,7 +449,11 @@ describe("analysis.controller — money correctness", () => {
       expect(res.body.coverLetterWasFree).toBe(true);
       expect(User.updateOne).not.toHaveBeenCalled();
       // Not the picked model — the model this endpoint has always resolved for itself.
-      expect(aiService.generateCoverLetter.mock.calls[0][2].model).toBe("gpt-4o-mini");
+      // On `model`, deliberately: that is an OpenAI model NAME, and the legacy path it
+      // takes talks to the OpenAI client directly. Only a catalog id needs the dispatcher.
+      const options = aiService.generateCoverLetter.mock.calls[0][2];
+      expect(options.model).toBe("gpt-4o-mini");
+      expect(options.modelId).toBeUndefined();
     });
 
     it("charges the Standard letter once the day's free one is spent", async () => {
@@ -470,7 +474,20 @@ describe("analysis.controller — money correctness", () => {
       const res = await post({ model: PRO_MODEL });
 
       expect(res.statusCode).toBe(200);
-      expect(aiService.generateCoverLetter.mock.calls[0][2].model).toBe(PRO_MODEL);
+      // `modelId`, NOT `model`, and the difference is the whole bug this once hid.
+      //
+      // The two keys go to different places. `model` is the LEGACY path: the string is
+      // handed straight to the OpenAI client. `modelId` is a CATALOG id and routes through
+      // the multi-provider dispatcher, which resolves the provider first.
+      //
+      // The pick used to arrive on `model`. "gpt-5-mini" survived that by coincidence —
+      // same string, same provider — but claude-sonnet-5, the only exposed flagship and
+      // the thing a user pays 10 credits for, was posted to OpenAI as a model that does
+      // not exist there. This assertion passed throughout, because it only ever checked
+      // that the value landed on A key rather than on the key that routes.
+      const options = aiService.generateCoverLetter.mock.calls[0][2];
+      expect(options.modelId).toBe(PRO_MODEL);
+      expect(options.model).toBeUndefined();
       const [, update] = User.updateOne.mock.calls[0];
       expect(update.$inc.credits).toBe(-FLAGSHIP_COSTS.GENERATE_COVER_LETTER);
       expect(FLAGSHIP_COSTS.GENERATE_COVER_LETTER).toBeGreaterThan(COSTS.GENERATE_COVER_LETTER);

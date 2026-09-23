@@ -961,8 +961,17 @@ const generateApplicationCoverLetter = async (req, res) => {
       userId,
       applicationId: application._id,
       // Standard stays on the user's resolved text model — the same model this endpoint
-      // has always used. Only a Pro pick routes to the chosen model.
-      model: isMetered ? modelId : aiService.resolveTextModel(user),
+      // has always used, and an OpenAI model name, so it belongs on `model` (the legacy
+      // path, which talks to the OpenAI client directly).
+      //
+      // A METERED pick is a CATALOG ID and must go on `modelId`, which is what routes it
+      // through the multi-provider dispatcher. It was on `model`, and that silently handed
+      // the id to the OpenAI client: "gpt-5-mini" worked by coincidence (same string, same
+      // provider), and "claude-sonnet-5" — the only exposed flagship, the thing a user
+      // pays 10 credits for — was posted to OpenAI as a model that does not exist there.
+      // Broken since the flagship tier shipped; found by audit, not by a report, because
+      // the letter simply failed and the free daily one still worked.
+      ...(isMetered ? { modelId } : { model: aiService.resolveTextModel(user) }),
       lang: docLang,
     });
 

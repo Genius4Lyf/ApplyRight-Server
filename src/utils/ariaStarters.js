@@ -213,10 +213,88 @@ function dropRepeatedStarters(suggestions, messages, threshold = 0.5) {
   return items.filter((item) => !previous.some((old) => textOverlap(item, old) >= threshold));
 }
 
+/**
+ * Move sample answers that were left loose in the prose into the field they belong to.
+ *
+ * `stripExampleAnswers` handles the model writing the samples in BOTH places — it matches
+ * them against the field and cuts the copies. It is helpless when the field comes back
+ * EMPTY and the prose is the only copy, which is what a project interview produced:
+ *
+ *     A few starting points:
+ *     - "I developed the ___ module that ___"
+ *     - "I ran user testing sessions and ___"
+ *
+ *     "I created a searchable mobilisation checklist module used by crews to prepare
+ *     jobs, reducing lookup time." "I led field validation sessions with new operators."
+ *
+ * Two finished first-person sentences, run together at the end of the message, with no
+ * "a full answer sounds like" panel underneath because there was nothing to put in it.
+ * Unlabelled, unfolded, and indistinguishable from Aria asserting the user did those
+ * things — the precise failure the fold exists to prevent.
+ *
+ * Stripping them would be the easy fix and the wrong one: the user loses the samples
+ * entirely. Promoting them puts them where they were always meant to go.
+ *
+ * DETECTION, kept deliberately narrow. A line qualifies only when it is quoted sentences
+ * and NOTHING else — remove every "…" segment and no letters or digits may remain. That
+ * spares the shapes Aria really writes: a quotation inside a sentence (`The job
+ * description asks for "Maintaining accurate records" — did you…`) keeps its prose, and a
+ * bulleted starter keeps its "- ". Only a bare, standalone quote block is taken.
+ *
+ * @param {string} reply the model's markdown reply
+ * @param {string[]} exampleAnswers what it returned in the field (often empty here)
+ * @returns {{reply: string, exampleAnswers: string[]}}
+ */
+function promoteInlineSamples(reply, exampleAnswers) {
+  const body = String(reply || "");
+  const existing = (Array.isArray(exampleAnswers) ? exampleAnswers : [])
+    .map((s) => String(s || "").trim())
+    .filter(Boolean);
+  if (!body.trim()) return { reply: body.trim(), exampleAnswers: existing };
+
+  const QUOTED = /[“"]([^”"]{20,})[”"]/g;
+  const found = [];
+  const lines = body.split("\n").filter((line) => {
+    const trimmed = line.trim();
+    // A list item is a starter, whatever it contains. Those belong in the prose.
+    if (!trimmed || /^[-*+]\s/.test(trimmed)) return true;
+
+    const quotes = [...trimmed.matchAll(QUOTED)].map((m) => m[1].trim());
+    if (!quotes.length) return true;
+    // Anything left once the quotes are gone means this was a sentence ABOUT something,
+    // not a bare sample.
+    if (/[a-z0-9]/i.test(trimmed.replace(QUOTED, " "))) return true;
+
+    found.push(...quotes);
+    return false;
+  });
+
+  if (!found.length) return { reply: body.trim(), exampleAnswers: existing };
+
+  // A heading that introduced them has nothing left to introduce.
+  const isOrphanHeading = (line) => /^\s*(?:\*\*)?[^\n]{0,40}:(?:\*\*)?\s*$/.test(line);
+  while (lines.length) {
+    const tail = lines[lines.length - 1];
+    if (!tail.trim() || isOrphanHeading(tail)) lines.pop();
+    else break;
+  }
+
+  const out = lines.join("\n").trim();
+  return {
+    // Never hand back an empty message. If the samples were the whole reply there is
+    // nothing to promote them out of, and a blank bubble is worse than a loose quote.
+    reply: out || body.trim(),
+    // The field wins when it has something: it is the model's considered answer, where
+    // this is a rescue. Capped at the two the panel is designed for.
+    exampleAnswers: (existing.length ? existing : found).slice(0, 2),
+  };
+}
+
 module.exports = {
   hasListItem,
   appendStarters,
   stripExampleAnswers,
   dropEchoedSamples,
   dropRepeatedStarters,
+  promoteInlineSamples,
 };

@@ -67,9 +67,14 @@ describe("what goes on the wire for a reasoning model", () => {
   // Reasoning tokens never appear in the reply but come out of the SAME allowance, so a
   // budget sized for visible output alone can be spent entirely on thinking and return an
   // empty string — a quieter failure than the 400 and a worse one to diagnose.
-  it("floors the budget so thinking cannot starve the answer", async () => {
+  // ADDED TO the caller's budget, not a floor under it. Reasoning tokens are extra to
+  // the visible answer, so a caller whose JSON is genuinely large (skills asks 8,192)
+  // must still get room on top — a flat floor gave it nothing, which is the shape that
+  // truncated bullet generation in production.
+  it("adds headroom on top of what the caller asked for", async () => {
     await generateOn("gpt-5-mini");
-    expect(body().max_completion_tokens).toBeGreaterThanOrEqual(4000);
+    // generateBulletsFromDescription asks for 4,096.
+    expect(body().max_completion_tokens).toBe(4096 + 4000);
   });
 
   it("keeps structured output on, which these models do support", async () => {
@@ -159,6 +164,57 @@ describe("disableThinking reaches the reasoning models too", () => {
     );
     await generateOn("gpt-5-mini");
 
-    expect(body().max_completion_tokens).toBeGreaterThanOrEqual(6000);
+    expect(body().max_completion_tokens).toBe(4096 + 4000);
+  });
+});
+
+// THE BIGGEST OUTPUT IN THE APP, on the newest model family.
+//
+// Skills generation asks for 8,192 tokens on a paid plan because its JSON genuinely is
+// that large — grouped suggestions, per-skill evidence with snippets, confirmation
+// candidates, talking points. It is the caller a flat 6,000-token floor helped least and
+// would have truncated first, and truncated JSON here throws away the whole generation.
+//
+// It also routes through the model picker (ai.controller passes modelId straight into
+// options), so a user on Advanced reaches it — which is exactly how bullets broke.
+describe("skills generation on a reasoning model", () => {
+  const generateSkills = (modelId, isPaid) =>
+    ai.generateSkillsFromContext(
+      [{ degree: "BSc", school: "UNIBEN" }],
+      [{ title: "Wireline Operator", company: "SLB", description: "• Greased the sheaves" }],
+      [],
+      "Maintenance technician",
+      isPaid,
+      { modelId, meta: { operation: "generateSkills" } }
+    );
+
+  beforeEach(() => {
+    mockOpenAICreate.mockResolvedValue(respond({ suggestions: [], confirmationCandidates: [] }));
+  });
+
+  it("gets the reasoning parameter shape, not the old one", async () => {
+    await generateSkills("gpt-5-mini", false);
+
+    expect(body()).toHaveProperty("max_completion_tokens");
+    expect(body()).not.toHaveProperty("max_tokens");
+    expect(body()).not.toHaveProperty("temperature");
+  });
+
+  it("keeps its thinking down — it sets disableThinking for a reason", async () => {
+    await generateSkills("gpt-5-mini", false);
+    expect(body().reasoning_effort).toBe("low");
+  });
+
+  // The case the flat floor served worst: it asked for MORE than the floor, so the floor
+  // added nothing at all and reasoning came out of the JSON's own budget.
+  it("gets headroom above its own large budget on a paid plan", async () => {
+    await generateSkills("gpt-5-mini", true);
+    expect(body().max_completion_tokens).toBe(8192 + 4000);
+  });
+
+  it("still uses the ordinary shape on the standard model", async () => {
+    await generateSkills("gpt-4o-mini", true);
+    expect(body()).toHaveProperty("max_tokens");
+    expect(body()).not.toHaveProperty("reasoning_effort");
   });
 });

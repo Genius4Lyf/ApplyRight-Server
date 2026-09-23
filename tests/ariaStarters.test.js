@@ -320,3 +320,110 @@ describe("scaffold echo guards", () => {
     });
   });
 });
+
+// SAMPLES LEFT LOOSE IN THE PROSE.
+//
+// Reported from a project interview. The reply ended like this:
+//
+//     A few starting points:
+//     - "I developed the ___ module that ___"
+//     - "I ran user testing sessions and ___"
+//
+//     "I created a searchable mobilisation checklist module used by crews to prepare
+//     jobs, reducing lookup time." "I led field validation sessions with new operators."
+//
+// Two finished first-person sentences run together at the end of the message — and NO
+// "a full answer sounds like" panel beneath, because the field came back empty and the
+// panel renders nothing when it has nothing.
+//
+// So `stripExampleAnswers` was helpless: it matches the prose against the FIELD, and the
+// field was the thing that was missing. Unlabelled and unfolded, those two sentences are
+// indistinguishable from Aria asserting the user did them — the exact failure the fold
+// exists to prevent.
+//
+// Stripping would be the easy fix and the wrong one: the user loses the samples entirely.
+// Promoting puts them where they were always meant to go.
+describe("promoteInlineSamples", () => {
+  const { promoteInlineSamples } = require("../src/utils/ariaStarters");
+
+  const SAMPLE_A =
+    "I created a searchable mobilisation checklist module used by crews to prepare jobs, reducing lookup time.";
+  const SAMPLE_B =
+    "I led field validation sessions with new operators to refine content and improve onboarding speed.";
+
+  const REPORTED = [
+    "Got it — no operating work for this entry.",
+    "",
+    "What was your specific part on OPSLINE? Keep it to one thing you did.",
+    "",
+    "A few starting points:",
+    "",
+    '- "I developed the ___ module that ___"',
+    '- "I ran user testing sessions and ___"',
+    "",
+    `"${SAMPLE_A}" "${SAMPLE_B}"`,
+  ].join("\n");
+
+  it("lifts loose samples out of the reply", () => {
+    const out = promoteInlineSamples(REPORTED, []);
+
+    expect(out.reply).not.toContain("mobilisation checklist");
+    expect(out.reply).not.toContain("field validation sessions");
+    expect(out.reply).toContain("What was your specific part on OPSLINE?");
+  });
+
+  it("puts them in the field, so the panel has something to show", () => {
+    const out = promoteInlineSamples(REPORTED, []);
+    expect(out.exampleAnswers).toEqual([SAMPLE_A, SAMPLE_B]);
+  });
+
+  it("leaves the starters where they belong", () => {
+    const out = promoteInlineSamples(REPORTED, []);
+
+    expect(out.reply).toContain('- "I developed the ___ module that ___"');
+    expect(out.reply).toContain("A few starting points:");
+  });
+
+  // The model's own field is its considered answer; this is a rescue, and a rescue does
+  // not overrule one.
+  it("does not overwrite samples the model returned properly", () => {
+    const proper = ["A sample the model actually returned in the field, long enough to count."];
+    const out = promoteInlineSamples(REPORTED, proper);
+
+    expect(out.exampleAnswers).toEqual(proper);
+    // The loose copy still leaves the prose — it is a duplicate either way.
+    expect(out.reply).not.toContain("mobilisation checklist");
+  });
+
+  // THE SHAPES THAT MUST SURVIVE. Aria quotes things legitimately and often.
+  it("leaves a quotation that sits inside a sentence", () => {
+    const reply =
+      'The job description asks for "Maintaining accurate records of production" — did you do that here?';
+    expect(promoteInlineSamples(reply, []).reply).toBe(reply);
+  });
+
+  it("leaves a quoted starter on its own bullet", () => {
+    const reply = 'Ways in:\n\n- "I logged the maintenance requests we raised each week in ___"';
+    expect(promoteInlineSamples(reply, []).reply).toBe(reply);
+  });
+
+  it("leaves a short quoted phrase alone", () => {
+    const reply = 'They call it "the wash bay".';
+    expect(promoteInlineSamples(reply, []).reply).toBe(reply);
+  });
+
+  it("takes an orphaned heading with them", () => {
+    const reply = `A question?\n\nExamples:\n\n"${SAMPLE_A}"`;
+    expect(promoteInlineSamples(reply, []).reply).not.toContain("Examples:");
+  });
+
+  it("never hands back an empty reply", () => {
+    const out = promoteInlineSamples(`"${SAMPLE_A}"`, []);
+    expect(out.reply).toContain("mobilisation checklist");
+  });
+
+  it("copes with nothing to do", () => {
+    expect(promoteInlineSamples("Just a question?", []).reply).toBe("Just a question?");
+    expect(promoteInlineSamples("", []).exampleAnswers).toEqual([]);
+  });
+});
