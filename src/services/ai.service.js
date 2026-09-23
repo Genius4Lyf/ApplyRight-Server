@@ -5733,6 +5733,53 @@ Return STRICT JSON: { "roles": [{ "id": "<the id given>", "skills": [{ "name": "
   }
 };
 
+// How much room the skills reply actually needs — derived from the SHAPE being asked for,
+// not from a constant.
+//
+// This was `isPaid ? 8192 : 4096` for every request, and the user picks a ceiling of
+// 10/15/20 on the card. That number reached the prompt and nothing else, so asking for 20
+// got exactly the budget of asking for 10 and the reply died mid-array; the recovery path
+// below then brace-sliced a half-written object and threw a SyntaxError from a line that
+// had nothing to do with the cause. Measured worst case of the documented output shape
+// (pretty-printed, ~3.2 chars/token, every skill carrying its 3 evidence entries and its
+// duplicate in `skills[]`):
+//
+//   ceiling 10 free  ~4,085 tok   ceiling 20 free  ~8,122 tok
+//   ceiling 15 free  ~6,104 tok   ceiling 20 paid  ~9,535 tok
+//
+// So the old free budget was already short at the DEFAULT of 15, and half of what a
+// ceiling of 20 needs. The per-item figures below sit ~18% above that measurement, which
+// is the margin French needs (`langDirective` can put this whole reply in French, and
+// French runs longer than the English these numbers were measured in).
+//
+// A cap is not a reservation — unused output tokens cost nothing — so the only thing
+// generosity buys is safety. `SKILLS_MAX_OUTPUT_TOKENS` bounds a runaway; the old constants
+// stay as the FLOOR so no request ends up with less room than it has today.
+const SKILLS_BASE_OUTPUT_TOKENS = 800; // envelope, category wrappers, closing
+const SKILLS_TOKENS_PER_SKILL = 240; // free shape: name + evidence + interviewRefs
+const SKILLS_TOKENS_PER_SKILL_PAID = 320; // + STAR talking points
+const SKILLS_TOKENS_PER_CANDIDATE = 200; // name, category, reason, typicalFor, question, evidence
+const SKILLS_MAX_OUTPUT_TOKENS = 16000;
+
+/**
+ * Output budget for one skills generation.
+ *
+ * @param {object} shape
+ * @param {number} shape.skillTarget     the ceiling the user picked (5–20)
+ * @param {number} shape.confirmTarget   how many confirmation questions were asked for
+ * @param {boolean} shape.isPaid         paid shape carries talking points
+ * @returns {number} max output tokens
+ */
+const skillsOutputBudget = ({ skillTarget, confirmTarget, isPaid }) => {
+  const skills = Math.min(20, Math.max(5, Number(skillTarget) || 15));
+  const confirms = Math.min(20, Math.max(0, Number(confirmTarget) || 0));
+  const perSkill = isPaid ? SKILLS_TOKENS_PER_SKILL_PAID : SKILLS_TOKENS_PER_SKILL;
+  const needed =
+    SKILLS_BASE_OUTPUT_TOKENS + skills * perSkill + confirms * SKILLS_TOKENS_PER_CANDIDATE;
+  const floor = isPaid ? 8192 : 4096;
+  return Math.min(SKILLS_MAX_OUTPUT_TOKENS, Math.max(floor, needed));
+};
+
 const generateSkillsFromContext = async (
   education,
   experience,
@@ -6058,7 +6105,7 @@ ${interviewCiteDetail}
           user: prompt,
           json: true,
           disableThinking: true,
-          maxTokens: isPaid ? 8192 : 4096,
+          maxTokens: skillsOutputBudget({ skillTarget, confirmTarget, isPaid }),
           meta: { ...(options.meta || {}), operation: options.meta?.operation || "generateSkills" },
         });
       } catch (err) {
@@ -6066,6 +6113,17 @@ ${interviewCiteDetail}
         // carries the raw reply on the error, so that case stays recoverable here rather
         // than costing the user a generation the model actually completed.
         if (!(err instanceof AIJSONParseError)) throw err;
+        // A TRUNCATED reply is not recoverable and must not be handed to the brace-slice
+        // below: `lastIndexOf("}")` finds the last complete INNER object and slices to it,
+        // producing an object whose arrays are opened and never closed. That parse cannot
+        // succeed, and the SyntaxError it raises ("Expected ',' or ']' after array element
+        // at position 12408") names a symptom 12kB away from the cause. Fail on the real
+        // reason instead — the outer catch reports it as retryable and charges nothing.
+        if (err.truncated) {
+          throw new Error(
+            `Skills reply hit the output cap (${skillsOutputBudget({ skillTarget, confirmTarget, isPaid })} tokens) at a ceiling of ${skillTarget}; JSON incomplete`
+          );
+        }
         resultText = err.response;
       }
     } else if (activeProvider === "openai") {
@@ -6541,6 +6599,7 @@ module.exports = {
   suggestProjects,
   roleSkillCanon,
   generateSkillsFromContext,
+  skillsOutputBudget,
   // Pure category guard exported for regression tests. AI suggests the taxonomy;
   // this function is the server-owned contract that makes the result safe to persist.
   reconcileSkillGroups,
