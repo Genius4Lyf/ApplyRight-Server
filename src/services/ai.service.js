@@ -244,6 +244,36 @@ const persistLog = (entry) => {
  * @param {object} [params.meta] - Logging context: { operation, userId, applicationId }.
  * @returns {Promise<object>} Parsed JSON response (object or array).
  */
+// ── OPENAI'S REASONING MODELS TAKE A DIFFERENT PARAMETER SHAPE ──────────────
+//
+// GPT-5 and the o-series are reasoning models, and Chat Completions does not accept the
+// parameters every other OpenAI model here has always been sent. `max_tokens` is refused
+// outright — a hard 400, not a warning — in favour of `max_completion_tokens`, and the
+// sampling controls only accept their defaults, so `temperature` has to be OMITTED rather
+// than set to anything.
+//
+// This 502'd every single Advanced turn the moment gpt-5-mini was exposed, in production:
+//   "Unsupported parameter: 'max_tokens' is not supported with this model."
+//
+// The budget also means something different on these models. Reasoning tokens never
+// appear in the reply but they come out of the SAME allowance, so a 1,200-token general
+// chat turn can be spent entirely on thinking and hand back an empty string — a quieter
+// failure than the 400, and a worse one to diagnose. The floor below buys room for that,
+// and touches nothing that any other model is sent.
+//
+// Matched on the API model name rather than the catalog tier: the tier is a billing
+// decision, this is a fact about the endpoint, and an admin can point any tier at any
+// model without a deploy.
+const OPENAI_REASONING_MODEL = /^(?:gpt-5|o[1-9])/i;
+const REASONING_MIN_TOKENS = 4000;
+
+const openaiSampling = (apiModel, { temperature, maxTokens }) => {
+  if (!OPENAI_REASONING_MODEL.test(String(apiModel || ""))) {
+    return { temperature, ...(maxTokens ? { max_tokens: maxTokens } : {}) };
+  }
+  return { max_completion_tokens: Math.max(maxTokens || 0, REASONING_MIN_TOKENS) };
+};
+
 const callJSON = async ({
   system,
   user,
@@ -306,9 +336,8 @@ const callJSON = async ({
               { role: "system", content: system },
               { role: "user", content: user },
             ],
-        temperature,
         response_format: { type: "json_object" },
-        ...(maxTokens ? { max_tokens: maxTokens } : {}),
+        ...openaiSampling(openaiModel, { temperature, maxTokens }),
       });
       const content = response.choices[0].message.content;
       persistLog({
@@ -408,8 +437,7 @@ const callText = async ({ system, user, temperature = 0.4, maxTokens, meta = {} 
           { role: "system", content: system },
           { role: "user", content: user },
         ],
-        temperature,
-        ...(maxTokens ? { max_tokens: maxTokens } : {}),
+        ...openaiSampling(openaiModel, { temperature, maxTokens }),
       });
       const content = response.choices[0].message.content.trim();
       persistLog({
@@ -591,9 +619,10 @@ const callModel = async (
               { role: "system", content: system },
               { role: "user", content: user },
             ],
-        temperature,
         ...(json ? { response_format: { type: "json_object" } } : {}),
-        ...(maxTokens ? { max_tokens: maxTokens } : {}),
+        // DeepSeek and Moonshot are OpenAI-COMPATIBLE but not OpenAI: their model names
+        // never match the reasoning pattern, so they keep the ordinary shape.
+        ...openaiSampling(apiModel, { temperature, maxTokens }),
       });
       content = resp.choices[0].message.content;
       truncated = resp.choices[0].finish_reason === "length";
